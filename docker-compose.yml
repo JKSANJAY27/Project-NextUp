@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: nextup-db
+    environment:
+      POSTGRES_USER: nextup
+      POSTGRES_PASSWORD: nextup_secure_password_123
+      POSTGRES_DB: nextup
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: nextup-redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nextup-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://nextup:nextup_secure_password_123@db:5432/nextup
+      - JWT_SECRET=supersecret_nextupai_key_change_me_in_prod
+      - ACCESS_TOKEN_EXPIRE_MINUTES=10080
+    depends_on:
+      - db
+      - redis
+    restart: always
+
+volumes:
+  postgres_data:
