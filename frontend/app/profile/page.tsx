@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import { useAppStore } from "@/lib/store";
 import { decryptData, encryptData, deriveKey, exportKeyToHex } from "@/lib/crypto";
 import api from "@/lib/api";
@@ -174,11 +175,11 @@ export default function ProfilePage() {
     }
 
     // Neo ID validator
-    // Alternating letter/digit, length 8. E.g. F4O0V3W3
+    // Alternating letter/digit, length 8. E.g. K9B8C7D6
     const neoIdClean = neoId.trim().toUpperCase();
     const neoIdRegex = /^[A-Z]\d[A-Z]\d[A-Z]\d[A-Z]\d$/;
     if (neoIdClean && !neoIdRegex.test(neoIdClean)) {
-      setError("INVALID NEO ID FORMAT. MUST BE 8 CHARACTERS ALTERNATING LETTER & DIGIT (E.G. F4O0V3W3).");
+      setError("INVALID NEO ID FORMAT. MUST BE 8 CHARACTERS ALTERNATING LETTER & DIGIT (E.G. K9B8C7D6).");
       setSaving(false);
       return;
     }
@@ -323,6 +324,22 @@ export default function ProfilePage() {
         </div>
       </div>
 
+      {/* Onboarding Tip / Quick Resume Upload */}
+      <div className="border-2 border-dashed border-border p-6 bg-card space-y-4">
+        <h3 className="text-sm font-extrabold uppercase tracking-widest text-accent">
+          🚀 QUICK PROFILE SETUP VIA RESUME PARSING
+        </h3>
+        <p className="text-xs text-muted-foreground uppercase tracking-tight leading-snug">
+          Instead of filling all academic details manually, you can upload your standard PDF resume. The system will parse metrics (Name, CGPA, Branch, Marks, Skills) in-memory on-the-fly and automatically populate them into your encrypted profile.
+        </p>
+        <Link 
+          href="/resume" 
+          className="inline-flex items-center justify-center h-12 px-6 border-2 border-border bg-foreground text-background font-extrabold text-xs tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all"
+        >
+          GO TO RESUME ENGINE & UPLOAD
+        </Link>
+      </div>
+
       {success && (
         <div className="border-2 border-green-600 bg-green-600/10 p-4 text-xs font-bold text-green-600 uppercase tracking-wider">
           {success}
@@ -405,14 +422,14 @@ export default function ProfilePage() {
                 <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
                   NEO ID
                 </label>
-                <span className="text-[10px] text-muted-foreground">E.G. F4O0V3W3</span>
+                <span className="text-[10px] text-muted-foreground">E.G. K9B8C7D6</span>
               </div>
               <input
                 type="text"
                 required
                 value={neoId}
                 onChange={(e) => setNeoId(e.target.value)}
-                placeholder="F4O0V3W3"
+                placeholder="K9B8C7D6"
                 className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
               />
             </div>

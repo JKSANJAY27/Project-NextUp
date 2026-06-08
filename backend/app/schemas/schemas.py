@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from uuid import UUID
 
@@ -68,6 +68,10 @@ class CompanyCreate(BaseModel):
     registration_link: Optional[str] = None
     website: Optional[str] = None
     jd_text: Optional[str] = None
+    jd_required_skills: Optional[List[str]] = None
+    jd_ats_keywords: Optional[List[str]] = None
+    source_email_body: Optional[str] = None
+    additional_info: Optional[Dict[str, Any]] = None
 
 class CompanyOut(CompanyCreate):
     id: UUID

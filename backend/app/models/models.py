@@ -96,6 +96,8 @@ class Company(Base):
     jd_required_skills = Column(JSON, nullable=True)
     jd_ats_keywords = Column(JSON, nullable=True)
     source_email_id = Column(String, nullable=True)
+    source_email_body = Column(String, nullable=True)
+    additional_info = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     applications = relationship("Application", back_populates="company", cascade="all, delete-orphan")

@@ -21,22 +21,32 @@ NextupAI is a full-stack, privacy-first, zero-knowledge placement management sys
 ### Phase 2: Core Intelligence
 - **Intelligent Parser Engine**: Extracts metadata (role, CTC, stipend, eligibility criteria, registration deadlines) from placement announcement emails using regex and spaCy.
 - **PDF & OCR Extractor**: Parses Job Description (JD) PDFs using `pdfplumber` with an automatic fallback to `pytesseract` OCR for scanned documents.
-- **Excel Shortlist Matcher**: Dynamically parses CDC shortlist spreadsheets, searching for the student's unique Neo ID (e.g., `F4O0V3W3`).
+- **Excel Shortlist Matcher**: Dynamically parses CDC shortlist spreadsheets, searching for the student's unique Neo ID (e.g., `K9B8C7D6`).
 - **Match Scorer**: Compares JD requirements (CGPA, branch eligibility, skills) with the student's profile using `rapidfuzz` string matching to compute a percentage compatibility score.
 - **Interactive Dashboards**:
   - **Table View**: Dynamic sorting and filtering of active placement drives.
   - **Kanban Board**: Drag-and-drop tracker for application statuses (Applied, Shortlisted, OA, Interview, Offered).
   - **Calendar**: Month-grid view displaying deadlines, OAs, and interview dates, complete with ICS export.
 
-### Phase 3: Background Gmail Automation & Notifications (In Progress)
+### Phase 3: Background Gmail Automation & Notifications
 - **Google OAuth Integration**: Connect university Gmail accounts securely.
 - **Automated Gmail Sync**: APScheduler background sync polls `noreply.cdcinfo@vit.ac.in` for placement updates and shortlist matches while the student's session is active.
 - **Real-time Notifications**: Instant alerts inside the application when a student is shortlisted or when registration deadlines are approaching.
 
+### Phase 4: Resume Parsing & UX Improvements
+- **Zero-Knowledge Resume Engine**: Drag-and-drop standard PDF resume parser extracting metrics (Name, CGPA, Branch, Marks, Skills) on-the-fly without saving raw files.
+- **Client-Side Encryption**: Resume details are encrypted using the derived client key `X-Client-Key` and stored in the database.
+- **Auto-Population**: Apply extracted metrics from the resume to auto-fill the student profile with one click.
+- **Onboarding Banner & Checklist**: New accounts are guided to complete their profile and connect their Gmail account.
+- **Automatic Sync**: Real-time university mailbox synchronizations trigger automatically on dashboard load.
+- **Detailed Announcements Modal**: Displays original email content alongside parsed CTC, Stipend, ATS Keywords, and parsed registration/shortlist links.
+- **Session Logout**: Clean session termination, database cache flush, and state reset.
+
 ---
 
 ## 🛠️ Technology Stack
-- **Frontend**: Next.js, React, TailwindCSS, Zustand (State Management)
+- **Frontend**: Next.js, React, Vanilla CSS / TailwindCSS, Zustand (State Management)
 - **Backend**: FastAPI, SQLAlchemy (SQLite/PostgreSQL), APScheduler
 - **AI/Parsing**: spaCy, pytesseract OCR, pdfplumber, rapidfuzz, pandas
 - **Containerization**: Docker & Docker Compose
+

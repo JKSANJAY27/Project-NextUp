@@ -74,7 +74,7 @@ def sync_user_gmail(user_id: UUID, db: Session) -> bool:
         return False
 
     # Check for MOCK mode override
-    mock_mode = os.getenv("MOCK_GMAIL", "false").lower() == "true"
+    mock_mode = settings.MOCK_GMAIL
     
     if mock_mode:
         logger.info(f"Running in MOCK_GMAIL mode for user {user_id}")
@@ -150,7 +150,9 @@ def sync_user_gmail(user_id: UUID, db: Session) -> bool:
                     requires_no_arrears=parsed_info.get("requires_no_arrears"),
                     registration_deadline=datetime.fromisoformat(parsed_info["deadline_iso"]) if parsed_info.get("deadline_iso") else None,
                     registration_link=parsed_info.get("registration_link"),
-                    source_email_id=msg_id
+                    source_email_id=msg_id,
+                    source_email_body=body,
+                    additional_info={"subject": subject, "sender": sender}
                 )
                 db.add(company)
                 db.commit()
@@ -272,7 +274,16 @@ def run_mock_sync(user: User, db: Session, derived_key: str):
                 registration_deadline=drive["deadline"],
                 registration_link=drive["link"],
                 jd_required_skills=["Python", "C++", "Data Structures", "Algorithms"],
-                jd_ats_keywords=["software", "development", "intern", "cloud", "algorithms"]
+                jd_ats_keywords=["software", "development", "intern", "cloud", "algorithms"],
+                source_email_body=f"Dear Students,\n\nWe are pleased to announce that {drive['company']} is hiring for the role of {drive['role']}. The details are as follows:\n- CTC: {drive['ctc']}\n- Stipend: {drive['stipend']}\n- Location: {drive['location']}\n- Deadline: {drive['deadline'].strftime('%d %b %Y')}\n\nApply via link: {drive['link']}\n\nBest Regards,\nVIT Career Development Centre (CDC)",
+                additional_info={
+                    "subject": f"Recruitment Announcement: {drive['company']}",
+                    "sender": "noreply.cdcinfo@vit.ac.in",
+                    "important_links": [
+                        {"label": "Direct Google Form", "url": drive["link"]},
+                        {"label": "CDC Portal", "url": "https://vtop.vit.ac.in"}
+                    ]
+                }
             )
             db.add(company)
             db.commit()

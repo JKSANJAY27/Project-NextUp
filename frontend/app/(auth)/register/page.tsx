@@ -82,8 +82,8 @@ export default function RegisterPage() {
       // Save user to Zustand state
       setUser(profileRes.data);
 
-      // Redirect to dashboard
-      router.push("/dashboard");
+      // Redirect to profile for onboarding
+      router.push("/profile");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
       setError(

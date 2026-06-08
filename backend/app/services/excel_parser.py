@@ -6,7 +6,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# User's pattern: Alternating letter and digit, length 8. E.g. F4O0V3W3
+# User's pattern: Alternating letter and digit, length 8. E.g. K9B8C7D6
 NEO_ID_PATTERN = re.compile(r"^[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d$")
 
 def extract_neo_ids_from_excel(file_bytes: bytes) -> List[str]:

@@ -14,8 +14,22 @@ import {
   ExternalLink,
   ChevronDown,
   LayoutDashboard,
-  Table as TableIcon
+  Table as TableIcon,
+  AlertCircle,
+  X,
+  Link2
 } from "lucide-react";
+
+interface ImportantLink {
+  label: string;
+  url: string;
+}
+
+interface AdditionalInfo {
+  subject?: string;
+  sender?: string;
+  important_links?: ImportantLink[];
+}
 
 interface CompanyWithEligibility {
   id: string;
@@ -35,6 +49,10 @@ interface CompanyWithEligibility {
   registration_link: string | null;
   website: string | null;
   jd_text: string | null;
+  jd_required_skills: string[] | null;
+  jd_ats_keywords: string[] | null;
+  source_email_body: string | null;
+  additional_info: AdditionalInfo | null;
   eligibility_status: string;
   eligibility_reason: string | null;
 }
@@ -70,6 +88,8 @@ export default function DashboardPage() {
   const [filterEligibility, setFilterEligibility] = useState("ALL");
   const [onlyShowApplied, setOnlyShowApplied] = useState(false);
   const [draggedOverColumn, setDraggedOverColumn] = useState<string | null>(null);
+  const [selectedCompany, setSelectedCompany] = useState<CompanyWithEligibility | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   // Manual Company Form State
   const [compName, setCompName] = useState("");
@@ -121,6 +141,24 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchDashboardData();
   }, [encryptionKey]);
+
+  // Trigger auto Gmail sync on load if connected
+  useEffect(() => {
+    const autoSync = async () => {
+      if (user?.gmail_connected && encryptionKey) {
+        setSyncing(true);
+        try {
+          await api.post("/gmail/sync");
+          fetchDashboardData();
+        } catch (err) {
+          console.warn("Auto sync failed on load:", err);
+        } finally {
+          setSyncing(false);
+        }
+      }
+    };
+    autoSync();
+  }, [user, encryptionKey]);
 
   // Decrypt application statuses when encryptionKey or applications change
   useEffect(() => {
@@ -347,6 +385,52 @@ export default function DashboardPage() {
             <span>MANUAL DRIVE CREATION</span>
           </button>
         </div>
+
+        {/* Onboarding Banner */}
+        {(!user?.neo_id_enc || !user?.gmail_connected) && (
+          <div className="border-2 border-accent bg-accent/10 p-6 flex flex-col md:flex-row items-center justify-between gap-6">
+            <div className="flex items-center gap-4">
+              <div className="h-10 w-10 bg-accent text-black flex items-center justify-center border-2 border-black animate-pulse">
+                <AlertCircle size={20} />
+              </div>
+              <div>
+                <p className="text-sm font-black uppercase tracking-wider text-accent">
+                  ⚡ ONBOARDING: ACTION REQUIRED
+                </p>
+                <p className="text-xs text-muted-foreground uppercase tracking-tight leading-snug">
+                  {!user?.neo_id_enc 
+                    ? "Please complete your Student Profile and set up your encryption vault to unlock eligibility calculations."
+                    : "Connect your university Gmail account in the Profile settings to start auto-syncing CDC placement emails."}
+                </p>
+              </div>
+            </div>
+            <Link 
+              href="/profile" 
+              className="border-2 border-accent bg-accent text-black text-xs font-bold tracking-widest px-6 py-3 hover:bg-transparent hover:text-accent transition-colors uppercase block"
+            >
+              GO TO PROFILE
+            </Link>
+          </div>
+        )}
+
+        {/* Syncing Status Banner */}
+        {syncing && (
+          <div className="border-2 border-accent bg-accent/10 p-6 flex flex-col md:flex-row items-center justify-between gap-6">
+            <div className="flex items-center gap-4">
+              <div className="h-10 w-10 bg-accent text-black flex items-center justify-center border-2 border-black animate-pulse">
+                <span className="h-2 w-2 rounded-full bg-black animate-ping" />
+              </div>
+              <div>
+                <p className="text-sm font-black uppercase tracking-wider text-accent">
+                  ⚡ SYNCING WITH UNIVERSITY MAILBOX
+                </p>
+                <p className="text-xs text-muted-foreground uppercase tracking-tight leading-snug">
+                  Polling placements emails securely. Updating your placement database on-the-fly...
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Lock Warning Banner */}
         {!encryptionKey && (
@@ -662,8 +746,11 @@ export default function DashboardPage() {
                     return (
                       <tr key={c.id} className="hover:bg-muted/15 transition-colors">
                         
-                        <td className="py-5 px-6">
-                          <p className="font-bold text-base uppercase tracking-tighter text-foreground">{c.name}</p>
+                        <td 
+                          className="py-5 px-6 cursor-pointer group"
+                          onClick={() => setSelectedCompany(c)}
+                        >
+                          <p className="font-bold text-base uppercase tracking-tighter text-foreground group-hover:text-accent transition-colors">{c.name}</p>
                           <p className="text-xs text-muted-foreground uppercase">{c.role} {c.job_location ? `✦ ${c.job_location}` : ""}</p>
                         </td>
 
@@ -818,6 +905,7 @@ export default function DashboardPage() {
                             key={c.id}
                             draggable
                             onDragStart={(e) => handleDragStart(e, c.id)}
+                            onClick={() => setSelectedCompany(c)}
                             className="border-2 border-border p-4 bg-background hover:border-accent cursor-grab active:cursor-grabbing group transition-all duration-300"
                           >
                             <div className="flex justify-between items-start mb-2">
@@ -854,6 +942,147 @@ export default function DashboardPage() {
         )}
 
       </div>
+
+      {/* Modern kinetic company details modal */}
+      {selectedCompany && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200">
+          <div className="relative w-full max-w-4xl border-2 border-border bg-background p-6 md:p-8 space-y-8 animate-in slide-in-from-bottom-4 duration-300 rounded-none">
+            {/* Close button */}
+            <button
+              onClick={() => setSelectedCompany(null)}
+              className="absolute top-4 right-4 border-2 border-border p-2 bg-card hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95"
+              aria-label="Close modal"
+            >
+              <X size={16} />
+            </button>
+
+            {/* Title & Category */}
+            <div className="border-b-2 border-border pb-6 space-y-2">
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className="bg-accent px-2 py-1 text-[10px] font-extrabold tracking-widest text-black border border-accent uppercase">
+                  {selectedCompany.category}
+                </span>
+                <span className="bg-muted px-2 py-1 text-[10px] font-bold tracking-widest text-muted-foreground border border-border uppercase">
+                  {selectedCompany.job_location || "LOCATION UNKNOWN"}
+                </span>
+              </div>
+              <h2 className="text-3xl md:text-4xl font-extrabold tracking-tighter uppercase leading-none">
+                {selectedCompany.name}
+              </h2>
+              <p className="text-sm font-bold text-muted-foreground uppercase tracking-widest">
+                {selectedCompany.role || "Software Engineer"}
+              </p>
+            </div>
+
+            {/* Split specifications */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 border-b border-border pb-6">
+              <div>
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">CTC / SALARY</span>
+                <span className="text-lg font-black uppercase text-foreground">{selectedCompany.ctc || "—"}</span>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">STIPEND</span>
+                <span className="text-lg font-black uppercase text-foreground">{selectedCompany.stipend || "—"}</span>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">REGISTRATION DEADLINE</span>
+                <span className="text-xs font-mono font-bold text-foreground">
+                  {selectedCompany.registration_deadline 
+                    ? new Date(selectedCompany.registration_deadline).toLocaleString("en-IN")
+                    : "—"}
+                </span>
+              </div>
+            </div>
+
+            {/* Tabs for details */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
+              {/* Left Column: Requirements & Links */}
+              <div className="md:col-span-5 space-y-6">
+                {/* Eligibility Check */}
+                <div className="border border-border p-4 bg-muted/10 space-y-3">
+                  <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ELIGIBILITY DETAILS</h4>
+                  <div className="flex items-center gap-2">
+                    {getEligibilityIcon(selectedCompany.eligibility_status)}
+                    <span className="text-xs font-bold uppercase">{selectedCompany.eligibility_status}</span>
+                  </div>
+                  {selectedCompany.eligibility_reason && (
+                    <p className="text-[10px] text-muted-foreground uppercase leading-snug">
+                      {selectedCompany.eligibility_reason}
+                    </p>
+                  )}
+                </div>
+
+                {/* ATS / JD Keywords */}
+                {selectedCompany.jd_ats_keywords && (
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ATS KEYWORDS</h4>
+                    <div className="flex flex-wrap gap-1.5">
+                      {selectedCompany.jd_ats_keywords.map((kw: string, i: number) => (
+                        <span key={i} className="text-[9px] font-bold bg-muted border border-border px-2 py-0.5 text-foreground uppercase">
+                          {kw}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Important Links & Miscellaneous */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">IMPORTANT LINKS</h4>
+                  <div className="space-y-2">
+                    {selectedCompany.registration_link && (
+                      <a
+                        href={selectedCompany.registration_link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-2 text-xs font-bold text-accent hover:underline uppercase"
+                      >
+                        <Link2 size={14} />
+                        <span>Apply via CDC Portal</span>
+                      </a>
+                    )}
+                    {selectedCompany.website && (
+                      <a
+                        href={selectedCompany.website}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-2 text-xs font-bold text-muted-foreground hover:underline uppercase"
+                      >
+                        <Link2 size={14} />
+                        <span>Corporate Website</span>
+                      </a>
+                    )}
+                    {/* Render parsed miscellaneous links if available */}
+                    {selectedCompany.additional_info && selectedCompany.additional_info.important_links && 
+                      selectedCompany.additional_info.important_links.map((link: ImportantLink, i: number) => (
+                        <a
+                          key={i}
+                          href={link.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-2 text-xs font-bold text-accent hover:underline uppercase"
+                        >
+                          <Link2 size={14} />
+                          <span>{link.label}</span>
+                        </a>
+                      ))
+                    }
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Original Email Message Viewer */}
+              <div className="md:col-span-7 space-y-4">
+                <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ORIGINAL EMAIL ANNOUNCEMENT</h4>
+                <div className="border-2 border-border p-4 bg-muted/20 max-h-72 overflow-y-auto rounded-none font-mono text-[11px] leading-relaxed whitespace-pre-wrap select-text text-foreground border-dashed">
+                  {selectedCompany.source_email_body || selectedCompany.jd_text || "No original email body attached to this drive announcement."}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

@@ -17,10 +17,11 @@ class Settings(BaseSettings):
     # Google Credentials
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
+    MOCK_GMAIL: bool = False
     
     # Extensible University Defaults (VIT Vellore)
     UNIVERSITY_NAME: str = "Vellore Institute of Technology"
-    # User's pattern: length 8, alternating letter and digit (e.g. F4O0V3W3)
+    # User's pattern: length 8, alternating letter and digit (e.g. K9B8C7D6)
     NEO_ID_REGEX: str = r"^[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d$"
     CDC_SENDER_EMAIL: str = "cdc@vit.ac.in"
     PLACEMENT_CATEGORIES: List[str] = ["Dream", "Super Dream", "Mass Recruiter", "Internship", "Regular"]
