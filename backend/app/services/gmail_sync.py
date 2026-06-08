@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 import base64
@@ -152,7 +153,15 @@ def sync_user_gmail(user_id: UUID, db: Session) -> bool:
                     registration_link=parsed_info.get("registration_link"),
                     source_email_id=msg_id,
                     source_email_body=body,
-                    additional_info={"subject": subject, "sender": sender}
+                    additional_info={
+                        "subject": subject,
+                        "sender": sender,
+                        "important_links": [
+                            {"label": f"Email Link {i+1}", "url": url}
+                            for i, url in enumerate(list(set(re.findall(r"(https?://[^\s\)\>]+)", body))))
+                            if url != parsed_info.get("registration_link")
+                        ]
+                    }
                 )
                 db.add(company)
                 db.commit()
