@@ -1,0 +1,14 @@
+[
+  "Python", "Java", "C++", "C#", "C", "TypeScript", "JavaScript", "Golang", "Go", "Rust", "Swift", "Kotlin", "PHP", "Ruby", "SQL", "HTML", "CSS", "R", "Scala", "Dart",
+  "React", "Next.js", "Vue", "Angular", "Svelte", "Node.js", "Express", "Django", "FastAPI", "Flask", "Spring Boot", "Laravel", "ASP.NET", "Ruby on Rails",
+  "PostgreSQL", "MySQL", "MongoDB", "Redis", "SQLite", "Oracle", "Cassandra", "DynamoDB", "Firebase", "Elasticsearch", "Neo4j",
+  "Docker", "Kubernetes", "AWS", "GCP", "Google Cloud", "Azure", "Terraform", "Ansible", "Jenkins", "Git", "GitHub", "GitLab", "CI/CD", "Linux", "Bash", "Shell",
+  "Data Structures", "Algorithms", "DSA", "System Design", "OOP", "Object Oriented Programming", "REST API", "GraphQL", "gRPC", "WebSockets", "Microservices",
+  "Machine Learning", "Deep Learning", "Artificial Intelligence", "AI", "NLP", "Natural Language Processing", "Computer Vision", "PyTorch", "TensorFlow",
+  "Keras", "Scikit-Learn", "Pandas", "NumPy", "Matplotlib", "Seaborn", "Data Science", "Data Analytics", "Big Data", "Spark", "Hadoop", "Kafka",
+  "Mobile Development", "Android", "iOS", "Flutter", "React Native", "SwiftUI", "Xamarin",
+  "Testing", "Unit Testing", "Jest", "PyTest", "Selenium", "Cypress", "Postman", "QA",
+  "HTML5", "CSS3", "Tailwind CSS", "Bootstrap", "Sass", "Web3", "Blockchain", "Solidity",
+  "Security", "Cryptography", "Cybersecurity", "OAuth", "JWT", "IAM", "Penetration Testing",
+  "Agile", "Scrum", "Jira", "DevOps", "Cloud Computing", "Serverless", "SaaS"
+]

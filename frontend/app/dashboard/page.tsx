@@ -12,7 +12,9 @@ import {
   XCircle, 
   HelpCircle,
   ExternalLink,
-  ChevronDown
+  ChevronDown,
+  LayoutDashboard,
+  Table as TableIcon
 } from "lucide-react";
 
 interface CompanyWithEligibility {
@@ -46,6 +48,15 @@ interface Application {
   match_score: number;
 }
 
+const KANBAN_COLUMNS = [
+  { id: "Applied", name: "APPLIED" },
+  { id: "Shortlisted", name: "SHORTLISTED" },
+  { id: "OA", name: "ONLINE ASSESSMENT" },
+  { id: "Technical", name: "TECHNICAL INTERVIEW" },
+  { id: "HR", name: "HR INTERVIEW" },
+  { id: "Offer", name: "OFFER RECEIVED" }
+];
+
 export default function DashboardPage() {
   const { user, encryptionKey } = useAppStore();
   const [companies, setCompanies] = useState<CompanyWithEligibility[]>([]);
@@ -53,10 +64,12 @@ export default function DashboardPage() {
   const [decryptedStatuses, setDecryptedStatuses] = useState<Record<string, string>>({});
   
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
   const [showAddCompany, setShowAddCompany] = useState(false);
   const [filterCategory, setFilterCategory] = useState("ALL");
   const [filterEligibility, setFilterEligibility] = useState("ALL");
   const [onlyShowApplied, setOnlyShowApplied] = useState(false);
+  const [draggedOverColumn, setDraggedOverColumn] = useState<string | null>(null);
 
   // Manual Company Form State
   const [compName, setCompName] = useState("");
@@ -230,6 +243,29 @@ export default function DashboardPage() {
       }
     } catch {
       alert("FAILED TO UPDATE TRACKING STATUS.");
+    }
+  };
+
+  // Native HTML5 Drag and Drop handlers
+  const handleDragStart = (e: React.DragEvent, companyId: string) => {
+    e.dataTransfer.setData("text/plain", companyId);
+  };
+
+  const handleDragOver = (e: React.DragEvent, colId: string) => {
+    e.preventDefault();
+    setDraggedOverColumn(colId);
+  };
+
+  const handleDragLeave = () => {
+    setDraggedOverColumn(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, colId: string) => {
+    e.preventDefault();
+    setDraggedOverColumn(null);
+    const companyId = e.dataTransfer.getData("text/plain");
+    if (companyId) {
+      await handleStatusChange(companyId, colId);
     }
   };
 
@@ -515,7 +551,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Filters Panel */}
+        {/* Filters Panel & View Toggle */}
         <div className="flex flex-col lg:flex-row gap-6 border-b border-border pb-6 justify-between items-stretch">
           <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center">
             
@@ -552,22 +588,46 @@ export default function DashboardPage() {
             
           </div>
 
-          {/* Toggle Applied */}
-          <button 
-            onClick={() => setOnlyShowApplied(!onlyShowApplied)}
-            className={`
-              flex items-center justify-center gap-2 px-6 h-12 border-2 font-bold text-xs tracking-wider transition-all uppercase
-              ${onlyShowApplied 
-                ? "bg-accent border-black text-black" 
-                : "border-border hover:bg-muted text-muted-foreground"
-              }
-            `}
-          >
-            <span>SHOW ONLY APPLIED</span>
-          </button>
+          <div className="flex flex-col sm:flex-row gap-4 items-stretch">
+            {/* View Mode Toggle */}
+            <div className="flex border-2 border-border p-1 bg-background shrink-0">
+              <button
+                onClick={() => setViewMode("table")}
+                className={`flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all ${
+                  viewMode === "table" ? "bg-accent text-black" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <TableIcon size={14} />
+                <span>TABLE</span>
+              </button>
+              <button
+                onClick={() => setViewMode("kanban")}
+                className={`flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all ${
+                  viewMode === "kanban" ? "bg-accent text-black" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <LayoutDashboard size={14} />
+                <span>KANBAN</span>
+              </button>
+            </div>
+
+            {/* Toggle Applied */}
+            <button 
+              onClick={() => setOnlyShowApplied(!onlyShowApplied)}
+              className={`
+                flex items-center justify-center gap-2 px-6 h-12 border-2 font-bold text-xs tracking-wider transition-all uppercase
+                ${onlyShowApplied 
+                  ? "bg-accent border-black text-black" 
+                  : "border-border hover:bg-muted text-muted-foreground"
+                }
+              `}
+            >
+              <span>SHOW ONLY APPLIED</span>
+            </button>
+          </div>
         </div>
 
-        {/* Drives Table */}
+        {/* Main Content Area */}
         {loading ? (
           <div className="text-center py-20 font-bold uppercase tracking-wider text-muted-foreground">
             Decrypting & parsing placement database...
@@ -576,7 +636,9 @@ export default function DashboardPage() {
           <div className="text-center py-20 border-2 border-dashed border-border font-bold uppercase tracking-wider text-muted-foreground">
             No active placement drives match the current filter criteria.
           </div>
-        ) : (
+        ) : viewMode === "table" ? (
+          
+          /* Table View Mode */
           <div className="border-2 border-border overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
@@ -600,26 +662,22 @@ export default function DashboardPage() {
                     return (
                       <tr key={c.id} className="hover:bg-muted/15 transition-colors">
                         
-                        {/* Company & Role */}
                         <td className="py-5 px-6">
                           <p className="font-bold text-base uppercase tracking-tighter text-foreground">{c.name}</p>
                           <p className="text-xs text-muted-foreground uppercase">{c.role} {c.job_location ? `✦ ${c.job_location}` : ""}</p>
                         </td>
 
-                        {/* Category */}
                         <td className="py-5 px-6">
                           <span className="text-[10px] font-extrabold tracking-widest uppercase px-2 py-1 bg-muted border border-border">
                             {c.category}
                           </span>
                         </td>
 
-                        {/* Package */}
                         <td className="py-5 px-6">
                           <p className="text-sm font-bold uppercase tracking-tight">{c.ctc || "—"}</p>
                           <p className="text-[10px] text-muted-foreground uppercase">{c.stipend ? `Stipend: ${c.stipend}` : "No stipend listed"}</p>
                         </td>
 
-                        {/* Deadline */}
                         <td className="py-5 px-6">
                           {deadlineDate ? (
                             <>
@@ -631,7 +689,6 @@ export default function DashboardPage() {
                           )}
                         </td>
 
-                        {/* Eligibility */}
                         <td className="py-5 px-6">
                           {getEligibilityIcon(c.eligibility_status)}
                           {c.eligibility_reason && (
@@ -641,7 +698,6 @@ export default function DashboardPage() {
                           )}
                         </td>
 
-                        {/* Status (Decrypted status badge) */}
                         <td className="py-5 px-6">
                           {app ? (
                             encryptionKey ? (
@@ -658,11 +714,8 @@ export default function DashboardPage() {
                           )}
                         </td>
 
-                        {/* Action buttons / Dropdown */}
                         <td className="py-5 px-6 text-right">
                           <div className="flex justify-end gap-3 items-center">
-                            
-                            {/* Inline Tracking Dropdown */}
                             {encryptionKey ? (
                               <div className="relative inline-block text-left group">
                                 <button className="h-10 px-4 border-2 border-border bg-background hover:bg-muted text-xs font-bold tracking-wider uppercase flex items-center gap-2">
@@ -706,6 +759,97 @@ export default function DashboardPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        ) : (
+          
+          /* Kanban View Mode with HTML5 Drag-and-Drop */
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6 items-start">
+            {KANBAN_COLUMNS.map((col) => {
+              // Get applications belonging to this column
+              const columnApps = filteredCompanies.filter((c) => {
+                const app = applications[c.id];
+                if (!app) return false;
+                const decStatus = decryptedStatuses[c.id] || "Applied";
+                
+                // Group both OA/Assessment under OA, Interview under Technical, etc.
+                if (col.id === "Applied") return decStatus === "Applied";
+                if (col.id === "Shortlisted") return decStatus === "Shortlisted";
+                if (col.id === "OA") return decStatus === "OA" || decStatus === "Online Assessment";
+                if (col.id === "Technical") return decStatus === "Technical" || decStatus.includes("Technical Interview");
+                if (col.id === "HR") return decStatus === "HR" || decStatus.includes("HR Interview");
+                if (col.id === "Offer") return decStatus === "Offer" || decStatus.includes("Offer Received");
+                return false;
+              });
+
+              const isOver = draggedOverColumn === col.id;
+
+              return (
+                <div 
+                  key={col.id}
+                  onDragOver={(e) => handleDragOver(e, col.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, col.id)}
+                  className={`
+                    border-2 p-4 min-h-[500px] flex flex-col gap-4 transition-all duration-200
+                    ${isOver ? "border-accent bg-accent/5 scale-[1.02]" : "border-border bg-muted/10"}
+                  `}
+                >
+                  {/* Column Header */}
+                  <div className="border-b-2 border-border pb-2 flex justify-between items-center bg-background p-2">
+                    <span className="text-xs font-black tracking-wider uppercase truncate max-w-[80%]">
+                      {col.name}
+                    </span>
+                    <span className="h-5 w-5 bg-muted text-[10px] font-bold flex items-center justify-center border border-border">
+                      {columnApps.length}
+                    </span>
+                  </div>
+
+                  {/* Column Cards */}
+                  <div className="flex-1 space-y-4 overflow-y-auto max-h-[600px] pr-1">
+                    {columnApps.length === 0 ? (
+                      <div className="text-center py-12 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+                        DRAG HERE
+                      </div>
+                    ) : (
+                      columnApps.map((c) => {
+                        const app = applications[c.id];
+                        return (
+                          <div
+                            key={c.id}
+                            draggable
+                            onDragStart={(e) => handleDragStart(e, c.id)}
+                            className="border-2 border-border p-4 bg-background hover:border-accent cursor-grab active:cursor-grabbing group transition-all duration-300"
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 bg-muted border border-border text-foreground">
+                                {c.category}
+                              </span>
+                              {app.match_score > 0 && (
+                                <span className="text-[9px] font-black text-accent bg-black border border-accent px-1.5 py-0.5">
+                                  {app.match_score}% MATCH
+                                </span>
+                              )}
+                            </div>
+
+                            <h4 className="font-extrabold text-sm uppercase tracking-tighter text-foreground truncate group-hover:text-accent transition-colors">
+                              {c.name}
+                            </h4>
+                            <p className="text-[10px] text-muted-foreground uppercase truncate mb-3">
+                              {c.role}
+                            </p>
+
+                            <div className="border-t border-border pt-2 flex justify-between items-center text-[10px] font-bold text-muted-foreground uppercase">
+                              <span>{c.ctc || "—"}</span>
+                              {c.job_location && <span className="truncate max-w-[50%]">{c.job_location}</span>}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
