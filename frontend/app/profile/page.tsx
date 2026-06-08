@@ -32,6 +32,11 @@ export default function ProfilePage() {
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
 
+  // Gmail Integration State
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
   // 1. Initial Load: Decrypt if key is already in memory
   useEffect(() => {
     if (user && encryptionKey) {
@@ -39,6 +44,22 @@ export default function ProfilePage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, encryptionKey]);
+
+  useEffect(() => {
+    if (unlocked) {
+      fetchGmailStatus();
+    }
+  }, [unlocked]);
+
+  const fetchGmailStatus = async () => {
+    try {
+      const res = await api.get("/gmail/status");
+      setGmailConnected(res.data.connected);
+      setLastSynced(res.data.last_synced);
+    } catch (err) {
+      console.error("Failed to fetch Gmail status:", err);
+    }
+  };
 
   const decryptProfile = async () => {
     if (!user || !encryptionKey) return;
@@ -97,6 +118,48 @@ export default function ProfilePage() {
     }
   };
 
+  // Connect Gmail Auth
+  const handleConnectGmail = async () => {
+    setError("");
+    setSuccess("");
+    try {
+      const res = await api.get("/gmail/auth-url");
+      const { auth_url } = res.data;
+      if (auth_url === "mock-oauth-flow") {
+        await api.post("/gmail/mock-connect");
+        setSuccess("MOCK COLLEGE GMAIL CONNECTED SUCCESSFULLY.");
+        fetchGmailStatus();
+      } else {
+        window.location.href = auth_url;
+      }
+    } catch {
+      setError("FAILED TO RETRIEVE GOOGLE AUTHORIZATION ENDPOINT.");
+    }
+  };
+
+  // Manual Gmail Sync
+  const handleSyncNow = async () => {
+    setSyncing(true);
+    setError("");
+    setSuccess("");
+    try {
+      const res = await api.post("/gmail/sync");
+      setSuccess(res.data.message || "GMAIL SYNC SUCCESSFUL.");
+      fetchGmailStatus();
+    } catch (err) {
+      let message = "GMAIL SYNCHRONIZATION FAILED.";
+      if (err && typeof err === "object" && "response" in err) {
+        const resObj = (err as { response?: { data?: { detail?: string } } }).response;
+        if (resObj?.data?.detail) {
+          message = resObj.data.detail;
+        }
+      }
+      setError(message);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   // Save profile edits
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -149,9 +212,15 @@ export default function ProfilePage() {
 
       setUser(res.data);
       setSuccess("PROFILE SAVED & ENCRYPTED SUCCESSFULLY.");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (err: any) {
-      setError(err.response?.data?.detail || "FAILED TO SAVE PROFILE.");
+    } catch (err) {
+      let message = "FAILED TO SAVE PROFILE.";
+      if (err && typeof err === "object" && "response" in err) {
+        const resObj = (err as { response?: { data?: { detail?: string } } }).response;
+        if (resObj?.data?.detail) {
+          message = resObj.data.detail;
+        }
+      }
+      setError(message);
     } finally {
       setSaving(false);
     }
@@ -433,13 +502,71 @@ export default function ProfilePage() {
           </div>
         </div>
 
+        {/* Section 4: Gmail Integration */}
+        <div className="space-y-8">
+          <h2 className="text-2xl font-bold tracking-tighter border-b border-border pb-2 uppercase">
+            COLLEGE GMAIL SYNC AUTOMATION
+          </h2>
+          <div className="border-2 border-border p-6 bg-card space-y-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div>
+                <p className="text-xs font-bold tracking-wider text-muted-foreground uppercase">CONNECTION STATUS</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className={`h-2.5 w-2.5 rounded-none ${gmailConnected ? "bg-green-600" : "bg-red-600"}`} />
+                  <span className="text-sm font-black uppercase">
+                    {gmailConnected ? "CONNECTED" : "NOT CONNECTED"}
+                  </span>
+                </div>
+                {lastSynced && (
+                  <p className="text-[10px] text-muted-foreground uppercase font-mono mt-1">
+                    LAST SYNCED: {new Date(lastSynced).toLocaleString("en-IN")}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-4">
+                {!gmailConnected ? (
+                  <button
+                    type="button"
+                    onClick={handleConnectGmail}
+                    className="h-12 px-6 border-2 border-accent bg-accent text-black font-extrabold text-xs tracking-widest uppercase hover:bg-transparent hover:text-accent transition-colors"
+                  >
+                    CONNECT VIT GMAIL
+                  </button>
+                ) : (
+                  <div className="flex gap-4">
+                    <button
+                      type="button"
+                      onClick={handleSyncNow}
+                      disabled={syncing}
+                      className="h-12 px-6 border-2 border-border bg-foreground text-background font-extrabold text-xs tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-50"
+                    >
+                      {syncing ? "SYNCING..." : "SYNC NOW"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConnectGmail}
+                      className="h-12 px-6 border-2 border-border bg-transparent text-foreground font-extrabold text-xs tracking-widest uppercase hover:bg-red-600 hover:text-white hover:border-red-600 transition-colors"
+                    >
+                      RECONNECT
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <p className="text-[10px] text-muted-foreground uppercase tracking-tight leading-snug">
+              Securely polls your VIT Gmail box in the background for placement announcements from <code className="text-foreground">noreply.cdcinfo@vit.ac.in</code>. Syncing only runs while you are actively logged in.
+            </p>
+          </div>
+        </div>
+
         <button
           type="submit"
           disabled={saving}
           className="flex items-center justify-center gap-3 w-full md:w-64 h-16 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
         >
           <Save size={16} />
-          <span>{saving ? "ENCRYPTING & SAVING..." : "SAVE & LOCK VAULT"}</span>
+          <span>{saving ? "ENCRYPTING & SAVING..." : "SAVE PROFILE INFO"}</span>
         </button>
 
       </form>

@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     # Database (local dev defaults to SQLite)
     DATABASE_URL: str = "sqlite:///./nextup.db"
     
+    # Google Credentials
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    
     # Extensible University Defaults (VIT Vellore)
     UNIVERSITY_NAME: str = "Vellore Institute of Technology"
     # User's pattern: length 8, alternating letter and digit (e.g. F4O0V3W3)
@@ -24,5 +28,6 @@ class Settings(BaseSettings):
     class Config:
         case_sensitive = True
         env_file = ".env"
+
 
 settings = Settings()

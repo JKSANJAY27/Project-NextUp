@@ -1,5 +1,6 @@
 import React from "react";
 import Sidebar from "@/components/Sidebar";
+import NotificationsDropdown from "@/components/NotificationsDropdown";
 
 export default function DashboardLayout({
   children,
@@ -7,11 +8,25 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
       <Sidebar />
-      <main className="md:pl-64 flex flex-col min-h-screen w-full">
-        {children}
-      </main>
+      <div className="flex-1 md:pl-64 flex flex-col min-h-screen w-full">
+        {/* Sticky top navigation bar */}
+        <header className="flex h-16 w-full items-center justify-between border-b-2 border-border bg-card/50 backdrop-blur-md px-8 sticky top-0 z-30">
+          <div className="flex items-center gap-4">
+            <h1 className="text-xs font-black tracking-widest text-muted-foreground uppercase font-mono">
+              SYSTEM // ACTIVE
+            </h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <NotificationsDropdown />
+          </div>
+        </header>
+        <main className="flex-1 w-full">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }
+

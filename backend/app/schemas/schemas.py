@@ -111,3 +111,15 @@ class ApplicationOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+# Notification Schemas
+class NotificationOut(BaseModel):
+    id: UUID
+    user_id: UUID
+    message: str
+    is_read: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
