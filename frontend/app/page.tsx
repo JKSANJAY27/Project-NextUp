@@ -17,11 +17,11 @@ export default function LandingPage() {
           NEXTUP<span className="text-accent">.AI</span>
         </span>
         <nav className="flex items-center gap-6">
-          <Link href="/auth/login" className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors">
+          <Link href="/login" className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors">
             LOGIN
           </Link>
           <Link 
-            href={token ? "/dashboard" : "/auth/register"}
+            href={token ? "/dashboard" : "/register"}
             className="flex items-center justify-center border-2 border-border bg-foreground text-background px-6 h-10 text-xs font-bold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95"
           >
             {token ? "DASHBOARD" : "REGISTER"}
@@ -67,7 +67,7 @@ export default function LandingPage() {
           
           <div className="pt-8 flex flex-col sm:flex-row justify-center gap-4">
             <Link
-              href={token ? "/dashboard" : "/auth/register"}
+              href={token ? "/dashboard" : "/register"}
               className="flex items-center justify-center gap-3 h-16 px-10 border-2 border-border bg-foreground text-background text-sm font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all"
             >
               <span>{token ? "ENTER SYSTEM" : "SECURE PLACEMENT ACCESS"}</span>
