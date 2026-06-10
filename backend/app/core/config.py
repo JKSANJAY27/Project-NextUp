@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     CDC_SENDER_EMAIL: str = "cdc@vit.ac.in"
     PLACEMENT_CATEGORIES: List[str] = ["Dream", "Super Dream", "Mass Recruiter", "Internship", "Regular"]
 
+    # AI Integration
+    HF_API_TOKEN: str = ""
+
     class Config:
         case_sensitive = True
         env_file = ".env"

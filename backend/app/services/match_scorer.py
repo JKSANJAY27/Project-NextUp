@@ -4,6 +4,41 @@ from rapidfuzz import fuzz
 
 logger = logging.getLogger(__name__)
 
+NORMALIZED_SKILLS_DICT = {
+    "reactjs": "react",
+    "react.js": "react",
+    "react js": "react",
+    "nodejs": "node",
+    "node.js": "node",
+    "node js": "node",
+    "javascript": "js",
+    "typescript": "ts",
+    "mongodb": "mongo",
+    "postgresql": "postgres",
+    "sqlite3": "sqlite",
+    "docker": "docker",
+    "kubernetes": "k8s",
+    "k8s": "k8s",
+    "aws": "aws",
+    "amazon web services": "aws",
+    "gcp": "gcp",
+    "google cloud platform": "gcp",
+    "vuejs": "vue",
+    "vue.js": "vue",
+    "nextjs": "next",
+    "next.js": "next",
+    "nestjs": "nest",
+    "nest.js": "nest",
+    "golang": "go",
+    "python3": "python",
+    "cpp": "c++",
+    "c plus plus": "c++"
+}
+
+def normalize_skill(skill: str) -> str:
+    s = skill.strip().lower()
+    return NORMALIZED_SKILLS_DICT.get(s, s)
+
 def calculate_match_score(
     student_skills: List[str],
     jd_required_skills: List[str],
@@ -22,9 +57,9 @@ def calculate_match_score(
         cgpa_bonus = 5 if (student_cgpa and company_min_cgpa and student_cgpa >= company_min_cgpa + 0.5) else 0
         return min(75 + cgpa_bonus, 100)
 
-    # Standardize inputs to lowercase
-    student_skills_clean = [s.strip().lower() for s in (student_skills or []) if s.strip()]
-    jd_skills_clean = [s.strip().lower() for s in jd_required_skills if s.strip()]
+    # Standardize and normalize inputs to lowercase
+    student_skills_clean = [normalize_skill(s) for s in (student_skills or []) if s.strip()]
+    jd_skills_clean = [normalize_skill(s) for s in jd_required_skills if s.strip()]
 
     matched_points = 0
     max_skills_points = len(jd_skills_clean) * 10

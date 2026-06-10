@@ -65,7 +65,9 @@ class Company(Base):
     website = Column(String)
     jd_text = Column(String)
     jd_required_skills = Column(ARRAY(String), default=list)
+    jd_preferred_skills = Column(ARRAY(String), default=list)
     jd_ats_keywords = Column(ARRAY(String), default=list)
+    interview_topics = Column(ARRAY(String), default=list)
     recruitment_cycle = Column(String, default="Default")
     fingerprint = Column(String(64), unique=True, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -186,7 +188,7 @@ class RawIngestionJob(Base):
 
 class IngestionSource(Base):
     __tablename__ = "ingestion_sources"
-
+    
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     source_name = Column(String, nullable=False)
     department = Column(String, nullable=False)
@@ -197,3 +199,30 @@ class IngestionSource(Base):
     error_log = Column(String)
 
     jobs = relationship("RawIngestionJob", back_populates="source")
+
+class AiGenerationJob(Base):
+    __tablename__ = "ai_generation_jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    job_type = Column(String, nullable=False) # 'resume_tailor', 'sop', 'cover_letter', 'jd_intelligence', 'interview_prep'
+    request_source = Column(String, default="cloud") # 'browser', 'cloud', 'fallback'
+    model_used = Column(String)
+    input_hash = Column(String(64))
+    tokens_generated = Column(Integer)
+    error_message = Column(String)
+    status = Column(String, default="processing")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime)
+
+class StudentDocument(Base):
+    __tablename__ = "student_documents"
+    __table_args__ = (UniqueConstraint('user_id', 'company_id', 'doc_type', 'version', name='uq_student_document_version'),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    doc_type = Column(String, nullable=False) # 'sop', 'cover_letter'
+    version = Column(Integer, default=1, nullable=False)
+    content = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)

@@ -95,7 +95,9 @@ CREATE TABLE IF NOT EXISTS companies (
     website TEXT,
     jd_text TEXT,
     jd_required_skills TEXT[] DEFAULT '{}',
+    jd_preferred_skills TEXT[] DEFAULT '{}',
     jd_ats_keywords TEXT[] DEFAULT '{}',
+    interview_topics TEXT[] DEFAULT '{}',
     recruitment_cycle VARCHAR(100) DEFAULT 'Default',
     fingerprint VARCHAR(64) UNIQUE NOT NULL, -- SHA256 of Company|Role|Category|Batch|Cycle
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -269,3 +271,43 @@ CREATE POLICY "Authenticated users can read company events"
 CREATE POLICY "Admin/Coordinators can manage company events" 
     ON company_events FOR ALL 
     USING (auth.jwt() ->> 'role' IN ('admin', 'coordinator'));
+
+-- 17. AI Generation Jobs Tracking (Auditing & Cloud rate limiting)
+CREATE TABLE IF NOT EXISTS ai_generation_jobs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    job_type VARCHAR(100) NOT NULL, -- 'resume_tailor', 'sop', 'cover_letter', 'jd_intelligence', 'interview_prep'
+    request_source VARCHAR(50) DEFAULT 'cloud' CHECK (request_source IN ('browser', 'cloud', 'fallback')),
+    model_used VARCHAR(100),
+    input_hash VARCHAR(64),
+    tokens_generated INT,
+    error_message TEXT,
+    status VARCHAR(50) DEFAULT 'processing' CHECK (status IN ('processing', 'completed', 'failed')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP WITH TIME ZONE
+);
+
+ALTER TABLE ai_generation_jobs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can only read their own AI jobs" 
+    ON ai_generation_jobs FOR SELECT 
+    USING (auth.uid() = user_id);
+
+-- 18. Student Documents Registry (Versioned SOPs & Cover Letters)
+CREATE TABLE IF NOT EXISTS student_documents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+    doc_type VARCHAR(50) NOT NULL CHECK (doc_type IN ('sop', 'cover_letter')),
+    version INT NOT NULL DEFAULT 1,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, company_id, doc_type, version)
+);
+
+ALTER TABLE student_documents ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can manage their own documents" 
+    ON student_documents FOR ALL 
+    USING (auth.uid() = user_id);
+

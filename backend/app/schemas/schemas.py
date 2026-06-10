@@ -52,7 +52,9 @@ class CompanyCreate(BaseModel):
     website: Optional[str] = None
     jd_text: Optional[str] = None
     jd_required_skills: Optional[List[str]] = None
+    jd_preferred_skills: Optional[List[str]] = None
     jd_ats_keywords: Optional[List[str]] = None
+    interview_topics: Optional[List[str]] = None
     recruitment_cycle: Optional[str] = "Default"
 
 class CompanyOut(CompanyCreate):

@@ -23,6 +23,7 @@ from app.models.models import (
 from app.services.email_parser import parse_placement_email
 from app.services.excel_parser import extract_neo_ids_from_excel
 from app.services.pdf_extractor import parse_job_description
+from app.services.ai_service import precompute_jd_intelligence_deterministic
 
 logger = logging.getLogger(__name__)
 
@@ -299,11 +300,25 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             # Process JD PDF
             if filename.lower().endswith(".pdf"):
                 jd_info = parse_job_description(file_bytes)
-                company.jd_text = jd_info.get("jd_text")
-                company.jd_required_skills = jd_info.get("skills", [])
+                jd_text = jd_info.get("jd_text", "")
+                required_skills = jd_info.get("skills", [])
+                
+                company.jd_text = jd_text
+                company.jd_required_skills = required_skills
                 company.jd_ats_keywords = jd_info.get("ats_keywords", [])
-                att_meta.parsed_meta = {"skills": jd_info.get("skills", []), "ats_keywords_count": len(jd_info.get("ats_keywords", []))}
-                logger.info(f"Processed JD PDF attachment: {filename}")
+                
+                # Precompute JD Intelligence (preferred skills & topics)
+                jd_intel = precompute_jd_intelligence_deterministic(jd_text, required_skills)
+                company.jd_preferred_skills = jd_intel.get("preferred_skills", [])
+                company.interview_topics = jd_intel.get("interview_topics", [])
+                
+                att_meta.parsed_meta = {
+                    "skills": required_skills,
+                    "preferred_skills": company.jd_preferred_skills,
+                    "interview_topics": company.interview_topics,
+                    "ats_keywords_count": len(company.jd_ats_keywords)
+                }
+                logger.info(f"Processed JD PDF attachment: {filename} with precomputed JD intelligence.")
                 
             # Process Shortlist Excel
             elif filename.lower().endswith((".xls", ".xlsx")):

@@ -1220,6 +1220,15 @@ export default function DashboardPage() {
                     }
                   </div>
                 </div>
+
+                <div className="pt-4 border-t border-border">
+                  <Link
+                    href={`/ai-toolkit?companyId=${selectedCompany.id}`}
+                    className="flex w-full items-center justify-center gap-2 border-2 border-accent bg-accent text-black font-extrabold text-xs tracking-widest uppercase h-11 hover:bg-black hover:text-accent hover:border-black active:scale-95 transition-all"
+                  >
+                    <span>✨ Open AI Placement Toolkit</span>
+                  </Link>
+                </div>
               </div>
 
               {/* Right Column: Original Email Message Viewer */}
