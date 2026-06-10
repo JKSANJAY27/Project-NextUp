@@ -5,7 +5,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
 import { deriveKey, exportKeyToHex } from "@/lib/crypto";
+import { supabase } from "@/lib/supabase";
 import api from "@/lib/api";
+
+async function getDeterministicSalt(email: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(email.trim().toLowerCase());
+  const hashBuffer = await window.crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -27,28 +36,34 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      // 1. Fetch the email salt first
-      const saltRes = await api.get(`/auth/salt?email=${encodeURIComponent(email)}`);
-      const { email_salt } = saltRes.data;
+      // 1. Derive the salt deterministically from the email
+      const emailSalt = await getDeterministicSalt(email);
 
       // 2. Derive the key in-memory
-      const key = await deriveKey(password, email_salt);
+      const key = await deriveKey(password, emailSalt);
       const keyHex = await exportKeyToHex(key);
 
-      // 3. Post login credentials
-      const loginRes = await api.post("/auth/login", { email, password });
-      const { access_token } = loginRes.data;
+      // 3. Login via Supabase Auth
+      const { data, error: loginError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (loginError) {
+        throw loginError;
+      }
+
+      const access_token = data.session?.access_token;
+      if (!access_token) {
+        throw new Error("Failed to retrieve authentication token.");
+      }
 
       // Store key and token in Zustand
       setToken(access_token);
       setEncryptionKey(key, keyHex);
 
-      // 4. Load user profile
-      const userRes = await api.get("/users/me", {
-        headers: {
-          Authorization: `Bearer ${access_token}`,
-        },
-      });
+      // 4. Load user profile from FastAPI backend using the Supabase JWT
+      const userRes = await api.get("/users/me");
 
       setUser(userRes.data);
 
@@ -56,12 +71,8 @@ export default function LoginPage() {
       router.push("/dashboard");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
-      // Friendly message
-      if (err.response?.status === 404 || err.response?.status === 400) {
-        setError("INCORRECT EMAIL OR PASSWORD.");
-      } else {
-        setError(err.response?.data?.detail || "LOGIN FAILED. PLEASE TRY AGAIN.");
-      }
+      console.error("Login failed:", err);
+      setError(err.message || "LOGIN FAILED. PLEASE CHECK YOUR CREDENTIALS.");
     } finally {
       setLoading(false);
     }

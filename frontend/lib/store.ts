@@ -4,16 +4,17 @@ import { persist } from "zustand/middleware";
 interface UserProfile {
   id: string;
   email: string;
+  role: string;
   full_name: string | null;
   branch: string | null;
   batch_year: number | null;
   neo_id_enc: string | null;
-  cgpa_enc: string | null;
-  tenth_marks_enc: string | null;
-  twelfth_marks_enc: string | null;
-  has_arrears_enc: string | null;
+  neo_id_hash: string | null;
+  cgpa: number | null;
+  tenth_marks: number | null;
+  twelfth_marks: number | null;
+  has_arrears: boolean | null;
   skills: string[] | null;
-  gmail_connected: boolean;
   created_at: string;
 }
 

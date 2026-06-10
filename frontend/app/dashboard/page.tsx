@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useAppStore } from "@/lib/store";
-import { decryptData, encryptData } from "@/lib/crypto";
+import { supabase } from "@/lib/supabase";
 import api from "@/lib/api";
 import { 
   Plus, 
@@ -31,7 +31,7 @@ interface AdditionalInfo {
   important_links?: ImportantLink[];
 }
 
-interface CompanyWithEligibility {
+interface Company {
   id: string;
   name: string;
   category: string;
@@ -40,19 +40,19 @@ interface CompanyWithEligibility {
   stipend: string;
   job_location: string;
   eligible_branches: string[] | null;
-  min_cgpa: number | null;
-  min_tenth: number | null;
-  min_twelfth: number | null;
-  requires_no_arrears: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  eligibility_rules: any | null;
   registration_deadline: string | null;
-  visit_date: string | null;
-  registration_link: string | null;
   website: string | null;
+  registration_link: string | null;
   jd_text: string | null;
   jd_required_skills: string[] | null;
   jd_ats_keywords: string[] | null;
   source_email_body: string | null;
   additional_info: AdditionalInfo | null;
+}
+
+interface CompanyWithEligibility extends Company {
   eligibility_status: string;
   eligibility_reason: string | null;
 }
@@ -60,7 +60,7 @@ interface CompanyWithEligibility {
 interface Application {
   id: string;
   company_id: string;
-  status_enc: string;
+  status: string;
   current_round: string;
   notes_enc: string | null;
   match_score: number;
@@ -75,11 +75,94 @@ const KANBAN_COLUMNS = [
   { id: "Offer", name: "OFFER RECEIVED" }
 ];
 
+async function calculateHash(text: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(text);
+  const hashBuffer = await window.crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getEligibility(user: any, company: Company): { status: string; reason: string | null } {
+  if (!user) {
+    return { status: "CHECK", reason: "Profile not loaded." };
+  }
+
+  // 1. Branch check
+  if (company.eligible_branches && company.eligible_branches.length > 0) {
+    const userBranch = (user.branch || "").trim().toUpperCase();
+    const eligibleBranches = company.eligible_branches.map((b: string) => b.trim().toUpperCase());
+    if (!eligibleBranches.includes(userBranch)) {
+      return {
+        status: "NOT_ELIGIBLE",
+        reason: `Your branch '${user.branch || "Unknown"}' is not eligible.`,
+      };
+    }
+  }
+
+  const rules = company.eligibility_rules || {};
+
+  // 2. CGPA check
+  const minCgpa = rules.min_cgpa !== undefined ? rules.min_cgpa : null;
+  if (minCgpa !== null && minCgpa !== undefined) {
+    if (user.cgpa === null || user.cgpa === undefined) {
+      return { status: "CHECK", reason: "CGPA not set in profile." };
+    }
+    if (Number(user.cgpa) < Number(minCgpa)) {
+      return {
+        status: "NOT_ELIGIBLE",
+        reason: `Your CGPA (${Number(user.cgpa).toFixed(2)}) is below the required ${Number(minCgpa).toFixed(2)}.`,
+      };
+    }
+  }
+
+  // 3. 10th Marks check
+  const minTenth = rules.min_tenth_marks || rules.min_tenth || null;
+  if (minTenth !== null && minTenth !== undefined) {
+    if (user.tenth_marks === null || user.tenth_marks === undefined) {
+      return { status: "CHECK", reason: "10th marks not set in profile." };
+    }
+    if (Number(user.tenth_marks) < Number(minTenth)) {
+      return {
+        status: "NOT_ELIGIBLE",
+        reason: `Your 10th marks (${Number(user.tenth_marks).toFixed(1)}%) are below the required ${Number(minTenth).toFixed(1)}%.`,
+      };
+    }
+  }
+
+  // 4. 12th Marks check
+  const minTwelfth = rules.min_twelfth_marks || rules.min_twelfth || null;
+  if (minTwelfth !== null && minTwelfth !== undefined) {
+    if (user.twelfth_marks === null || user.twelfth_marks === undefined) {
+      return { status: "CHECK", reason: "12th marks not set in profile." };
+    }
+    if (Number(user.twelfth_marks) < Number(minTwelfth)) {
+      return {
+        status: "NOT_ELIGIBLE",
+        reason: `Your 12th marks (${Number(user.twelfth_marks).toFixed(1)}%) are below the required ${Number(minTwelfth).toFixed(1)}%.`,
+      };
+    }
+  }
+
+  // 5. Arrears check
+  const requiresNoArrears = rules.requires_no_arrears !== undefined ? rules.requires_no_arrears : false;
+  if (requiresNoArrears) {
+    if (user.has_arrears) {
+      return {
+        status: "NOT_ELIGIBLE",
+        reason: "Company requires no standing arrears, but you have arrears.",
+      };
+    }
+  }
+
+  return { status: "ELIGIBLE", reason: "You meet all academic criteria." };
+}
+
 export default function DashboardPage() {
   const { user, encryptionKey } = useAppStore();
   const [companies, setCompanies] = useState<CompanyWithEligibility[]>([]);
   const [applications, setApplications] = useState<Record<string, Application>>({});
-  const [decryptedStatuses, setDecryptedStatuses] = useState<Record<string, string>>({});
   
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
@@ -111,23 +194,56 @@ export default function DashboardPage() {
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      // Fetch companies
-      const compRes = await api.get("/companies");
-      setCompanies(compRes.data);
-
-      // Fetch applications
-      const appRes = await api.get("/applications");
-      const appMap: Record<string, Application> = {};
+      // 1. Fetch companies directly from Supabase
+      const { data: compData, error: compError } = await supabase
+        .from("companies")
+        .select("*")
+        .order("created_at", { ascending: false });
       
+      if (compError) throw compError;
+
+      // 2. Fetch user profile from Supabase to ensure we have the latest plaintext fields
+      let activeProfile = user;
+      if (user?.id) {
+        const { data: profileData } = await supabase
+          .from("student_profiles")
+          .select("*")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (profileData) {
+          activeProfile = { ...user, ...profileData };
+        }
+      }
+
+      // Compute client-side eligibility
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      appRes.data.forEach((app: any) => {
+      const companiesWithEligibility: CompanyWithEligibility[] = (compData || []).map((c: any) => {
+        const eligibility = getEligibility(activeProfile, c);
+        return {
+          ...c,
+          eligibility_status: eligibility.status,
+          eligibility_reason: eligibility.reason
+        };
+      });
+      setCompanies(companiesWithEligibility);
+
+      // 3. Fetch applications directly from Supabase
+      const { data: appData, error: appError } = await supabase
+        .from("applications")
+        .select("*");
+      
+      if (appError) throw appError;
+
+      const appMap: Record<string, Application> = {};
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (appData || []).forEach((app: any) => {
         appMap[app.company_id] = {
           id: app.id,
           company_id: app.company_id,
-          status_enc: app.status_enc,
+          status: app.status,
           current_round: app.current_round,
           notes_enc: app.notes_enc,
-          match_score: app.match_score
+          match_score: app.match_score || 0
         };
       });
       setApplications(appMap);
@@ -140,45 +256,31 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchDashboardData();
-  }, [encryptionKey]);
 
-  // Trigger auto Gmail sync on load if connected
-  useEffect(() => {
-    const autoSync = async () => {
-      if (user?.gmail_connected && encryptionKey) {
-        setSyncing(true);
-        try {
-          await api.post("/gmail/sync");
+    // Set up real-time subscription for realtime updates from Supabase!
+    const companiesChannel = supabase
+      .channel("supabase-realtime-dashboard")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "companies" },
+        () => {
           fetchDashboardData();
-        } catch (err) {
-          console.warn("Auto sync failed on load:", err);
-        } finally {
-          setSyncing(false);
         }
-      }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "applications" },
+        () => {
+          fetchDashboardData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(companiesChannel);
     };
-    autoSync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, encryptionKey]);
-
-  // Decrypt application statuses when encryptionKey or applications change
-  useEffect(() => {
-    const decryptAll = async () => {
-      if (!encryptionKey) return;
-      const decMap: Record<string, string> = {};
-      for (const compId in applications) {
-        const app = applications[compId];
-        try {
-          const decStatus = await decryptData(app.status_enc, encryptionKey);
-          decMap[compId] = decStatus;
-        } catch {
-          decMap[compId] = "DECRYPT ERROR";
-        }
-      }
-      setDecryptedStatuses(decMap);
-    };
-
-    decryptAll();
-  }, [applications, encryptionKey]);
 
   // Handle manual company creation
   const handleAddCompany = async (e: React.FormEvent) => {
@@ -196,20 +298,39 @@ export default function DashboardPage() {
         ? compBranches.split(",").map((b) => b.trim().toUpperCase()).filter((b) => b)
         : [];
 
-      await api.post("/companies", {
-        name: compName.trim(),
-        category: compCategory,
-        role: compRole.trim(),
-        ctc: compCtc.trim() || null,
-        stipend: compStipend.trim() || null,
-        job_location: compLocation.trim() || null,
-        eligible_branches: branchesArray.length > 0 ? branchesArray : null,
+      // Calculate fingerprint hash of manual entry
+      const fingerprintInput = `${compName.trim().toUpperCase()}|${compRole.trim().toUpperCase()}|${compCategory.trim().toUpperCase()}|${new Date().getFullYear()}|DEFAULT`;
+      const fingerprint = await calculateHash(fingerprintInput);
+
+      const eligibilityRules = {
         min_cgpa: compMinCgpa ? parseFloat(compMinCgpa) : null,
-        requires_no_arrears: compRequiresNoArrears,
-        registration_deadline: compDeadline ? new Date(compDeadline).toISOString() : null,
-        registration_link: compRegLink.trim() || null,
-        jd_text: compJd.trim() || null
-      });
+        min_tenth_marks: null,
+        min_twelfth_marks: null,
+        requires_no_arrears: compRequiresNoArrears
+      };
+
+      const { error } = await supabase
+        .from("companies")
+        .insert({
+          name: compName.trim(),
+          category: compCategory,
+          role: compRole.trim(),
+          ctc: compCtc.trim() || null,
+          stipend: compStipend.trim() || null,
+          job_location: compLocation.trim() || null,
+          eligible_branches: branchesArray.length > 0 ? branchesArray : [],
+          eligibility_rules: eligibilityRules,
+          registration_deadline: compDeadline ? new Date(compDeadline).toISOString() : null,
+          registration_link: compRegLink.trim() || null,
+          website: null,
+          jd_text: compJd.trim() || null,
+          jd_required_skills: [],
+          jd_ats_keywords: [],
+          recruitment_cycle: "Default",
+          fingerprint: fingerprint
+        });
+
+      if (error) throw error;
 
       setFormSuccess("COMPANY DRIVE CREATED SUCCESSFULLY.");
       fetchDashboardData();
@@ -229,58 +350,87 @@ export default function DashboardPage() {
       setTimeout(() => setShowAddCompany(false), 1500);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
-      setFormError(err.response?.data?.detail || "FAILED TO CREATE DRIVE.");
+      setFormError(err.message || "FAILED TO CREATE DRIVE.");
     }
   };
 
   // Create or Update Application Status
   const handleStatusChange = async (companyId: string, newStatus: string) => {
-    if (!encryptionKey) {
-      alert("UNSEAL YOUR VAULT FIRST TO TRACK APPLICATIONS.");
+    if (!user) {
+      alert("PLEASE LOG IN TO TRACK APPLICATIONS.");
       return;
     }
 
     try {
-      const encStatus = await encryptData(newStatus, encryptionKey);
       const app = applications[companyId];
 
       if (app) {
-        // Update existing application
-        const res = await api.patch(`/applications/${app.id}`, {
-          status_enc: encStatus,
-          current_round: newStatus
-        });
+        // Update existing application directly on Supabase (RLS policy allows it)
+        const { data, error } = await supabase
+          .from("applications")
+          .update({
+            status: newStatus,
+            current_round: newStatus
+          })
+          .eq("id", app.id)
+          .select()
+          .single();
+        
+        if (error) throw error;
         
         setApplications(prev => ({
           ...prev,
           [companyId]: {
             ...prev[companyId],
-            status_enc: res.data.status_enc,
-            current_round: res.data.current_round
+            status: data.status,
+            current_round: data.current_round
           }
         }));
       } else {
-        // Create new application
-        const res = await api.post("/applications", {
-          company_id: companyId,
-          status_enc: encStatus,
-          current_round: newStatus
-        });
+        // Create new application directly on Supabase
+        const { data, error } = await supabase
+          .from("applications")
+          .insert({
+            user_id: user.id,
+            company_id: companyId,
+            status: newStatus,
+            current_round: newStatus
+          })
+          .select()
+          .single();
+        
+        if (error) throw error;
         
         setApplications(prev => ({
           ...prev,
           [companyId]: {
-            id: res.data.id,
+            id: data.id,
             company_id: companyId,
-            status_enc: res.data.status_enc,
-            current_round: res.data.current_round,
-            notes_enc: res.data.notes_enc,
-            match_score: res.data.match_score
+            status: data.status,
+            current_round: data.current_round,
+            notes_enc: data.notes_enc,
+            match_score: data.match_score || 0
           }
         }));
       }
-    } catch {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      console.error("Failed to update status", err);
       alert("FAILED TO UPDATE TRACKING STATUS.");
+    }
+  };
+
+  // Manual trigger for email sync (calls FastAPI queue processing webhook)
+  const handleTriggerSync = async () => {
+    setSyncing(true);
+    try {
+      await api.post("/gmail/sync");
+      fetchDashboardData();
+    } catch (err) {
+      console.error("Manual sync failed:", err);
+      alert("Failed to sync emails. Check representative trigger logs.");
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -377,17 +527,26 @@ export default function DashboardPage() {
             </p>
           </div>
           
-          <button 
-            onClick={() => setShowAddCompany(!showAddCompany)}
-            className="flex items-center justify-center gap-2 h-14 px-6 border-2 border-border bg-foreground text-background font-extrabold tracking-wider hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 uppercase text-sm"
-          >
-            <Plus size={16} />
-            <span>MANUAL DRIVE CREATION</span>
-          </button>
+          <div className="flex flex-wrap gap-4">
+            <button
+              onClick={handleTriggerSync}
+              disabled={syncing}
+              className="flex items-center justify-center gap-2 h-14 px-6 border-2 border-border bg-background font-extrabold tracking-wider hover:bg-muted transition-all active:scale-95 uppercase text-sm disabled:opacity-50"
+            >
+              <span>{syncing ? "SYNCING..." : "SYNC PLACEMENTS"}</span>
+            </button>
+            <button 
+              onClick={() => setShowAddCompany(!showAddCompany)}
+              className="flex items-center justify-center gap-2 h-14 px-6 border-2 border-border bg-foreground text-background font-extrabold tracking-wider hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 uppercase text-sm"
+            >
+              <Plus size={16} />
+              <span>MANUAL DRIVE CREATION</span>
+            </button>
+          </div>
         </div>
 
         {/* Onboarding Banner */}
-        {(!user?.neo_id_enc || !user?.gmail_connected) && (
+        {(!user?.neo_id_enc) && (
           <div className="border-2 border-accent bg-accent/10 p-6 flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-4">
               <div className="h-10 w-10 bg-accent text-black flex items-center justify-center border-2 border-black animate-pulse">
@@ -398,9 +557,7 @@ export default function DashboardPage() {
                   ⚡ ONBOARDING: ACTION REQUIRED
                 </p>
                 <p className="text-xs text-muted-foreground uppercase tracking-tight leading-snug">
-                  {!user?.neo_id_enc 
-                    ? "Please complete your Student Profile and set up your encryption vault to unlock eligibility calculations."
-                    : "Connect your university Gmail account in the Profile settings to start auto-syncing CDC placement emails."}
+                  Please complete your Student Profile and set up your encryption vault to unlock eligibility calculations.
                 </p>
               </div>
             </div>
@@ -740,7 +897,7 @@ export default function DashboardPage() {
                 <tbody className="divide-y divide-border">
                   {filteredCompanies.map((c) => {
                     const app = applications[c.id];
-                    const decStatus = app ? (decryptedStatuses[c.id] || "Applied") : "";
+                    const activeStatus = app ? app.status : "";
                     const deadlineDate = c.registration_deadline ? new Date(c.registration_deadline) : null;
                     
                     return (
@@ -787,15 +944,9 @@ export default function DashboardPage() {
 
                         <td className="py-5 px-6">
                           {app ? (
-                            encryptionKey ? (
-                              <span className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-1 ${getStatusColor(decStatus)}`}>
-                                {decStatus}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 bg-muted border border-border text-muted-foreground">
-                                <Lock size={10} /> ENCRYPTED
-                              </span>
-                            )
+                            <span className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-1 ${getStatusColor(activeStatus)}`}>
+                              {activeStatus}
+                            </span>
                           ) : (
                             <span className="text-xs text-muted-foreground uppercase">NOT APPLIED</span>
                           )}
@@ -816,7 +967,7 @@ export default function DashboardPage() {
                                       onClick={() => handleStatusChange(c.id, s)}
                                       className={`
                                         w-full text-left px-4 py-2 text-xs font-bold uppercase tracking-wider
-                                        ${decStatus === s ? "bg-accent text-black" : "hover:bg-muted text-foreground"}
+                                        ${activeStatus === s ? "bg-accent text-black" : "hover:bg-muted text-foreground"}
                                       `}
                                     >
                                       {s}
@@ -856,15 +1007,15 @@ export default function DashboardPage() {
               const columnApps = filteredCompanies.filter((c) => {
                 const app = applications[c.id];
                 if (!app) return false;
-                const decStatus = decryptedStatuses[c.id] || "Applied";
+                const activeStatus = app.status || "Applied";
                 
                 // Group both OA/Assessment under OA, Interview under Technical, etc.
-                if (col.id === "Applied") return decStatus === "Applied";
-                if (col.id === "Shortlisted") return decStatus === "Shortlisted";
-                if (col.id === "OA") return decStatus === "OA" || decStatus === "Online Assessment";
-                if (col.id === "Technical") return decStatus === "Technical" || decStatus.includes("Technical Interview");
-                if (col.id === "HR") return decStatus === "HR" || decStatus.includes("HR Interview");
-                if (col.id === "Offer") return decStatus === "Offer" || decStatus.includes("Offer Received");
+                if (col.id === "Applied") return activeStatus === "Applied";
+                if (col.id === "Shortlisted") return activeStatus === "Shortlisted";
+                if (col.id === "OA") return activeStatus === "OA" || activeStatus === "Online Assessment";
+                if (col.id === "Technical") return activeStatus === "Technical" || activeStatus.includes("Technical");
+                if (col.id === "HR") return activeStatus === "HR" || activeStatus.includes("HR");
+                if (col.id === "Offer") return activeStatus === "Offer" || activeStatus.includes("Offer");
                 return false;
               });
 
@@ -1013,7 +1164,7 @@ export default function DashboardPage() {
                 </div>
 
                 {/* ATS / JD Keywords */}
-                {selectedCompany.jd_ats_keywords && (
+                {selectedCompany.jd_ats_keywords && selectedCompany.jd_ats_keywords.length > 0 && (
                   <div className="space-y-2">
                     <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ATS KEYWORDS</h4>
                     <div className="flex flex-wrap gap-1.5">

@@ -37,7 +37,7 @@ def create_application(
     new_app = Application(
         user_id=current_user.id,
         company_id=app_in.company_id,
-        status_enc=app_in.status_enc,
+        status=app_in.status,
         current_round=app_in.current_round,
         notes_enc=app_in.notes_enc,
         match_score=0

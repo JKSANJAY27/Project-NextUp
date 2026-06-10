@@ -6,7 +6,7 @@ import io
 
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.models import User, Company, Application, RoundEvent
+from app.models.models import User, StudentProfile, Company, Application
 from app.schemas.schemas import CompanyCreate, CompanyOut, CompanyWithEligibilityOut
 from app.services.eligibility import check_eligibility
 from app.services.email_parser import parse_placement_email
@@ -49,6 +49,14 @@ async def import_placement_file(
             
         parsed = parse_placement_email(email_text)
         
+        # Set up eligibility rules JSONB
+        eligibility_rules = {
+            "min_cgpa": parsed.get("min_cgpa"),
+            "min_tenth_marks": None,
+            "min_twelfth_marks": None,
+            "requires_no_arrears": parsed.get("requires_no_arrears", False)
+        }
+        
         # Create company
         new_company = Company(
             name=parsed["company"],
@@ -57,8 +65,7 @@ async def import_placement_file(
             ctc=parsed["ctc"],
             stipend=parsed["stipend"],
             eligible_branches=parsed.get("eligible_branches"),
-            min_cgpa=parsed.get("min_cgpa"),
-            requires_no_arrears=parsed["requires_no_arrears"],
+            eligibility_rules=eligibility_rules,
             job_location=parsed.get("job_location"),
             registration_deadline=parsed.get("deadline_iso"),
             registration_link=parsed.get("registration_link"),
@@ -85,21 +92,18 @@ async def import_placement_file(
         # Recalculate match scores for all applications to this company
         applications = db.query(Application).filter(Application.company_id == company_id).all()
         for app in applications:
-            student = db.query(User).filter(User.id == app.user_id).first()
-            if student:
-                # Decrypt CGPA if x_client_key is provided
-                student_cgpa = None
-                if x_client_key and student.cgpa_enc:
-                    try:
-                        student_cgpa = float(decrypt_field(student.cgpa_enc, x_client_key))
-                    except Exception:
-                        pass
+            student_profile = db.query(StudentProfile).filter(StudentProfile.user_id == app.user_id).first()
+            if student_profile:
+                student_cgpa = float(student_profile.cgpa) if student_profile.cgpa is not None else None
+                
+                rules = company.eligibility_rules or {}
+                company_min_cgpa = float(rules.get("min_cgpa")) if rules.get("min_cgpa") else None
                 
                 score = calculate_match_score(
-                    student_skills=student.skills or [],
+                    student_skills=student_profile.skills or [],
                     jd_required_skills=company.jd_required_skills or [],
                     student_cgpa=student_cgpa,
-                    company_min_cgpa=float(company.min_cgpa) if company.min_cgpa else None
+                    company_min_cgpa=company_min_cgpa
                 )
                 app.match_score = score
                 db.add(app)
@@ -119,9 +123,10 @@ async def import_placement_file(
         
         # Check if current user is in the shortlist
         is_shortlisted = False
-        if x_client_key and current_user.neo_id_enc:
+        profile = current_user.profile
+        if x_client_key and profile and profile.neo_id_enc:
             try:
-                decrypted_neo = decrypt_field(current_user.neo_id_enc, x_client_key).upper().strip()
+                decrypted_neo = decrypt_field(profile.neo_id_enc, x_client_key).upper().strip()
                 if decrypted_neo in extracted_ids:
                     is_shortlisted = True
                     
@@ -131,31 +136,18 @@ async def import_placement_file(
                         Application.company_id == company_id
                     ).first()
                     
-                    enc_status = encrypt_field("Shortlisted", x_client_key)
-                    
                     if app:
-                        app.status_enc = enc_status
+                        app.status = "Shortlisted"
                         app.current_round = "Shortlisted"
                     else:
                         app = Application(
                             user_id=current_user.id,
                             company_id=company_id,
-                            status_enc=enc_status,
+                            status="Shortlisted",
                             current_round="Shortlisted",
                             match_score=0
                         )
                     db.add(app)
-                    db.flush() # get app ID
-                    
-                    # Create Round Event
-                    round_event = RoundEvent(
-                        application_id=app.id,
-                        round_name="Shortlisted from CDC email",
-                        scheduled_at=None,
-                        status="completed",
-                        result_enc=encrypt_field("cleared", x_client_key)
-                    )
-                    db.add(round_event)
                     db.commit()
             except Exception as e:
                 logger.error(f"Failed to decrypt user neo_id or shortlist check: {str(e)}")
@@ -179,7 +171,10 @@ def list_companies(
     companies = db.query(Company).all()
     results = []
     for company in companies:
-        status, reason = check_eligibility(current_user, company, x_client_key)
+        if current_user.profile:
+            status, reason = check_eligibility(current_user.profile, company)
+        else:
+            status, reason = "CHECK", "Student profile not set up."
         # Create a dict compatible with CompanyWithEligibilityOut
         company_data = CompanyOut.from_orm(company).dict()
         company_data["eligibility_status"] = status
@@ -200,7 +195,10 @@ def get_company(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Company not found."
         )
-    status_elig, reason_elig = check_eligibility(current_user, company, x_client_key)
+    if current_user.profile:
+        status_elig, reason_elig = check_eligibility(current_user.profile, company)
+    else:
+        status_elig, reason_elig = "CHECK", "Student profile not set up."
     company_data = CompanyOut.from_orm(company).dict()
     company_data["eligibility_status"] = status_elig
     company_data["eligibility_reason"] = reason_elig

@@ -3,26 +3,26 @@ import re
 import json
 import logging
 import base64
-import tempfile
+import hashlib
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import DBAPIError
 from apscheduler.schedulers.background import BackgroundScheduler
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request as GoogleRequest
-from googleapiclient.discovery import build
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.core.security import decrypt_field, encrypt_field
-from app.core import gmail_token_cache
-from app.models.models import User, Company, Application, Notification
+from app.core.security import generate_blind_index
+from app.models.models import (
+    User, StudentProfile, Company, CompanyEvent, CompanyChangeLog,
+    Application, Notification, RawIngestionJob, AttachmentMetadata, NotificationJob
+)
 from app.services.email_parser import parse_placement_email
 from app.services.excel_parser import extract_neo_ids_from_excel
 from app.services.pdf_extractor import parse_job_description
-from app.services.eligibility import check_eligibility  # Let's check if this matches the file name
 
 logger = logging.getLogger(__name__)
 
@@ -31,296 +31,435 @@ scheduler = BackgroundScheduler()
 
 def start_scheduler():
     if not scheduler.running:
-        scheduler.add_job(sync_all_active_users, "interval", minutes=10, id="gmail_sync_job", replace_existing=True)
+        scheduler.add_job(process_queued_jobs_cron, "interval", minutes=5, id="queue_processor_job", replace_existing=True)
+        scheduler.add_job(refresh_views_cron, "interval", minutes=30, id="view_refresher_job", replace_existing=True)
         scheduler.start()
-        logger.info("Background Gmail sync scheduler started.")
+        logger.info("Background queue processor and view refresher scheduler started.")
 
 def shutdown_scheduler():
     if scheduler.running:
         scheduler.shutdown()
-        logger.info("Background Gmail sync scheduler stopped.")
+        logger.info("Background scheduler stopped.")
 
-def get_gmail_service(token_data: Dict[str, Any]) -> Credentials:
-    """Build Credentials object from decrypted token dictionary."""
-    return Credentials(
-        token=token_data.get("token"),
-        refresh_token=token_data.get("refresh_token"),
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=settings.GOOGLE_CLIENT_ID,
-        client_secret=settings.GOOGLE_CLIENT_SECRET,
-        scopes=["https://www.googleapis.com/auth/gmail.readonly"]
-    )
-
-def sync_user_gmail(user_id: UUID, db: Session) -> bool:
-    """Sync Gmail for a single user."""
-    logger.info(f"Starting Gmail sync for user: {user_id}")
-    
-    # 1. Retrieve derived key from in-memory cache
-    derived_key = gmail_token_cache.get_session_key(user_id)
-    if not derived_key:
-        logger.warning(f"No derived key in cache for user {user_id}. Skipping sync.")
-        return False
-        
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user or not user.gmail_token_enc:
-        logger.warning(f"User {user_id} has no Gmail connection or encrypted token.")
-        return False
-        
-    # 2. Decrypt token
+def recover_stale_jobs(db: Session):
+    """
+    Recovers jobs that have been stuck in 'processing' state for more than 30 minutes,
+    resetting them back to 'pending'.
+    """
+    is_sqlite = "sqlite" in settings.DATABASE_URL.lower()
     try:
-        token_json_str = decrypt_field(user.gmail_token_enc, derived_key)
-        token_data = json.loads(token_json_str)
-    except Exception as e:
-        logger.error(f"Failed to decrypt Gmail token for user {user_id}: {str(e)}")
-        return False
-
-    # Check for MOCK mode override
-    mock_mode = settings.MOCK_GMAIL
-    
-    if mock_mode:
-        logger.info(f"Running in MOCK_GMAIL mode for user {user_id}")
-        run_mock_sync(user, db, derived_key)
-        user.gmail_last_synced = datetime.utcnow()
+        if is_sqlite:
+            # SQLite compatibility syntax
+            result = db.execute(text("""
+                UPDATE raw_ingestion_jobs 
+                SET status = 'pending', 
+                    locked_at = NULL, 
+                    locked_by = NULL, 
+                    error_message = 'Stale lock timeout - reset to pending.' 
+                WHERE status = 'processing' 
+                  AND locked_at < datetime('now', '-30 minutes')
+            """))
+        else:
+            # PostgreSQL syntax
+            result = db.execute(text("""
+                UPDATE raw_ingestion_jobs 
+                SET status = 'pending', 
+                    locked_at = NULL, 
+                    locked_by = NULL, 
+                    error_message = 'Stale lock timeout - reset to pending.' 
+                WHERE status = 'processing' 
+                  AND locked_at < NOW() - INTERVAL '30 minutes'
+            """))
         db.commit()
-        return True
-
-    # 3. Authenticate with Google
-    try:
-        creds = get_gmail_service(token_data)
-        if creds.expired and creds.refresh_token:
-            creds.refresh(GoogleRequest())
-            # Save refreshed credentials
-            new_token_data = {
-                "token": creds.token,
-                "refresh_token": creds.refresh_token,
-                "expiry": creds.expiry.isoformat() if creds.expiry else None
-            }
-            user.gmail_token_enc = encrypt_field(json.dumps(new_token_data), derived_key)
-            db.commit()
-            
-        service = build("gmail", "v1", credentials=creds)
+        if result.rowcount > 0:
+            logger.info(f"Recovered {result.rowcount} stale raw_ingestion_jobs.")
     except Exception as e:
-        logger.error(f"Google authentication failed for user {user_id}: {str(e)}")
-        return False
+        db.rollback()
+        logger.error(f"Error recovering stale jobs: {str(e)}")
 
-    # 4. Fetch Emails matching placement rules
-    try:
-        # Fetch emails from the last 5 days
-        q = f"from:({settings.CDC_SENDER_EMAIL} OR noreply.cdcinfo@vit.ac.in) subject:(Dream OR 'Super Dream' OR Shortlisted OR 'Online Test' OR 'Interview Schedule' OR 'Offer')"
-        results = service.users().messages().list(userId="me", q=q, maxResults=15).execute()
-        messages = results.get("messages", [])
+def refresh_materialized_views(db: Session):
+    """
+    Refreshes performance materialized views concurrently.
+    """
+    # Bypass for SQLite local dev environments
+    if "sqlite" in settings.DATABASE_URL.lower():
+        logger.info("Skipping materialized view refresh (SQLite database does not support it).")
+        return
         
-        for msg in messages:
-            msg_id = msg["id"]
-            # Check if this email was already processed (or just process it safely)
-            msg_detail = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
-            
-            # Extract headers and body
-            payload = msg_detail.get("payload", {})
-            headers = payload.get("headers", [])
-            subject = next((h["value"] for h in headers if h["name"].lower() == "subject"), "No Subject")
-            sender = next((h["value"] for h in headers if h["name"].lower() == "from"), "")
-            
-            body = ""
-            if "parts" in payload:
-                for part in payload["parts"]:
-                    if part.get("mimeType") == "text/plain" and "data" in part.get("body", {}):
-                        body += base64.urlsafe_b64decode(part["body"]["data"].encode("ASCII")).decode("utf-8")
-            elif "body" in payload and "data" in payload["body"]:
-                body = base64.urlsafe_b64decode(payload["body"]["data"].encode("ASCII")).decode("utf-8")
-                
-            if not body:
-                continue
-                
-            # Parse company announcement info
-            parsed_info = parse_placement_email(body)
-            company_name = parsed_info.get("company", "Unknown")
-            
-            # Check if company already exists
-            company = db.query(Company).filter(Company.name == company_name, Company.role == parsed_info.get("role")).first()
-            if not company:
-                company = Company(
-                    name=company_name,
-                    category=parsed_info.get("category"),
-                    role=parsed_info.get("role"),
-                    ctc=parsed_info.get("ctc"),
-                    stipend=parsed_info.get("stipend"),
-                    job_location=parsed_info.get("job_location"),
-                    eligible_branches=parsed_info.get("eligible_branches"),
-                    min_cgpa=parsed_info.get("min_cgpa"),
-                    requires_no_arrears=parsed_info.get("requires_no_arrears"),
-                    registration_deadline=datetime.fromisoformat(parsed_info["deadline_iso"]) if parsed_info.get("deadline_iso") else None,
-                    registration_link=parsed_info.get("registration_link"),
-                    source_email_id=msg_id,
-                    source_email_body=body,
-                    additional_info={
-                        "subject": subject,
-                        "sender": sender,
-                        "important_links": [
-                            {"label": f"Email Link {i+1}", "url": url}
-                            for i, url in enumerate(list(set(re.findall(r"(https?://[^\s\)\>]+)", body))))
-                            if url != parsed_info.get("registration_link")
-                        ]
-                    }
-                )
-                db.add(company)
-                db.commit()
-                db.refresh(company)
-
-            # Handle attachments (e.g., Shortlists, JDs)
-            parts = payload.get("parts", [])
-            for part in parts:
-                filename = part.get("filename")
-                if filename and part.get("body", {}).get("attachmentId"):
-                    att_id = part["body"]["attachmentId"]
-                    att = service.users().messages().attachments().get(userId="me", messageId=msg_id, id=att_id).execute()
-                    att_bytes = base64.urlsafe_b64decode(att["data"].encode("ASCII"))
-                    
-                    # Process shortlist excel
-                    if filename.endswith((".xls", ".xlsx")):
-                        neo_ids = extract_neo_ids_from_excel(att_bytes)
-                        # Decrypt student's neo_id
-                        if user.neo_id_enc:
-                            student_neo_id = decrypt_field(user.neo_id_enc, derived_key)
-                            if student_neo_id.upper() in [nid.upper() for nid in neo_ids]:
-                                # User is shortlisted! Update or create application
-                                app = db.query(Application).filter(Application.user_id == user.id, Application.company_id == company.id).first()
-                                encrypted_shortlisted = encrypt_field("Shortlisted", derived_key)
-                                if not app:
-                                    app = Application(
-                                        user_id=user.id,
-                                        company_id=company.id,
-                                        status_enc=encrypted_shortlisted,
-                                        current_round="Shortlist Announcement"
-                                    )
-                                    db.add(app)
-                                else:
-                                    app.status_enc = encrypted_shortlisted
-                                    app.current_round = "Shortlisted"
-                                
-                                # Send notification
-                                db.add(Notification(
-                                    user_id=user.id,
-                                    message=f"🎉 Congratulations! You are shortlisted in the {company_name} drive for the {company.role} role."
-                                ))
-                                db.commit()
-
-                    # Process Job Description PDF
-                    elif filename.endswith(".pdf"):
-                        jd_info = parse_job_description(att_bytes)
-                        company.jd_text = jd_info.get("jd_text")
-                        company.jd_required_skills = jd_info.get("skills")
-                        company.jd_ats_keywords = jd_info.get("ats_keywords")
-                        db.commit()
-
-        # Update sync timestamp
-        user.gmail_last_synced = datetime.utcnow()
+    try:
+        db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_branch_offer_counts"))
+        db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_application_stages_ratio"))
         db.commit()
-        return True
-        
+        logger.info("Successfully refreshed materialized views concurrently.")
     except Exception as e:
-        logger.error(f"Gmail sync process failed for user {user_id}: {str(e)}")
-        return False
+        db.rollback()
+        logger.error(f"Failed to refresh materialized views concurrently: {str(e)}")
 
-def sync_all_active_users():
-    """Runs through all active (logged-in) users and triggers Gmail sync."""
-    logger.info("Executing background sync job for all active users...")
+def process_queued_jobs_cron():
+    """Wrapper function for cron trigger (uses own session)."""
     db = SessionLocal()
     try:
-        active_ids = gmail_token_cache.get_active_user_ids()
-        for user_id in active_ids:
-            sync_user_gmail(user_id, db)
-    except Exception as e:
-        logger.error(f"Error in sync_all_active_users job: {str(e)}")
+        process_queued_jobs(db)
     finally:
         db.close()
 
-def run_mock_sync(user: User, db: Session, derived_key: str):
-    """Generates mock placement sync events for local development."""
-    mock_drives = [
-        {
-            "company": "Nokia",
-            "role": "Software Developer",
-            "category": "Dream",
-            "ctc": "12 LPA",
-            "stipend": "30,000 pm",
-            "location": "Bangalore",
-            "deadline": datetime.utcnow() + timedelta(days=2),
-            "branches": ["CSE", "IT", "ECE"],
-            "cgpa": 7.5,
-            "no_arrears": True,
-            "link": "https://careers.nokia.com/mock-vit-registration"
-        },
-        {
-            "company": "Microsoft",
-            "role": "Software Engineering Intern",
-            "category": "Super Dream",
-            "ctc": "44 LPA",
-            "stipend": "1,00,000 pm",
-            "location": "Hyderabad",
-            "deadline": datetime.utcnow() + timedelta(days=4),
-            "branches": ["CSE", "IT"],
-            "cgpa": 8.5,
-            "no_arrears": True,
-            "link": "https://microsoft.com/careers"
-        }
-    ]
+def refresh_views_cron():
+    """Wrapper function for periodic view refreshing (uses own session)."""
+    db = SessionLocal()
+    try:
+        refresh_materialized_views(db)
+    finally:
+        db.close()
+
+def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
+    """
+    Iterates through pending raw ingestion jobs, acquires lock on them,
+    parses emails and attachments, and records structured data.
+    """
+    # 1. Recover stale jobs first
+    recover_stale_jobs(db)
     
-    for drive in mock_drives:
-        # Check if already exists
-        company = db.query(Company).filter(Company.name == drive["company"], Company.role == drive["role"]).first()
+    worker_id = f"worker-{os.getpid()}"
+    
+    # 2. Acquire a job lock
+    # If job_id is passed, we try to lock that specific job. Otherwise, we lock the oldest pending job.
+    query = db.query(RawIngestionJob)
+    if job_id:
+        # Check if the job exists and is pending, otherwise return False or get the oldest pending
+        query = query.filter(RawIngestionJob.id == job_id, RawIngestionJob.status == 'pending')
+    else:
+        query = query.filter(RawIngestionJob.status == 'pending').order_by(RawIngestionJob.created_at.asc())
+        
+    job = query.with_for_update(skip_locked=True).first()
+    
+    if not job:
+        logger.info("No pending raw ingestion jobs found.")
+        return False
+        
+    # Mark as processing
+    job.status = 'processing'
+    job.locked_at = datetime.utcnow()
+    job.locked_by = worker_id
+    db.commit()
+    
+    logger.info(f"Locked job {job.id} for processing.")
+    
+    try:
+        payload = job.payload
+        if not payload:
+            raise ValueError("Empty payload in raw ingestion job.")
+            
+        message_id = payload.get("message_id")
+        sender = payload.get("sender", "Unknown")
+        subject = payload.get("subject", "")
+        body = payload.get("body", "")
+        email_timestamp_str = payload.get("timestamp")
+        attachments = payload.get("attachments", [])
+        
+        email_timestamp = datetime.fromisoformat(email_timestamp_str.replace("Z", "+00:00")) if email_timestamp_str else datetime.utcnow()
+        
+        # 3. Parse Email Body
+        parsed_info = parse_placement_email(body)
+        company_name = parsed_info.get("company", "Unknown").strip()
+        role = parsed_info.get("role", "Software Engineer").strip()
+        category = parsed_info.get("category", "Dream").strip()
+        ctc = parsed_info.get("ctc")
+        stipend = parsed_info.get("stipend")
+        location = parsed_info.get("job_location")
+        eligible_branches = parsed_info.get("eligible_branches", [])
+        min_cgpa = parsed_info.get("min_cgpa")
+        requires_no_arrears = parsed_info.get("requires_no_arrears", False)
+        registration_deadline_str = parsed_info.get("deadline_iso")
+        registration_deadline = datetime.fromisoformat(registration_deadline_str) if registration_deadline_str else None
+        registration_link = parsed_info.get("registration_link")
+        
+        # Determine Batch Year from email subject or body, default to current/next year
+        batch_year = datetime.utcnow().year
+        year_match = re.search(r"\b(202\d)\b", subject + " " + body)
+        if year_match:
+            batch_year = int(year_match.group(1))
+            
+        recruitment_cycle = "Default"
+        cycle_match = re.search(r"\b(Internship|Full-Time|Placement|Summer Intern)\b", subject + " " + body, re.I)
+        if cycle_match:
+            recruitment_cycle = cycle_match.group(1)
+            
+        # 4. Generate Fingerprint & check if Company already exists
+        # Fingerprint Input = Company|Role|Category|Batch|Cycle
+        fingerprint_input = f"{company_name.upper()}|{role.upper()}|{category.upper()}|{batch_year}|{recruitment_cycle.upper()}"
+        fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
+        
+        company = db.query(Company).filter(Company.fingerprint == fingerprint).first()
+        
+        # Eligibility rules JSONB setup
+        eligibility_rules = {
+            "min_cgpa": min_cgpa,
+            "min_tenth_marks": None,
+            "min_twelfth_marks": None,
+            "requires_no_arrears": requires_no_arrears
+        }
+        
         if not company:
             company = Company(
-                name=drive["company"],
-                category=drive["category"],
-                role=drive["role"],
-                ctc=drive["ctc"],
-                stipend=drive["stipend"],
-                job_location=drive["location"],
-                eligible_branches=drive["branches"],
-                min_cgpa=drive["cgpa"],
-                requires_no_arrears=drive["no_arrears"],
-                registration_deadline=drive["deadline"],
-                registration_link=drive["link"],
-                jd_required_skills=["Python", "C++", "Data Structures", "Algorithms"],
-                jd_ats_keywords=["software", "development", "intern", "cloud", "algorithms"],
-                source_email_body=f"Dear Students,\n\nWe are pleased to announce that {drive['company']} is hiring for the role of {drive['role']}. The details are as follows:\n- CTC: {drive['ctc']}\n- Stipend: {drive['stipend']}\n- Location: {drive['location']}\n- Deadline: {drive['deadline'].strftime('%d %b %Y')}\n\nApply via link: {drive['link']}\n\nBest Regards,\nVIT Career Development Centre (CDC)",
-                additional_info={
-                    "subject": f"Recruitment Announcement: {drive['company']}",
-                    "sender": "noreply.cdcinfo@vit.ac.in",
-                    "important_links": [
-                        {"label": "Direct Google Form", "url": drive["link"]},
-                        {"label": "CDC Portal", "url": "https://vtop.vit.ac.in"}
-                    ]
-                }
+                name=company_name,
+                role=role,
+                category=category,
+                ctc=ctc,
+                stipend=stipend,
+                job_location=location,
+                eligible_branches=eligible_branches,
+                eligibility_rules=eligibility_rules,
+                registration_deadline=registration_deadline,
+                registration_link=registration_link,
+                recruitment_cycle=recruitment_cycle,
+                fingerprint=fingerprint
             )
             db.add(company)
-            db.commit()
-            db.refresh(company)
+            db.flush() # Populate company.id
+            logger.info(f"Created new company registry: {company_name} - {role}")
+        else:
+            # Update and log modifications in company_change_logs
+            updates = {
+                "ctc": ctc,
+                "stipend": stipend,
+                "job_location": location,
+                "registration_deadline": registration_deadline,
+                "registration_link": registration_link,
+                "eligibility_rules": eligibility_rules,
+                "eligible_branches": eligible_branches
+            }
+            for key, val in updates.items():
+                old_val = getattr(company, key)
+                # Standardize comparison for dict / list
+                if isinstance(old_val, (dict, list)) or isinstance(val, (dict, list)):
+                    has_changed = json.dumps(old_val, sort_keys=True) != json.dumps(val, sort_keys=True)
+                else:
+                    has_changed = old_val != val
+                    
+                if val is not None and has_changed:
+                    # Log change
+                    db.add(CompanyChangeLog(
+                        company_id=company.id,
+                        field_name=key,
+                        old_value=str(old_val) if old_val is not None else "",
+                        new_value=str(val)
+                    ))
+                    setattr(company, key, val)
+            logger.info(f"Updated existing company registry: {company_name} - {role}")
             
-            # Send notification about new drive
-            db.add(Notification(
-                user_id=user.id,
-                message=f"📢 New drive registered: {company.name} is hiring for {company.role} ({company.category}). Deadline: {company.registration_deadline.strftime('%b %d, %I:%M %p')}."
-            ))
-            db.commit()
-
-    # Simulate shortlist selection for Nokia
-    nokia_comp = db.query(Company).filter(Company.name == "Nokia").first()
-    if nokia_comp:
-        app = db.query(Application).filter(Application.user_id == user.id, Application.company_id == nokia_comp.id).first()
-        if not app:
-            encrypted_status = encrypt_field("Shortlisted", derived_key)
-            app = Application(
-                user_id=user.id,
-                company_id=nokia_comp.id,
-                status_enc=encrypted_status,
-                current_round="Shortlisted",
-                match_score=85
+        # 5. Insert Company Event
+        event_type = 'REGISTRATION'
+        if 'shortlist' in subject.lower() or 'shortlist' in body.lower():
+            event_type = 'SHORTLIST'
+        elif 'online test' in subject.lower() or 'assessment' in subject.lower() or ' oa ' in (' ' + subject.lower() + ' '):
+            event_type = 'OA'
+        elif 'interview' in subject.lower() or 'schedule' in subject.lower():
+            event_type = 'INTERVIEW'
+        elif 'offer' in subject.lower() or 'congratulations' in subject.lower():
+            event_type = 'OFFER'
+            
+        event = CompanyEvent(
+            company_id=company.id,
+            event_type=event_type,
+            subject=subject,
+            sender=sender,
+            body=body,
+            timestamp=email_timestamp
+        )
+        db.add(event)
+        db.flush() # Populate event.id
+        
+        # Queue notification job for this event
+        notification_job = NotificationJob(
+            company_event_id=event.id,
+            status='pending'
+        )
+        db.add(notification_job)
+        
+        # 6. Parse and store attachments
+        for att in attachments:
+            filename = att.get("filename", "")
+            content_type = att.get("content_type", "")
+            base64_data = att.get("base64_data", "")
+            if not base64_data:
+                continue
+                
+            file_bytes = base64.b64decode(base64_data)
+            
+            # Record attachment metadata (Storage path is simulated for zero-cost local / supabase storage)
+            att_meta = AttachmentMetadata(
+                company_event_id=event.id,
+                file_name=filename,
+                file_type="JD_PDF" if filename.lower().endswith(".pdf") else "SHORTLIST_EXCEL",
+                storage_path=f"attachments/{event.id}/{filename}",
+                parsed_meta={}
             )
-            db.add(app)
-            db.add(Notification(
-                user_id=user.id,
-                message=f"🎉 Congratulations! You have been shortlisted in the Nokia recruitment drive. Check your dashboard!"
-            ))
+            db.add(att_meta)
+            
+            # Process JD PDF
+            if filename.lower().endswith(".pdf"):
+                jd_info = parse_job_description(file_bytes)
+                company.jd_text = jd_info.get("jd_text")
+                company.jd_required_skills = jd_info.get("skills", [])
+                company.jd_ats_keywords = jd_info.get("ats_keywords", [])
+                att_meta.parsed_meta = {"skills": jd_info.get("skills", []), "ats_keywords_count": len(jd_info.get("ats_keywords", []))}
+                logger.info(f"Processed JD PDF attachment: {filename}")
+                
+            # Process Shortlist Excel
+            elif filename.lower().endswith((".xls", ".xlsx")):
+                neo_ids = extract_neo_ids_from_excel(file_bytes)
+                att_meta.parsed_meta = {"extracted_count": len(neo_ids)}
+                
+                # Check for zero-knowledge matches in student profiles
+                matched_count = 0
+                for nid in neo_ids:
+                    # Calculate blind index hash
+                    nid_hash = generate_blind_index(nid, settings.PEPPER)
+                    
+                    profile = db.query(StudentProfile).filter(StudentProfile.neo_id_hash == nid_hash).first()
+                    if profile:
+                        # Create or update application for student
+                        app = db.query(Application).filter(
+                            Application.user_id == profile.user_id,
+                            Application.company_id == company.id
+                        ).first()
+                        
+                        if not app:
+                            app = Application(
+                                user_id=profile.user_id,
+                                company_id=company.id,
+                                status='Shortlisted',
+                                current_round='Shortlist Announcement'
+                            )
+                            db.add(app)
+                        else:
+                            # If they are already offers or rejected, don't overwrite status
+                            if app.status not in ('Offer', 'Rejected', 'Declined', 'Ignored'):
+                                app.status = 'Shortlisted'
+                                app.current_round = 'Shortlisted'
+                                
+                        # Insert Direct Notification
+                        notif_msg = f"🎉 Congratulations! You are shortlisted in the {company_name} drive for the {role} role."
+                        # Unique constraint prevents duplicate notifications
+                        existing_notif = db.query(Notification).filter(
+                            Notification.user_id == profile.user_id,
+                            Notification.company_event_id == event.id
+                        ).first()
+                        if not existing_notif:
+                            db.add(Notification(
+                                user_id=profile.user_id,
+                                company_event_id=event.id,
+                                message=notif_msg,
+                                notification_type='shortlist'
+                            ))
+                        matched_count += 1
+                logger.info(f"Processed Shortlist Excel attachment: {filename}. Matched {matched_count} system students.")
+                
+        # 7. Complete job successfully
+        job.status = 'completed'
+        job.processed_at = datetime.utcnow()
+        db.commit()
+        logger.info(f"Job {job.id} processed successfully.")
+        
+        # 8. Refresh views
+        refresh_materialized_views(db)
+        
+        # Process notification jobs queue immediately
+        process_notification_jobs(db)
+        
+        return True
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error processing job {job.id}: {str(e)}", exc_info=True)
+        
+        # Re-fetch job in a clean transaction to update retry / failed state
+        try:
+            db.begin_nested() # use nested transaction to bypass rollback state
+            db.add(job)
+            job.retry_count += 1
+            if job.retry_count >= 5:
+                job.status = 'dead_letter'
+            else:
+                job.status = 'failed'
+            job.error_message = str(e)
+            db.commit()
+        except Exception as err:
+            logger.error(f"Failed to record job failure: {str(err)}")
+            db.rollback()
+            
+        return False
+
+def process_notification_jobs(db: Session):
+    """
+    Processes pending jobs in `notification_jobs` queue.
+    For each job, it matches students eligible for notifications (e.g. registered or matched candidates)
+    and sends appropriate alerts.
+    """
+    pending_jobs = db.query(NotificationJob).filter(NotificationJob.status == 'pending').all()
+    for job in pending_jobs:
+        job.status = 'processing'
+        db.commit()
+        
+        try:
+            event = job.company_event
+            company = event.company
+            
+            # Simple notification broadcast logic:
+            # Find all students eligible for this company based on their profile branch/CGPA
+            # AND who haven't explicitly set their application to Declined or Rejected
+            profiles = db.query(StudentProfile).all()
+            
+            for profile in profiles:
+                # Check branch eligibility
+                if company.eligible_branches:
+                    user_branch = (profile.branch or "").strip().upper()
+                    eligible_branches_upper = [b.strip().upper() for b in company.eligible_branches]
+                    if user_branch not in eligible_branches_upper:
+                        continue
+                        
+                # Check application state to see if notifications are silenced
+                app = db.query(Application).filter(
+                    Application.user_id == profile.user_id,
+                    Application.company_id == company.id
+                ).first()
+                
+                if app and app.status in ('Rejected', 'Declined', 'Ignored'):
+                    # Silenced state
+                    continue
+                    
+                # Create the notification message
+                if event.event_type == 'REGISTRATION':
+                    msg = f"📢 New drive registered: {company.name} is hiring for {company.role} ({company.category}). Deadline: {company.registration_deadline.strftime('%b %d, %I:%M %p') if company.registration_deadline else 'N/A'}."
+                    notif_type = 'company_update'
+                elif event.event_type == 'SHORTLIST':
+                    # Shortlisted students are already notified individually during shortlist extraction,
+                    # but we can notify others they were NOT selected (or keep it silent). Let's keep it silent.
+                    continue
+                else:
+                    msg = f"📅 Update from {company.name}: {event.subject}."
+                    notif_type = 'company_update'
+                    
+                # Unique constraint UNIQUE(user_id, company_event_id) prevents duplication
+                existing = db.query(Notification).filter(
+                    Notification.user_id == profile.user_id,
+                    Notification.company_event_id == event.id
+                ).first()
+                
+                if not existing:
+                    db.add(Notification(
+                        user_id=profile.user_id,
+                        company_event_id=event.id,
+                        message=msg,
+                        notification_type=notif_type
+                    ))
+                    
+            job.status = 'completed'
+            job.processed_at = datetime.utcnow()
+            db.commit()
+            
+        except Exception as e:
+            db.rollback()
+            job.status = 'failed'
+            logger.error(f"Failed to process notification job {job.id}: {str(e)}")
             db.commit()

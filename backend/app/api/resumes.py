@@ -49,14 +49,17 @@ def get_user_resume(
 
     resume = db.query(Resume).filter(Resume.user_id == current_user.id).first()
     if not resume or not resume.resume_json_enc:
+        profile = current_user.profile
+        full_name = profile.full_name if profile else ""
+        skills = profile.skills if profile else []
         return {
             "template": "Classic",
             "resume_data": {
-                "personal": {"name": current_user.full_name or "", "email": current_user.email},
+                "personal": {"name": full_name, "email": current_user.email},
                 "education": [],
                 "experience": [],
                 "projects": [],
-                "skills": current_user.skills or []
+                "skills": skills
             }
         }
         

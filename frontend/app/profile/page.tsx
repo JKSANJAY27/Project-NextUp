@@ -7,6 +7,14 @@ import { decryptData, encryptData, deriveKey, exportKeyToHex } from "@/lib/crypt
 import api from "@/lib/api";
 import { ShieldCheck, Unlock, Save } from "lucide-react";
 
+async function getDeterministicSalt(email: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(email.trim().toLowerCase());
+  const hashBuffer = await window.crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 export default function ProfilePage() {
   const { user, setUser, encryptionKey, setEncryptionKey } = useAppStore();
   const [unlocked, setUnlocked] = useState(false);
@@ -33,11 +41,6 @@ export default function ProfilePage() {
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Gmail Integration State
-  const [gmailConnected, setGmailConnected] = useState(false);
-  const [lastSynced, setLastSynced] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
-
   // 1. Initial Load: Decrypt if key is already in memory
   useEffect(() => {
     if (user && encryptionKey) {
@@ -45,22 +48,6 @@ export default function ProfilePage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, encryptionKey]);
-
-  useEffect(() => {
-    if (unlocked) {
-      fetchGmailStatus();
-    }
-  }, [unlocked]);
-
-  const fetchGmailStatus = async () => {
-    try {
-      const res = await api.get("/gmail/status");
-      setGmailConnected(res.data.connected);
-      setLastSynced(res.data.last_synced);
-    } catch (err) {
-      console.error("Failed to fetch Gmail status:", err);
-    }
-  };
 
   const decryptProfile = async () => {
     if (!user || !encryptionKey) return;
@@ -70,20 +57,21 @@ export default function ProfilePage() {
       setBatchYear(user.batch_year || new Date().getFullYear());
       setSkillsStr(user.skills ? user.skills.join(", ") : "");
 
-      // Decrypt sensitive fields
-      const dNeoId = user.neo_id_enc ? await decryptData(user.neo_id_enc, encryptionKey) : "";
-      const dCgpa = user.cgpa_enc ? await decryptData(user.cgpa_enc, encryptionKey) : "";
-      const dTenth = user.tenth_marks_enc ? await decryptData(user.tenth_marks_enc, encryptionKey) : "";
-      const dTwelfth = user.twelfth_marks_enc ? await decryptData(user.twelfth_marks_enc, encryptionKey) : "";
-      const dArrears = user.has_arrears_enc ? await decryptData(user.has_arrears_enc, encryptionKey) : "false";
+      // Load plaintext fields
+      setCgpa(user.cgpa !== null && user.cgpa !== undefined ? String(user.cgpa) : "");
+      setTenthMarks(user.tenth_marks !== null && user.tenth_marks !== undefined ? String(user.tenth_marks) : "");
+      setTwelfthMarks(user.twelfth_marks !== null && user.twelfth_marks !== undefined ? String(user.twelfth_marks) : "");
+      setHasArrears(user.has_arrears || false);
+
+      // Decrypt sensitive Neo ID field
+      const dNeoId = user.neo_id_enc && user.neo_id_enc !== "UNSET" 
+        ? await decryptData(user.neo_id_enc, encryptionKey) 
+        : "";
 
       setNeoId(dNeoId);
-      setCgpa(dCgpa);
-      setTenthMarks(dTenth);
-      setTwelfthMarks(dTwelfth);
-      setHasArrears(dArrears === "true");
       setUnlocked(true);
-    } catch {
+    } catch (err) {
+      console.error("Decryption error:", err);
       setError("FAILED TO DECRYPT VAULT DATA. PLEASE RE-LOGIN.");
     }
   };
@@ -97,16 +85,15 @@ export default function ProfilePage() {
     if (!user) return;
 
     try {
-      // Fetch salt
-      const saltRes = await api.get(`/auth/salt?email=${encodeURIComponent(user.email)}`);
-      const { email_salt } = saltRes.data;
+      // Derive salt deterministically
+      const emailSalt = await getDeterministicSalt(user.email);
 
       // Derive key
-      const key = await deriveKey(unlockPassword, email_salt);
+      const key = await deriveKey(unlockPassword, emailSalt);
       const keyHex = await exportKeyToHex(key);
 
       // Verify key is correct by attempting to decrypt neo_id_enc (if it exists)
-      if (user.neo_id_enc) {
+      if (user.neo_id_enc && user.neo_id_enc !== "UNSET") {
         await decryptData(user.neo_id_enc, key);
       }
 
@@ -116,48 +103,6 @@ export default function ProfilePage() {
       setUnlockError("INCORRECT PASSWORD. DECRYPTION KEY IS INVALID.");
     } finally {
       setUnlockLoading(false);
-    }
-  };
-
-  // Connect Gmail Auth
-  const handleConnectGmail = async () => {
-    setError("");
-    setSuccess("");
-    try {
-      const res = await api.get("/gmail/auth-url");
-      const { auth_url } = res.data;
-      if (auth_url === "mock-oauth-flow") {
-        await api.post("/gmail/mock-connect");
-        setSuccess("MOCK COLLEGE GMAIL CONNECTED SUCCESSFULLY.");
-        fetchGmailStatus();
-      } else {
-        window.location.href = auth_url;
-      }
-    } catch {
-      setError("FAILED TO RETRIEVE GOOGLE AUTHORIZATION ENDPOINT.");
-    }
-  };
-
-  // Manual Gmail Sync
-  const handleSyncNow = async () => {
-    setSyncing(true);
-    setError("");
-    setSuccess("");
-    try {
-      const res = await api.post("/gmail/sync");
-      setSuccess(res.data.message || "GMAIL SYNC SUCCESSFUL.");
-      fetchGmailStatus();
-    } catch (err) {
-      let message = "GMAIL SYNCHRONIZATION FAILED.";
-      if (err && typeof err === "object" && "response" in err) {
-        const resObj = (err as { response?: { data?: { detail?: string } } }).response;
-        if (resObj?.data?.detail) {
-          message = resObj.data.detail;
-        }
-      }
-      setError(message);
-    } finally {
-      setSyncing(false);
     }
   };
 
@@ -174,8 +119,7 @@ export default function ProfilePage() {
       return;
     }
 
-    // Neo ID validator
-    // Alternating letter/digit, length 8. E.g. K9B8C7D6
+    // Neo ID validator: alternating letter/digit, length 8. E.g. K9B8C7D6
     const neoIdClean = neoId.trim().toUpperCase();
     const neoIdRegex = /^[A-Z]\d[A-Z]\d[A-Z]\d[A-Z]\d$/;
     if (neoIdClean && !neoIdRegex.test(neoIdClean)) {
@@ -185,12 +129,8 @@ export default function ProfilePage() {
     }
 
     try {
-      // 1. Encrypt sensitive fields
+      // 1. Encrypt sensitive Neo ID locally
       const encNeoId = await encryptData(neoIdClean, encryptionKey);
-      const encCgpa = await encryptData(cgpa.trim(), encryptionKey);
-      const encTenth = await encryptData(tenthMarks.trim(), encryptionKey);
-      const encTwelfth = await encryptData(twelfthMarks.trim(), encryptionKey);
-      const encArrears = await encryptData(hasArrears ? "true" : "false", encryptionKey);
 
       // Parse skills
       const skillsArray = skillsStr
@@ -198,30 +138,25 @@ export default function ProfilePage() {
         .map((s) => s.trim())
         .filter((s) => s !== "");
 
-      // 2. Send request to update user profile
+      // 2. Send request to update user profile with plaintext parameters and encrypted Neo ID
       const res = await api.put("/users/me", {
         full_name: fullName.trim(),
         branch: branch.trim().toUpperCase(),
         batch_year: Number(batchYear),
         skills: skillsArray,
         neo_id_enc: encNeoId,
-        cgpa_enc: encCgpa,
-        tenth_marks_enc: encTenth,
-        twelfth_marks_enc: encTwelfth,
-        has_arrears_enc: encArrears,
+        neo_id: neoIdClean, // plain Neo ID sent to trigger server-side PEPPER HMAC hash
+        cgpa: cgpa ? parseFloat(cgpa) : 0.0,
+        tenth_marks: tenthMarks ? parseFloat(tenthMarks) : 0.0,
+        twelfth_marks: twelfthMarks ? parseFloat(twelfthMarks) : 0.0,
+        has_arrears: hasArrears,
       });
 
       setUser(res.data);
       setSuccess("PROFILE SAVED & ENCRYPTED SUCCESSFULLY.");
-    } catch (err) {
-      let message = "FAILED TO SAVE PROFILE.";
-      if (err && typeof err === "object" && "response" in err) {
-        const resObj = (err as { response?: { data?: { detail?: string } } }).response;
-        if (resObj?.data?.detail) {
-          message = resObj.data.detail;
-        }
-      }
-      setError(message);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "FAILED TO SAVE PROFILE.");
     } finally {
       setSaving(false);
     }
@@ -255,7 +190,7 @@ export default function ProfilePage() {
               VAULT LOCKED
             </h1>
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest leading-relaxed">
-              Your placement information is stored as ciphertext on the database. Enter your password to derive the decryption key in-memory.
+              Your placement information is stored securely. Enter your password to derive the decryption key in-memory.
             </p>
           </div>
 
@@ -286,8 +221,7 @@ export default function ProfilePage() {
               className="flex w-full items-center justify-center gap-3 h-14 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-50"
             >
               <Unlock size={16} />
-              <span>{unlockLoading ? "UNLOCKING..." : "UNLOCK VAULT"}
-              </span>
+              <span>{unlockLoading ? "UNLOCKING..." : "UNLOCK VAULT"}</span>
             </button>
           </form>
         </div>
@@ -330,7 +264,7 @@ export default function ProfilePage() {
           🚀 QUICK PROFILE SETUP VIA RESUME PARSING
         </h3>
         <p className="text-xs text-muted-foreground uppercase tracking-tight leading-snug">
-          Instead of filling all academic details manually, you can upload your standard PDF resume. The system will parse metrics (Name, CGPA, Branch, Marks, Skills) in-memory on-the-fly and automatically populate them into your encrypted profile.
+          Instead of filling all academic details manually, you can upload your standard PDF resume. The system will parse metrics (Name, CGPA, Branch, Marks, Skills) in-memory on-the-fly and automatically populate them into your profile.
         </p>
         <Link 
           href="/resume" 
@@ -405,22 +339,19 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        {/* Section 2: Encrypted Information */}
+        {/* Section 2: Academic Credentials */}
         <div className="space-y-8">
           <div className="flex items-center gap-3 border-b border-border pb-2">
             <h2 className="text-2xl font-bold tracking-tighter uppercase">
               ACADEMIC CREDENTIALS
             </h2>
-            <span className="bg-muted px-2 py-1 text-[10px] font-extrabold tracking-widest border border-border text-accent uppercase">
-              🔒 CLIENT ENCRYPTED
-            </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <div className="flex justify-between">
                 <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
-                  NEO ID
+                  NEO ID (🔒 Encrypted on server)
                 </label>
                 <span className="text-[10px] text-muted-foreground">E.G. K9B8C7D6</span>
               </div>
@@ -436,7 +367,7 @@ export default function ProfilePage() {
 
             <div className="space-y-2">
               <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
-                CGPA
+                CGPA (Plaintext on server)
               </label>
               <input
                 type="number"
@@ -516,64 +447,6 @@ export default function ProfilePage() {
               placeholder="PYTHON, DSA, SQL, DOCKER, TYPESCRIPT"
               className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
             />
-          </div>
-        </div>
-
-        {/* Section 4: Gmail Integration */}
-        <div className="space-y-8">
-          <h2 className="text-2xl font-bold tracking-tighter border-b border-border pb-2 uppercase">
-            COLLEGE GMAIL SYNC AUTOMATION
-          </h2>
-          <div className="border-2 border-border p-6 bg-card space-y-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-              <div>
-                <p className="text-xs font-bold tracking-wider text-muted-foreground uppercase">CONNECTION STATUS</p>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className={`h-2.5 w-2.5 rounded-none ${gmailConnected ? "bg-green-600" : "bg-red-600"}`} />
-                  <span className="text-sm font-black uppercase">
-                    {gmailConnected ? "CONNECTED" : "NOT CONNECTED"}
-                  </span>
-                </div>
-                {lastSynced && (
-                  <p className="text-[10px] text-muted-foreground uppercase font-mono mt-1">
-                    LAST SYNCED: {new Date(lastSynced).toLocaleString("en-IN")}
-                  </p>
-                )}
-              </div>
-
-              <div className="flex gap-4">
-                {!gmailConnected ? (
-                  <button
-                    type="button"
-                    onClick={handleConnectGmail}
-                    className="h-12 px-6 border-2 border-accent bg-accent text-black font-extrabold text-xs tracking-widest uppercase hover:bg-transparent hover:text-accent transition-colors"
-                  >
-                    CONNECT VIT GMAIL
-                  </button>
-                ) : (
-                  <div className="flex gap-4">
-                    <button
-                      type="button"
-                      onClick={handleSyncNow}
-                      disabled={syncing}
-                      className="h-12 px-6 border-2 border-border bg-foreground text-background font-extrabold text-xs tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-50"
-                    >
-                      {syncing ? "SYNCING..." : "SYNC NOW"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleConnectGmail}
-                      className="h-12 px-6 border-2 border-border bg-transparent text-foreground font-extrabold text-xs tracking-widest uppercase hover:bg-red-600 hover:text-white hover:border-red-600 transition-colors"
-                    >
-                      RECONNECT
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-tight leading-snug">
-              Securely polls your VIT Gmail box in the background for placement announcements from <code className="text-foreground">noreply.cdcinfo@vit.ac.in</code>. Syncing only runs while you are actively logged in.
-            </p>
           </div>
         </div>
 

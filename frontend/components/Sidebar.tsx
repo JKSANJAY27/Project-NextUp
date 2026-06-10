@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 
+import { supabase } from "@/lib/supabase";
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -43,7 +45,8 @@ export default function Sidebar() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     logout();
     router.push("/login");
   };

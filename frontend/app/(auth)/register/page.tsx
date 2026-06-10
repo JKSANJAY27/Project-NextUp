@@ -5,7 +5,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
 import { deriveKey, exportKeyToHex, encryptData } from "@/lib/crypto";
+import { supabase } from "@/lib/supabase";
 import api from "@/lib/api";
+
+async function getDeterministicSalt(email: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(email.trim().toLowerCase());
+  const hashBuffer = await window.crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -38,44 +47,50 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      // 1. Post to register to create user and get salt
-      const res = await api.post("/auth/register", { email, password });
-      const { access_token, email_salt } = res.data;
-
-      // 2. Client-side derive the AES-256 key using PBKDF2
-      const key = await deriveKey(password, email_salt);
+      // 1. Client-side derive the AES-256 key using PBKDF2 with deterministic salt
+      const emailSalt = await getDeterministicSalt(email);
+      const key = await deriveKey(password, emailSalt);
       const keyHex = await exportKeyToHex(key);
+
+      // 2. Sign up via Supabase Auth
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+
+      if (signUpError) {
+        throw signUpError;
+      }
+
+      const access_token = data.session?.access_token;
+      if (!access_token) {
+        // In case Supabase email verification is enabled and no session is returned immediately
+        setError("REGISTRATION SUCCESSFUL! PLEASE CHECK YOUR EMAIL FOR VERIFICATION LINK.");
+        setLoading(false);
+        return;
+      }
 
       // Save credentials in state store temporarily (in-memory only)
       setToken(access_token);
       setEncryptionKey(key, keyHex);
 
-      // 3. Encrypt initial profile data locally
+      // 3. Encrypt initial sensitive profile data locally (only Neo ID)
       const encryptedNeoId = await encryptData("", key);
-      const encryptedCgpa = await encryptData("", key);
-      const encryptedTenth = await encryptData("", key);
-      const encryptedTwelfth = await encryptData("", key);
-      const encryptedArrears = await encryptData("false", key);
 
-      // 4. Initialize user profile with encrypted blobs
+      // 4. Initialize user profile with encrypted and default plaintext fields
       const profileRes = await api.put(
         "/users/me",
         {
-          full_name: "",
-          branch: "",
+          full_name: "New Student",
+          branch: "Unknown",
           batch_year: new Date().getFullYear(),
           neo_id_enc: encryptedNeoId,
-          cgpa_enc: encryptedCgpa,
-          tenth_marks_enc: encryptedTenth,
-          twelfth_marks_enc: encryptedTwelfth,
-          has_arrears_enc: encryptedArrears,
+          neo_id: "", // plaintext empty to avoid initial hashing crash
+          cgpa: 0.0,
+          tenth_marks: 0.0,
+          twelfth_marks: 0.0,
+          has_arrears: false,
           skills: [],
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${access_token}`,
-            "X-Client-Key": keyHex,
-          },
         }
       );
 
@@ -86,9 +101,8 @@ export default function RegisterPage() {
       router.push("/profile");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
-      setError(
-        err.response?.data?.detail || "REGISTRATION FAILED. TRY AGAIN."
-      );
+      console.error("Registration failed:", err);
+      setError(err.message || "REGISTRATION FAILED. TRY AGAIN.");
     } finally {
       setLoading(false);
     }
@@ -96,7 +110,7 @@ export default function RegisterPage() {
 
   return (
     <main className="flex min-h-screen flex-col bg-background text-foreground md:flex-row">
-      {/* Visual Kinetic typography side panel */}
+      {/* Visual panel */}
       <section className="flex flex-col justify-between border-b-2 border-border p-8 bg-accent text-black md:w-1/2 md:border-b-0 md:border-r-2 md:p-16">
         <div>
           <h1 className="text-3xl font-extrabold tracking-tighter uppercase leading-none">

@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     # Security
     JWT_SECRET: str = "supersecret_nextupai_key_change_me_in_prod"
     JWT_ALGORITHM: str = "HS256"
+    PEPPER: str = "supersecret_nextupai_pepper_key_change_me_in_prod"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
     
     # Database (local dev defaults to SQLite)

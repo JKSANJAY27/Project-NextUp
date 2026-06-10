@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from "react";
 import { useAppStore } from "@/lib/store";
-import { encryptData } from "@/lib/crypto";
 import api from "@/lib/api";
 import { Upload, FileText, Save, Plus, Trash2, ArrowRight, ShieldCheck, AlertCircle } from "lucide-react";
 import Link from "next/link";
@@ -189,12 +188,14 @@ export default function ResumePage() {
     setSaveError("");
 
     try {
-      // Encrypt sensitive metrics locally before posting
-      const encNeoId = user?.neo_id_enc || ""; // Retain Neo ID if not in resume
-      const encCgpa = parsedCgpa.trim() ? await encryptData(parsedCgpa.trim(), encryptionKey) : (user?.cgpa_enc || "");
-      const encTenth = parsedTenth.trim() ? await encryptData(parsedTenth.trim(), encryptionKey) : (user?.tenth_marks_enc || "");
-      const encTwelfth = parsedTwelfth.trim() ? await encryptData(parsedTwelfth.trim(), encryptionKey) : (user?.twelfth_marks_enc || "");
-      const encArrears = user?.has_arrears_enc || "";
+      // Retain Neo ID from active profile
+      const encNeoId = user?.neo_id_enc || "UNSET";
+
+      // Parse plaintext values or fallback to profile defaults
+      const cgpaVal = parsedCgpa.trim() ? parseFloat(parsedCgpa.trim()) : (user?.cgpa || 0.0);
+      const tenthVal = parsedTenth.trim() ? parseFloat(parsedTenth.trim()) : (user?.tenth_marks || 0.0);
+      const twelfthVal = parsedTwelfth.trim() ? parseFloat(parsedTwelfth.trim()) : (user?.twelfth_marks || 0.0);
+      const arrearsVal = user?.has_arrears || false;
 
       const res = await api.put("/users/me", {
         full_name: parsedName.trim(),
@@ -202,10 +203,10 @@ export default function ResumePage() {
         batch_year: user?.batch_year || new Date().getFullYear(),
         skills: resumeData.skills,
         neo_id_enc: encNeoId,
-        cgpa_enc: encCgpa,
-        tenth_marks_enc: encTenth,
-        twelfth_marks_enc: encTwelfth,
-        has_arrears_enc: encArrears
+        cgpa: cgpaVal,
+        tenth_marks: tenthVal,
+        twelfth_marks: twelfthVal,
+        has_arrears: arrearsVal
       });
 
       setUser(res.data);

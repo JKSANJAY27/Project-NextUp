@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import { Bell, Check, CheckCheck, AlertCircle } from "lucide-react";
-import api from "@/lib/api";
+import { supabase } from "@/lib/supabase";
 
 interface Notification {
   id: string;
@@ -18,8 +18,13 @@ export default function NotificationsDropdown() {
 
   const fetchNotifications = async () => {
     try {
-      const response = await api.get("/notifications");
-      setNotifications(response.data);
+      const { data, error } = await supabase
+        .from("notifications")
+        .select("*")
+        .order("created_at", { ascending: false });
+      
+      if (error) throw error;
+      setNotifications(data || []);
     } catch (error) {
       console.error("Failed to fetch notifications:", error);
     }
@@ -27,9 +32,22 @@ export default function NotificationsDropdown() {
 
   useEffect(() => {
     fetchNotifications();
-    // Poll for new notifications every 30 seconds
-    const interval = setInterval(fetchNotifications, 30000);
-    return () => clearInterval(interval);
+
+    // Subscribe to realtime database changes for notifications
+    const channel = supabase
+      .channel("realtime-notifications-dropdown")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "notifications" },
+        () => {
+          fetchNotifications();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   // Close dropdown on click outside
@@ -47,7 +65,13 @@ export default function NotificationsDropdown() {
 
   const handleMarkAsRead = async (id: string) => {
     try {
-      await api.patch(`/notifications/${id}/read`);
+      const { error } = await supabase
+        .from("notifications")
+        .update({ is_read: true })
+        .eq("id", id);
+
+      if (error) throw error;
+
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
       );
@@ -58,7 +82,13 @@ export default function NotificationsDropdown() {
 
   const handleMarkAllAsRead = async () => {
     try {
-      await api.post("/notifications/read-all");
+      const { error } = await supabase
+        .from("notifications")
+        .update({ is_read: true })
+        .eq("is_read", false);
+
+      if (error) throw error;
+
       setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
     } catch (error) {
       console.error("Failed to mark all as read:", error);

@@ -75,3 +75,17 @@ def encrypt_field(plaintext: str, key_hex: str) -> str:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Encryption failed: {str(e)}"
         )
+
+import hmac
+import hashlib
+
+def generate_blind_index(neo_id: str, pepper: str = None) -> str:
+    """
+    Generates a secure HMAC-SHA256 blind index from a normalized Neo ID.
+    Normalizes the input by converting to uppercase and stripping whitespaces.
+    """
+    if pepper is None:
+        pepper = settings.PEPPER
+    normalized = neo_id.strip().upper()
+    h = hmac.new(pepper.encode("utf-8"), normalized.encode("utf-8"), hashlib.sha256)
+    return h.hexdigest()
