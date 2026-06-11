@@ -248,7 +248,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     setattr(company, key, val)
             logger.info(f"Updated existing company registry: {company_name} - {role}")
             
-        # 5. Insert Company Event
+        # 5. Insert Company Event (Check if already created by Edge Function)
         event_type = 'REGISTRATION'
         if 'shortlist' in subject.lower() or 'shortlist' in body.lower():
             event_type = 'SHORTLIST'
@@ -259,23 +259,33 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         elif 'offer' in subject.lower() or 'congratulations' in subject.lower():
             event_type = 'OFFER'
             
-        event = CompanyEvent(
-            company_id=company.id,
-            event_type=event_type,
-            subject=subject,
-            sender=sender,
-            body=body,
-            timestamp=email_timestamp
-        )
-        db.add(event)
-        db.flush() # Populate event.id
-        
-        # Queue notification job for this event
-        notification_job = NotificationJob(
-            company_event_id=event.id,
-            status='pending'
-        )
-        db.add(notification_job)
+        event = db.query(CompanyEvent).filter(
+            CompanyEvent.company_id == company.id,
+            CompanyEvent.event_type == event_type,
+            CompanyEvent.subject == subject,
+            CompanyEvent.timestamp == email_timestamp
+        ).first()
+
+        if not event:
+            event = CompanyEvent(
+                company_id=company.id,
+                event_type=event_type,
+                subject=subject,
+                sender=sender,
+                body=body,
+                timestamp=email_timestamp
+            )
+            db.add(event)
+            db.flush() # Populate event.id
+            
+            # Queue notification job for this event only if we created it new
+            notification_job = NotificationJob(
+                company_event_id=event.id,
+                status='pending'
+            )
+            db.add(notification_job)
+        else:
+            logger.info(f"Re-using existing company event {event.id} ingested by Edge Function.")
         
         # 6. Parse and store attachments
         for att in attachments:
@@ -287,15 +297,25 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 
             file_bytes = base64.b64decode(base64_data)
             
-            # Record attachment metadata (Storage path is simulated for zero-cost local / supabase storage)
-            att_meta = AttachmentMetadata(
-                company_event_id=event.id,
-                file_name=filename,
-                file_type="JD_PDF" if filename.lower().endswith(".pdf") else "SHORTLIST_EXCEL",
-                storage_path=f"attachments/{event.id}/{filename}",
-                parsed_meta={}
-            )
-            db.add(att_meta)
+            # Check if attachment metadata already exists (Edge Function might have inserted it)
+            att_meta = db.query(AttachmentMetadata).filter(
+                AttachmentMetadata.company_event_id == event.id,
+                AttachmentMetadata.file_name == filename
+            ).first()
+
+            if not att_meta:
+                # Record attachment metadata (Storage path is simulated for zero-cost local / supabase storage)
+                att_meta = AttachmentMetadata(
+                    company_event_id=event.id,
+                    file_name=filename,
+                    file_type="JD_PDF" if filename.lower().endswith(".pdf") else "SHORTLIST_EXCEL",
+                    storage_path=f"attachments/{event.id}/{filename}",
+                    parsed_meta={}
+                )
+                db.add(att_meta)
+                db.flush()
+            else:
+                logger.info(f"Re-using existing attachment metadata for {filename}.")
             
             # Process JD PDF
             if filename.lower().endswith(".pdf"):
