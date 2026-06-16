@@ -16,7 +16,9 @@ BEGIN
   VALUES (new.id, new.email, 'student', COALESCE(new.created_at, CURRENT_TIMESTAMP));
   RETURN new;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM public;
 
 CREATE OR REPLACE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
@@ -310,4 +312,14 @@ ALTER TABLE student_documents ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can manage their own documents" 
     ON student_documents FOR ALL 
     USING (auth.uid() = user_id);
+
+-- Enable Row-Level Security (RLS) for internal/backend-only tables to secure them from public REST access
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingestion_sources ENABLE ROW LEVEL SECURITY;
+ALTER TABLE raw_ingestion_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE company_change_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE attachments_metadata ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingestion_audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_jobs ENABLE ROW LEVEL SECURITY;
+
 
