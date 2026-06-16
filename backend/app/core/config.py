@@ -29,10 +29,13 @@ class Settings(BaseSettings):
 
     # AI Integration
     HF_API_TOKEN: str = ""
+    INGEST_AUTH_TOKEN: str = ""
+    SUPABASE_URL: str = "https://fgsmxbabgumryumcirfj.supabase.co"
 
     class Config:
         case_sensitive = True
         env_file = ".env"
+        extra = "ignore"
 
 
 settings = Settings()

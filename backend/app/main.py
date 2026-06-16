@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import engine, Base
@@ -12,6 +12,16 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
+
+import logging
+# Middleware to log headers
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    auth_header = request.headers.get("Authorization")
+    logging.warning(f"DEBUG: Request {request.method} {request.url.path} - Auth Header: {auth_header[:20] if auth_header else 'None'}...")
+    response = await call_next(request)
+    logging.warning(f"DEBUG: Response status: {response.status_code}")
+    return response
 
 # Set CORS origins
 app.add_middleware(
