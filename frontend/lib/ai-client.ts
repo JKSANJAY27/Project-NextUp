@@ -77,6 +77,7 @@ let cachedModelName = "";
 async function generateWithTransformers(
   modelName: string,
   prompt: string,
+  maxTokens: number = 512,
   onProgress?: (progress: number) => void,
   onToken?: (text: string) => void
 ): Promise<string> {
@@ -103,7 +104,7 @@ async function generateWithTransformers(
   }
 
   const output = await cachedGenerator(formattedPrompt, {
-    max_new_tokens: 512,
+    max_new_tokens: maxTokens,
     temperature: 0.7,
     do_sample: true,
     callback_function: (beams: any) => {
@@ -135,11 +136,13 @@ async function generateWithTransformers(
 export async function generateInBrowser({
   modelType,
   prompt,
+  maxTokens,
   onProgress,
   onToken,
 }: {
   modelType: BrowserModelType;
   prompt: string;
+  maxTokens?: number;
   onProgress?: (progress: number) => void;
   onToken?: (text: string) => void;
 }): Promise<string> {
@@ -151,10 +154,10 @@ export async function generateInBrowser({
     return generateWithGeminiNano(prompt, onToken);
   } else if (modelType === "qwen-0.5b") {
     // Qwen 0.5B chat model - extremely fast and light (~350MB)
-    return generateWithTransformers("Xenova/Qwen1.5-0.5B-Chat", prompt, onProgress, onToken);
+    return generateWithTransformers("Xenova/Qwen1.5-0.5B-Chat", prompt, maxTokens || 512, onProgress, onToken);
   } else if (modelType === "llama-1b") {
     // Llama 3.2 1B instruct (quantized ONNX community)
-    return generateWithTransformers("onnx-community/Llama-3.2-1B-Instruct", prompt, onProgress, onToken);
+    return generateWithTransformers("onnx-community/Llama-3.2-1B-Instruct", prompt, maxTokens || 512, onProgress, onToken);
   } else {
     throw new Error(`Unsupported browser model type: ${modelType}`);
   }

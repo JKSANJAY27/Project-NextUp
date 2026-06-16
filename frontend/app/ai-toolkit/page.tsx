@@ -17,13 +17,26 @@ import {
   ArrowLeft,
   Copy,
   Download,
-  Play
+  Play,
+  Target,
+  CheckCircle,
+  FileText,
+  Briefcase,
+  GraduationCap,
+  FolderKanban,
+  Wrench,
+  ChevronRight
 } from "lucide-react";
 import {
   generateInBrowser,
   isGeminiNanoAvailable,
   BrowserModelType
 } from "@/lib/ai-client";
+import {
+  extractKeywords,
+  segmentTextByKeywords,
+  calculateMatchStats
+} from "@/lib/utils/keyword-matcher";
 
 interface Company {
   id: string;
@@ -79,6 +92,10 @@ function AIToolkitContent() {
   // ATS Matrix State
   const [atsResult, setAtsResult] = useState<ATSResult | null>(null);
   const [calculatingATS, setCalculatingATS] = useState(false);
+  const [atsSource, setAtsSource] = useState<"browser" | "cloud">("browser");
+  const [atsModel, setAtsModel] = useState<BrowserModelType>("qwen-0.5b");
+  const [optimizerSubView, setOptimizerSubView] = useState<"tailored" | "highlight">("tailored");
+  const [masterResume, setMasterResume] = useState<any>(null);
 
   // SOP State
   const [sopContent, setSopContent] = useState("");
@@ -121,6 +138,7 @@ function AIToolkitContent() {
         if (nano) {
           setSopModel("gemini-nano");
           setClModel("gemini-nano");
+          setAtsModel("gemini-nano");
         }
 
         // Fetch list of companies
@@ -152,6 +170,17 @@ function AIToolkitContent() {
     }
   }, [companyId]);
 
+  const fetchMasterResume = async () => {
+    try {
+      const res = await api.get("/resumes/me");
+      if (res.data && res.data.resume_data) {
+        setMasterResume(res.data.resume_data);
+      }
+    } catch (err) {
+      console.error("Failed to load master resume:", err);
+    }
+  };
+
   const loadCompanyData = async (id: string) => {
     try {
       setLoading(true);
@@ -165,12 +194,13 @@ function AIToolkitContent() {
       setClContent("");
       setPrepData(null);
       
-      // Load current document drafts for the company
+      // Load current document drafts for the company and master resume
       await Promise.all([
         fetchLatestDraft(id, "sop"),
         fetchLatestDraft(id, "cover_letter"),
         fetchDocumentVersions(id, "sop"),
-        fetchDocumentVersions(id, "cover_letter")
+        fetchDocumentVersions(id, "cover_letter"),
+        fetchMasterResume()
       ]);
       
       // Run deterministic ATS Match and fetch Interview Prep deterministically first
@@ -237,6 +267,108 @@ function AIToolkitContent() {
       setErrorMsg(err.response?.data?.detail || "Cloud AI generation failed. Verify Hugging Face API keys.");
     } finally {
       setCalculatingATS(false);
+    }
+  };
+
+  const runLocalATS = async () => {
+    if (!company) return;
+    setCalculatingATS(true);
+    setErrorMsg("");
+    setLocalDownloadProgress(null);
+    setLocalStatusMessage("");
+
+    try {
+      // 1. Fetch user's decrypted resume from backend
+      const resMe = await api.get("/resumes/me");
+      if (!resMe.data || !resMe.data.resume_data || Object.keys(resMe.data.resume_data).length === 0) {
+        throw new Error("No master resume found. Please upload or save your resume details in the Resume Engine tab first.");
+      }
+      
+      const resumeData = resMe.data.resume_data;
+
+      // 2. Prepare the prompt
+      const prompt = `You are a professional ATS optimizer. Analyze the student's Resume JSON and the Job Description text.
+Generate a JSON output tailoring the resume to fit the JD perfectly.
+
+TRUTHFULNESS & GROUNDING RULES:
+1. ONLY modify text phrasing to better align with the JD; NEVER invent metrics, years of experience, certifications, or achievements.
+2. NEVER modify or invent candidate name, contact details, company names, job titles, institutions, degrees, or dates.
+3. Keep project titles exactly as they are in the original resume.
+4. Do NOT use buzzwords or fluff (e.g., spearheaded, synergized, revolutionized, best-in-class). Write simple, direct, metric-driven accomplishments.
+5. Emphasize matching skills and keywords from the Job Description where supported by candidate experience.
+
+Student Resume Data:
+${JSON.stringify(resumeData)}
+
+Company JD Text:
+${company.jd_text || ""}
+
+Required Skills:
+${(company.jd_required_skills || []).join(", ")}
+
+Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in conversational intro/outro, do NOT add prefix explanations, start directly with the JSON):
+{
+  "ats_score": 85,
+  "missing_keywords": ["Kubernetes", "Redis"],
+  "improvements": ["Highlight cloud project", "Move Python to core skills"],
+  "tailored_resume": {
+    "optimized_skills": ["Python", "React", "Docker"],
+    "optimized_projects": [
+      {
+        "title": "Project Title",
+        "description": "Optimized description highlighting matching keywords from the JD based on original text"
+      }
+    ],
+    "optimized_summary": "Tailored professional profile summary matching the role requirements."
+  }
+}`;
+
+      // 3. Call local generation
+      setLocalStatusMessage(`Loading local model ${atsModel}...`);
+      const result = await generateInBrowser({
+        modelType: atsModel,
+        prompt: prompt,
+        maxTokens: 1024,
+        onProgress: (p) => {
+          setLocalDownloadProgress(Math.round(p * 100));
+          setLocalStatusMessage(`Downloading model weights: ${Math.round(p * 100)}%`);
+        },
+        onToken: (text) => {
+          // Streaming parsing is hard for complete JSON, but we can log or just wait for complete text
+        }
+      });
+
+      // 4. Parse JSON result
+      let cleanText = result.trim();
+      if (cleanText.startsWith("```")) {
+        cleanText = cleanText.split("```")[1];
+        if (cleanText.startsWith("json")) {
+          cleanText = cleanText.substring(4);
+        }
+      }
+      
+      // Attempt to find the first '{' and last '}' to strip extra wrapper text
+      const firstBrace = cleanText.indexOf("{");
+      const lastBrace = cleanText.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace !== -1) {
+        cleanText = cleanText.substring(firstBrace, lastBrace + 1);
+      }
+
+      try {
+        const parsed = JSON.parse(cleanText);
+        setAtsResult(parsed);
+        showSuccess("Local Browser ATS optimization generated successfully.");
+      } catch (parseErr) {
+        console.error("Local LLM JSON parse error:", parseErr, "Raw text:", result);
+        throw new Error("Local model returned invalid JSON. Please try again or switch to Server Cloud AI.");
+      }
+    } catch (err: any) {
+      console.error("Local ATS tailoring failed:", err);
+      setErrorMsg(err.message || "Local ATS generation failed. Ensure WebAssembly is supported.");
+    } finally {
+      setCalculatingATS(false);
+      setLocalDownloadProgress(null);
+      setLocalStatusMessage("");
     }
   };
 
@@ -387,6 +519,139 @@ function AIToolkitContent() {
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     showSuccess("Copied to clipboard!");
+  };
+
+  // 1. Extract Keywords from JD
+  const jdKeywords = React.useMemo(() => {
+    if (!company) return new Set<string>();
+    if (company.jd_ats_keywords && company.jd_ats_keywords.length > 0) {
+      return new Set(company.jd_ats_keywords.map(k => k.toLowerCase().trim()));
+    }
+    return extractKeywords(company.jd_text || "");
+  }, [company]);
+
+  // 2. Real-time ATS match stats of active resume
+  const matchStats = React.useMemo(() => {
+    if (!masterResume || jdKeywords.size === 0) {
+      return { matchedKeywords: new Set<string>(), matchCount: 0, totalKeywords: jdKeywords.size, matchPercentage: 0 };
+    }
+    
+    const parts: string[] = [];
+    if (masterResume.personal) {
+      if (masterResume.personal.name) parts.push(masterResume.personal.name);
+      if (masterResume.personal.location) parts.push(masterResume.personal.location);
+    }
+    if (masterResume.summary) {
+      parts.push(masterResume.summary);
+    }
+    
+    const edu = masterResume.education || [];
+    edu.forEach((e: any) => {
+      if (e.degree) parts.push(e.degree);
+      if (e.institution) parts.push(e.institution);
+    });
+    
+    const exp = masterResume.experience || [];
+    exp.forEach((e: any) => {
+      if (e.role) parts.push(e.role);
+      if (e.company) parts.push(e.company);
+      if (e.description) parts.push(e.description);
+    });
+    
+    const proj = masterResume.projects || [];
+    proj.forEach((e: any) => {
+      if (e.title) parts.push(e.title);
+      if (e.tech) parts.push(e.tech);
+      if (e.description) parts.push(e.description);
+    });
+    
+    const skills = masterResume.skills || [];
+    skills.forEach((s: string) => parts.push(s));
+    
+    return calculateMatchStats(parts.join(" "), jdKeywords);
+  }, [masterResume, jdKeywords]);
+
+  // 3. HighlightedText Component
+  const HighlightedText = ({ text, keywords }: { text: string; keywords: Set<string> }) => {
+    const segments = React.useMemo(() => segmentTextByKeywords(text, keywords), [text, keywords]);
+    return (
+      <span>
+        {segments.map((segment, i) =>
+          segment.isMatch ? (
+            <mark key={i} className="bg-yellow-500/30 text-foreground px-0.5 rounded-sm">
+              {segment.text}
+            </mark>
+          ) : (
+            <span key={i}>{segment.text}</span>
+          )
+        )}
+      </span>
+    );
+  };
+
+  // 4. Apply optimized sections to Master Resume
+  const applySuggestionsToMaster = async () => {
+    if (!atsResult || !atsResult.tailored_resume || !company) return;
+    
+    try {
+      setSavingDoc(true);
+      setErrorMsg("");
+      setSuccessMsg("");
+      
+      const res = await api.get("/resumes/me");
+      const currentData = res.data?.resume_data || {
+        personal: { name: user?.full_name || "", email: user?.email || "", phone: "", location: "" },
+        summary: "",
+        education: [],
+        experience: [],
+        projects: [],
+        skills: []
+      };
+      
+      const updatedData = JSON.parse(JSON.stringify(currentData));
+      const opt = atsResult.tailored_resume;
+      
+      if (opt.optimized_summary) {
+        updatedData.summary = opt.optimized_summary;
+      }
+      
+      if (opt.optimized_skills && opt.optimized_skills.length > 0) {
+        const mergedSkills = Array.from(new Set([
+          ...opt.optimized_skills,
+          ...(updatedData.skills || [])
+        ]));
+        updatedData.skills = mergedSkills;
+      }
+      
+      if (opt.optimized_projects && opt.optimized_projects.length > 0) {
+        const projects = updatedData.projects || [];
+        opt.optimized_projects.forEach((optProj: any) => {
+          const match = projects.find((p: any) => 
+            p.title.trim().toLowerCase() === optProj.title.trim().toLowerCase()
+          );
+          if (match) {
+            match.description = optProj.description;
+          } else if (projects.length > 0) {
+            if (projects.length === 1 && opt.optimized_projects.length === 1) {
+              projects[0].description = opt.optimized_projects[0].description;
+            }
+          }
+        });
+      }
+      
+      await api.put("/resumes/me", {
+        template: res.data?.template || "Classic Single",
+        resume_data: updatedData
+      });
+      
+      setMasterResume(updatedData);
+      showSuccess("AI suggestions successfully applied to Master Resume!");
+    } catch (err: any) {
+      console.error("Failed to apply suggestions:", err);
+      setErrorMsg("Failed to update Master Resume with AI suggestions.");
+    } finally {
+      setSavingDoc(false);
+    }
   };
 
   const downloadAsTextFile = (filename: string, text: string) => {
@@ -592,31 +857,89 @@ function AIToolkitContent() {
                       </ul>
                     </div>
                   )}
+                  
+                  {/* AI Core Engine Selector & Actions */}
+                  <div className="pt-4 border-t border-border space-y-4">
+                    <div className="space-y-1">
+                      <span className="text-[8px] font-black text-muted-foreground uppercase block">AI CORE ENGINE</span>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          onClick={() => setAtsSource("browser")}
+                          className={`h-8 border text-[10px] font-bold uppercase transition-all ${
+                            atsSource === "browser" ? "border-accent bg-accent/10 text-accent" : "border-border bg-background text-muted-foreground"
+                          }`}
+                        >
+                          💻 LOCAL BROWSER
+                        </button>
+                        <button
+                          onClick={() => setAtsSource("cloud")}
+                          className={`h-8 border text-[10px] font-bold uppercase transition-all ${
+                            atsSource === "cloud" ? "border-accent bg-accent/10 text-accent" : "border-border bg-background text-muted-foreground"
+                          }`}
+                        >
+                          ☁️ SERVER CLOUD
+                        </button>
+                      </div>
+                    </div>
 
-                  {/* Optional Cloud ATS upgrade */}
-                  <div className="pt-2 border-t border-border">
+                    {/* Local Model dropdown */}
+                    {atsSource === "browser" && (
+                      <div className="space-y-1">
+                        <span className="text-[8px] font-black text-muted-foreground uppercase block">LOCAL MODEL (WASM)</span>
+                        <select
+                          value={atsModel}
+                          onChange={(e) => setAtsModel(e.target.value as BrowserModelType)}
+                          className="w-full bg-background border border-border p-1 text-[10px] font-bold uppercase outline-none text-foreground"
+                        >
+                          {geminiAvailable && <option value="gemini-nano">GEMINI NANO (CHROME NATIVE)</option>}
+                          <option value="qwen-0.5b">QWEN 1.5 0.5B CHAT (350MB - FAST)</option>
+                          <option value="llama-1b">LLAMA 3.2 1B INSTRUCT (600MB - SMART)</option>
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Loader status message */}
+                    {calculatingATS && localStatusMessage && (
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-bold uppercase">
+                          <span className="text-accent animate-pulse">{localStatusMessage}</span>
+                        </div>
+                        {localDownloadProgress !== null && (
+                          <div className="w-full bg-muted border border-border h-1.5 relative overflow-hidden">
+                            <div 
+                              className="bg-accent h-full transition-all duration-300"
+                              style={{ width: `${localDownloadProgress}%` }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Main Trigger Button */}
                     <button
-                      onClick={runCloudATS}
+                      onClick={atsSource === "browser" ? runLocalATS : runCloudATS}
                       disabled={calculatingATS}
                       className="w-full h-10 border-2 border-border bg-background hover:bg-muted font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50"
                     >
                       {calculatingATS ? (
                         <>
                           <Loader2 className="animate-spin h-3.5 w-3.5" />
-                          <span>ANALYZING...</span>
+                          <span>GENERATING TAILORING...</span>
                         </>
                       ) : (
                         <>
                           <Sparkles size={12} className="text-accent" />
-                          <span>RUN CLOUD ATS GENERATION</span>
+                          <span>TAILOR RESUME WITH {atsSource === "browser" ? "LOCAL AI" : "CLOUD AI"}</span>
                         </>
                       )}
                     </button>
                     <span className="text-[8px] text-muted-foreground uppercase text-center block mt-1">
-                      Cloud completes comprehensive projects / summary rewrites (5 completions limit/day)
+                      {atsSource === "browser" 
+                        ? "Runs completely client-side. Zero server cost or data sharing." 
+                        : "Cloud completes comprehensive projects / summary rewrites (5 completions limit/day)"
+                      }
                     </span>
-                  </div>
-                </div>
+                  </div>  </div>
               )}
             </>
           ) : (
@@ -669,77 +992,249 @@ function AIToolkitContent() {
           <div className="flex-1 overflow-y-auto p-6 md:p-8">
             {company ? (
               <>
-                {/* 1. RESUME OPTIMIZER TAB */}
                 {activeTab === "ats" && (
                   <div className="space-y-8">
-                    <div className="border-2 border-border p-6 space-y-4">
-                      <h3 className="text-lg font-black uppercase tracking-tighter">TAILORED RESUME SUGGESTIONS</h3>
-                      <p className="text-xs text-muted-foreground uppercase leading-relaxed">
-                        These sections are optimized for {company.name}&apos;s specific requirements. Paste these directly into your LaTeX resume template or editor.
-                      </p>
+                    {/* Sub-View Navigation and Actions */}
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b-2 border-border pb-4 gap-4">
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setOptimizerSubView("tailored")}
+                          className={`h-9 px-4 border-2 text-[10px] font-black uppercase tracking-wider transition-all ${
+                            optimizerSubView === "tailored"
+                              ? "border-accent bg-accent/10 text-accent font-black"
+                              : "border-border hover:bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          📝 Tailored Suggestions
+                        </button>
+                        <button
+                          onClick={() => setOptimizerSubView("highlight")}
+                          className={`h-9 px-4 border-2 text-[10px] font-black uppercase tracking-wider transition-all ${
+                            optimizerSubView === "highlight"
+                              ? "border-accent bg-accent/10 text-accent font-black"
+                              : "border-border hover:bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          🔍 ATS Keyword Highlighting
+                        </button>
+                      </div>
+                      
+                      {atsResult?.tailored_resume && optimizerSubView === "tailored" && (
+                        <button
+                          onClick={applySuggestionsToMaster}
+                          disabled={savingDoc}
+                          className="h-9 px-4 border-2 border-accent bg-accent text-black hover:bg-black hover:text-accent hover:border-black text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 active:scale-95 transition-all disabled:opacity-50"
+                        >
+                          <Sparkles size={11} />
+                          <span>Apply to Master Resume</span>
+                        </button>
+                      )}
                     </div>
 
-                    {atsResult?.tailored_resume ? (
-                      <div className="space-y-6">
-                        
-                        {/* Summary Section */}
-                        <div className="border-2 border-border p-4 bg-muted/10 space-y-3">
-                          <div className="flex justify-between items-center">
-                            <span className="text-[10px] font-black text-muted-foreground uppercase">OPTIMIZED PROFESSIONAL PROFILE SUMMARY</span>
-                            <button
-                              onClick={() => copyToClipboard(atsResult.tailored_resume.optimized_summary)}
-                              className="h-8 px-3 border border-border bg-background hover:bg-muted text-[10px] font-bold uppercase flex items-center gap-1"
-                            >
-                              <Copy size={10} />
-                              <span>COPY</span>
-                            </button>
-                          </div>
-                          <p className="text-xs font-mono bg-background border border-border p-3 select-all leading-relaxed whitespace-pre-wrap">
-                            {atsResult.tailored_resume.optimized_summary}
+                    {optimizerSubView === "tailored" ? (
+                      <>
+                        <div className="border-2 border-border p-6 space-y-4">
+                          <h3 className="text-lg font-black uppercase tracking-tighter">TAILORED RESUME SUGGESTIONS</h3>
+                          <p className="text-xs text-muted-foreground uppercase leading-relaxed">
+                            These sections are optimized for {company.name}&apos;s specific requirements. Click the button above to merge them directly into your master resume, or copy them manually.
                           </p>
                         </div>
 
-                        {/* Projects Section */}
-                        {atsResult.tailored_resume.optimized_projects && atsResult.tailored_resume.optimized_projects.length > 0 && (
-                          <div className="space-y-4">
-                            <span className="text-[10px] font-black text-muted-foreground uppercase">OPTIMIZED WORK PROJECTS DESCRIPTIONS</span>
+                        {atsResult?.tailored_resume ? (
+                          <div className="space-y-6">
                             
-                            {atsResult.tailored_resume.optimized_projects.map((proj, i) => (
-                              <div key={i} className="border border-border p-4 bg-muted/5 space-y-2.5">
-                                <div className="flex justify-between items-center">
-                                  <span className="text-[10px] font-bold text-foreground">{proj.title.toUpperCase()}</span>
-                                  <button
-                                    onClick={() => copyToClipboard(`${proj.title}\n${proj.description}`)}
-                                    className="h-7 px-2 border border-border bg-background hover:bg-muted text-[9px] font-bold uppercase flex items-center gap-1"
-                                  >
-                                    <Copy size={9} />
-                                    <span>COPY BULLETS</span>
-                                  </button>
-                                </div>
-                                <p className="text-xs font-mono bg-background border border-border p-3 select-all leading-relaxed">
-                                  {proj.description}
-                                </p>
+                            {/* Summary Section */}
+                            <div className="border-2 border-border p-4 bg-muted/10 space-y-3">
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] font-black text-muted-foreground uppercase">OPTIMIZED PROFESSIONAL PROFILE SUMMARY</span>
+                                <button
+                                  onClick={() => copyToClipboard(atsResult.tailored_resume.optimized_summary)}
+                                  className="h-8 px-3 border border-border bg-background hover:bg-muted text-[10px] font-bold uppercase flex items-center gap-1"
+                                >
+                                  <Copy size={10} />
+                                  <span>COPY</span>
+                                </button>
                               </div>
-                            ))}
+                              <p className="text-xs font-mono bg-background border border-border p-3 select-all leading-relaxed whitespace-pre-wrap">
+                                {atsResult.tailored_resume.optimized_summary}
+                              </p>
+                            </div>
+
+                            {/* Projects Section */}
+                            {atsResult.tailored_resume.optimized_projects && atsResult.tailored_resume.optimized_projects.length > 0 && (
+                              <div className="space-y-4">
+                                <span className="text-[10px] font-black text-muted-foreground uppercase">OPTIMIZED WORK PROJECTS DESCRIPTIONS</span>
+                                
+                                {atsResult.tailored_resume.optimized_projects.map((proj, i) => (
+                                  <div key={i} className="border border-border p-4 bg-muted/5 space-y-2.5">
+                                    <div className="flex justify-between items-center">
+                                      <span className="text-[10px] font-bold text-foreground">{proj.title.toUpperCase()}</span>
+                                      <button
+                                        onClick={() => copyToClipboard(`${proj.title}\n${proj.description}`)}
+                                        className="h-7 px-2 border border-border bg-background hover:bg-muted text-[9px] font-bold uppercase flex items-center gap-1"
+                                      >
+                                        <Copy size={9} />
+                                        <span>COPY BULLETS</span>
+                                      </button>
+                                    </div>
+                                    <p className="text-xs font-mono bg-background border border-border p-3 select-all leading-relaxed">
+                                      {proj.description}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Skills optimization */}
+                            <div className="border border-border p-4 bg-muted/5 space-y-3">
+                              <span className="text-[10px] font-black text-muted-foreground uppercase">SUGGESTED TECH STACK (ORDERED BY JD RELEVANCE)</span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {atsResult.tailored_resume.optimized_skills.map((s, i) => (
+                                  <span key={i} className="text-[9px] font-bold bg-background border border-accent text-accent px-2 py-0.5 uppercase">
+                                    {s}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+
+                          </div>
+                        ) : (
+                          <div className="text-center py-20 border border-dashed border-border text-xs font-bold text-muted-foreground uppercase">
+                            Tailored suggestions are computed dynamically.
                           </div>
                         )}
-
-                        {/* Skills optimization */}
-                        <div className="border border-border p-4 bg-muted/5 space-y-3">
-                          <span className="text-[10px] font-black text-muted-foreground uppercase">SUGGESTED TECH STACK (ORDERED BY JD RELEVANCE)</span>
-                          <div className="flex flex-wrap gap-1.5">
-                            {atsResult.tailored_resume.optimized_skills.map((s, i) => (
-                              <span key={i} className="text-[9px] font-bold bg-background border border-accent text-accent px-2 py-0.5 uppercase">
-                                {s}
-                              </span>
-                            ))}
+                      </>
+                    ) : (
+                      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
+                        {/* Left: Job Description */}
+                        <div className="xl:col-span-5 border-2 border-border p-6 bg-card space-y-6 max-h-[650px] overflow-y-auto">
+                          <div className="flex items-center gap-2 border-b border-border pb-3">
+                            <FileText className="w-4 h-4 text-accent" />
+                            <h3 className="text-sm font-black uppercase tracking-widest text-foreground">JOB DESCRIPTION</h3>
+                          </div>
+                          
+                          <div className="space-y-4 text-xs leading-relaxed uppercase tracking-wider font-mono text-muted-foreground whitespace-pre-wrap select-text">
+                            {company.jd_text ? (
+                              <HighlightedText text={company.jd_text} keywords={jdKeywords} />
+                            ) : (
+                              "No job description details available."
+                            )}
                           </div>
                         </div>
 
-                      </div>
-                    ) : (
-                      <div className="text-center py-20 border border-dashed border-border text-xs font-bold text-muted-foreground uppercase">
-                        Tailored suggestions are computed dynamically.
+                        {/* Right: Master Resume with Highlights */}
+                        <div className="xl:col-span-7 border-2 border-border p-6 bg-card space-y-6 max-h-[650px] overflow-y-auto">
+                          <div className="flex items-center justify-between border-b border-border pb-3">
+                            <div className="flex items-center gap-2">
+                              <Target className="w-4 h-4 text-accent" />
+                              <h3 className="text-sm font-black uppercase tracking-widest text-foreground">YOUR MASTER RESUME MATCH</h3>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="bg-black text-accent border border-accent px-2 py-1 text-[10px] font-black uppercase tracking-widest">
+                                {matchStats.matchPercentage}% REAL MATCH
+                              </span>
+                            </div>
+                          </div>
+
+                          {masterResume ? (
+                            <div className="space-y-6">
+                              {/* Summary Section */}
+                              {masterResume.summary && (
+                                <div className="space-y-2">
+                                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">SUMMARY</span>
+                                  <p className="text-xs bg-muted/20 border border-border p-3 leading-relaxed uppercase tracking-wider font-mono">
+                                    <HighlightedText text={masterResume.summary} keywords={jdKeywords} />
+                                  </p>
+                                </div>
+                              )}
+
+                              {/* Skills Section */}
+                              {masterResume.skills && masterResume.skills.length > 0 && (
+                                <div className="space-y-2">
+                                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">SKILLS & TECH STACK</span>
+                                  <div className="flex flex-wrap gap-1.5 bg-muted/20 border border-border p-3">
+                                    {masterResume.skills.map((skill: string, i: number) => {
+                                      const isMatch = jdKeywords.has(skill.toLowerCase().trim());
+                                      return (
+                                        <span 
+                                          key={i} 
+                                          className={`text-[9px] font-bold px-2 py-0.5 border uppercase transition-colors ${
+                                            isMatch ? "bg-yellow-500/20 border-yellow-500 text-yellow-500 font-black" : "bg-background border-border text-muted-foreground"
+                                          }`}
+                                        >
+                                          {skill}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Experience Section */}
+                              {masterResume.experience && masterResume.experience.length > 0 && (
+                                <div className="space-y-3">
+                                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">EXPERIENCE</span>
+                                  <div className="space-y-3">
+                                    {masterResume.experience.map((exp: any, i: number) => (
+                                      <div key={i} className="border border-border p-3.5 space-y-2 bg-muted/5">
+                                        <div className="flex justify-between items-baseline text-[10px] font-bold uppercase">
+                                          <span>
+                                            <span className="text-foreground">{exp.company}</span>
+                                            <span className="mx-1.5 text-muted-foreground">|</span>
+                                            <span className="text-muted-foreground font-medium">{exp.role}</span>
+                                          </span>
+                                          <span className="text-[8px] text-muted-foreground">{exp.period}</span>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground font-mono leading-relaxed whitespace-pre-wrap select-text uppercase tracking-wider">
+                                          <HighlightedText text={exp.description} keywords={jdKeywords} />
+                                        </p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Projects Section */}
+                              {masterResume.projects && masterResume.projects.length > 0 && (
+                                <div className="space-y-3">
+                                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">PROJECTS</span>
+                                  <div className="space-y-3">
+                                    {masterResume.projects.map((proj: any, i: number) => (
+                                      <div key={i} className="border border-border p-3.5 space-y-2 bg-muted/5">
+                                        <div className="flex justify-between items-baseline text-[10px] font-bold uppercase">
+                                          <span className="text-foreground">{proj.title}</span>
+                                          {proj.tech && <span className="text-[8px] border border-border px-1.5 text-muted-foreground">{proj.tech}</span>}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground font-mono leading-relaxed whitespace-pre-wrap select-text uppercase tracking-wider">
+                                          <HighlightedText text={proj.description} keywords={jdKeywords} />
+                                        </p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Education Section */}
+                              {masterResume.education && masterResume.education.length > 0 && (
+                                <div className="space-y-3">
+                                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">EDUCATION</span>
+                                  <div className="space-y-2 bg-muted/20 border border-border p-3.5">
+                                    {masterResume.education.map((edu: any, i: number) => (
+                                      <div key={i} className="flex justify-between items-center text-[10px] font-bold uppercase border-b border-border last:border-0 pb-1.5 last:pb-0">
+                                        <span className="text-foreground">{edu.degree} — {edu.institution}</span>
+                                        <span className="text-muted-foreground text-[8px]">{edu.year} | {edu.score}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="text-center py-20 text-xs font-bold text-muted-foreground uppercase border border-dashed border-border">
+                              No master resume available. Please create one in Resume Engine first.
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>

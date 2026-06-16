@@ -4,12 +4,12 @@ frontend/.next/
 frontend/out/
 frontend/build/
 
-# FastAPI
-backend/__pycache__/
-backend/*.pyc
-backend/*.pyo
-backend/*.pyd
-backend/.pytest_cache/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
 backend/.venv/
 venv/
 .venv/
@@ -29,3 +29,8 @@ backend/nextup.db
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Temporary files and reference materials
+srbhr-resume-matcher-8a5edab282632443.txt
+srbhr-resume-matcher-8a5edab282632443 (1).txt
+supabase/.temp/

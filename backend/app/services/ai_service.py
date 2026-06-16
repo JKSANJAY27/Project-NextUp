@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import hashlib
 import requests
@@ -13,6 +14,122 @@ logger = logging.getLogger(__name__)
 
 # Re-use normalized skills dictionary from match_scorer
 from app.services.match_scorer import NORMALIZED_SKILLS_DICT, normalize_skill
+
+AI_PHRASE_BLACKLIST = {
+    "spearheaded", "orchestrated", "championed", "synergized", "leveraged",
+    "revolutionized", "pioneered", "catalyzed", "operationalized", "architected",
+    "envisioned", "effectuated", "endeavored", "facilitated", "utilized",
+    "synergy", "synergies", "paradigm", "paradigm shift", "best-in-class",
+    "world-class", "cutting-edge", "bleeding-edge", "game-changer", "game-changing",
+    "disruptive", "disruptor", "holistic", "robust", "scalable", "actionable",
+    "impactful", "proactive", "proactively", "stakeholder", "deliverables",
+    "bandwidth", "circle back", "deep dive", "move the needle", "low-hanging fruit",
+    "touch base", "value-add", "in order to", "for the purpose of", "with a view to",
+    "at the end of the day", "moving forward", "going forward", "on a daily basis",
+    "on a regular basis", "in a timely manner", "at this point in time",
+    "due to the fact that", "in the event that", "in light of the fact that"
+}
+
+AI_PHRASE_REPLACEMENTS = {
+    "spearheaded": "led",
+    "orchestrated": "coordinated",
+    "championed": "advocated for",
+    "synergized": "collaborated",
+    "leveraged": "used",
+    "revolutionized": "transformed",
+    "pioneered": "introduced",
+    "catalyzed": "initiated",
+    "operationalized": "implemented",
+    "architected": "designed",
+    "envisioned": "planned",
+    "effectuated": "completed",
+    "endeavored": "worked",
+    "facilitated": "helped",
+    "utilized": "used",
+    "synergy": "collaboration",
+    "synergies": "collaborations",
+    "paradigm": "approach",
+    "paradigm shift": "change",
+    "best-in-class": "top-performing",
+    "world-class": "high-quality",
+    "cutting-edge": "advanced",
+    "bleeding-edge": "modern",
+    "game-changer": "key initiative",
+    "game-changing": "impactful",
+    "disruptive": "innovative",
+    "disruptor": "innovator",
+    "holistic": "comprehensive",
+    "robust": "reliable",
+    "scalable": "extensible",
+    "actionable": "practical",
+    "impactful": "significant",
+    "proactive": "active",
+    "proactively": "actively",
+    "stakeholder": "partner",
+    "deliverables": "results",
+    "bandwidth": "capacity",
+    "circle back": "follow up",
+    "deep dive": "detailed analysis",
+    "move the needle": "make progress",
+    "low-hanging fruit": "quick wins",
+    "touch base": "contact",
+    "value-add": "benefit",
+    "in order to": "to",
+    "for the purpose of": "for",
+    "with a view to": "to",
+    "at the end of the day": "ultimately",
+    "moving forward": "ahead",
+    "going forward": "future",
+    "on a daily basis": "daily",
+    "on a regular basis": "regularly",
+    "in a timely manner": "promptly",
+    "at this point in time": "currently",
+    "due to the fact that": "because",
+    "in the event that": "if",
+    "in light of the fact that": "considering"
+}
+
+def clean_ai_phrases(text_val: str) -> str:
+    """
+    Scrub common AI buzzwords and replace them with simpler professional alternatives.
+    Uses regex word boundaries for case-insensitive replacement.
+    """
+    if not text_val:
+        return text_val
+    cleaned = text_val
+    for phrase in sorted(AI_PHRASE_BLACKLIST, key=len, reverse=True):
+        pattern = re.compile(rf"\b{re.escape(phrase)}\b", re.IGNORECASE)
+        replacement = AI_PHRASE_REPLACEMENTS.get(phrase.lower(), "")
+        cleaned = pattern.sub(replacement, cleaned)
+    # Remove em-dash patterns as well
+    cleaned = re.sub(r"—|---|--", "-", cleaned)
+    return cleaned
+
+def sanitize_tailored_resume(tailored_data: dict) -> dict:
+    """
+    Clean all string fields in the AI-generated tailored resume (optimized summary and projects).
+    """
+    if not tailored_data:
+        return tailored_data
+    
+    # Clean summary
+    if "optimized_summary" in tailored_data:
+        tailored_data["optimized_summary"] = clean_ai_phrases(tailored_data["optimized_summary"])
+    elif "tailored_resume" in tailored_data and "optimized_summary" in tailored_data["tailored_resume"]:
+        tailored_data["tailored_resume"]["optimized_summary"] = clean_ai_phrases(tailored_data["tailored_resume"]["optimized_summary"])
+        
+    # Clean projects
+    if "optimized_projects" in tailored_data:
+        for p in tailored_data["optimized_projects"]:
+            if "description" in p:
+                p["description"] = clean_ai_phrases(p["description"])
+    elif "tailored_resume" in tailored_data and "optimized_projects" in tailored_data["tailored_resume"]:
+        for p in tailored_data["tailored_resume"]["optimized_projects"]:
+            if "description" in p:
+                p["description"] = clean_ai_phrases(p["description"])
+                
+    return tailored_data
+
 
 SKILLS_TO_QUESTIONS = {
     "sql": [

@@ -15,7 +15,8 @@ from app.services.ai_service import (
     generate_cover_letter_deterministic,
     generate_interview_prep_deterministic,
     precompute_jd_intelligence_deterministic,
-    call_huggingface_llm
+    call_huggingface_llm,
+    sanitize_tailored_resume
 )
 from app.services.match_scorer import calculate_match_score
 
@@ -103,6 +104,13 @@ def tailor_resume(
         prompt = f"""You are an expert ATS optimizer. Analyze the student's Resume JSON and the Job Description text.
 Generate a JSON output tailoring the resume to fit the JD perfectly.
 
+TRUTHFULNESS & GROUNDING RULES:
+1. ONLY modify text phrasing to better align with the JD; NEVER invent metrics, years of experience, certifications, or achievements.
+2. NEVER modify or invent candidate name, contact details, company names, job titles, institutions, degrees, or dates.
+3. Keep project titles exactly as they are in the original resume.
+4. Do NOT use buzzwords or fluff (e.g., spearheaded, synergized, revolutionized, best-in-class). Write simple, direct, metric-driven accomplishments.
+5. Emphasize matching skills and keywords from the Job Description where supported by candidate experience.
+
 Student Resume Data:
 {resume_data_str}
 
@@ -122,7 +130,7 @@ Return ONLY a valid JSON object matching this schema exactly (no markdown blocks
     "optimized_projects": [
       {{
         "title": "Project Title",
-        "description": "Optimized description highlighting matching keywords from the JD"
+        "description": "Optimized description highlighting matching keywords from the JD based on original text"
       }}
     ],
     "optimized_summary": "Tailored professional profile summary matching the role requirements."
@@ -139,7 +147,8 @@ Return ONLY a valid JSON object matching this schema exactly (no markdown blocks
                     clean_text = clean_text.split("```")[1]
                     if clean_text.startswith("json"):
                         clean_text = clean_text[4:]
-                return json.loads(clean_text)
+                parsed_res = json.loads(clean_text)
+                return sanitize_tailored_resume(parsed_res)
             except Exception:
                 logger.warning("Failed to parse Cloud LLM response as JSON. Falling back to deterministic.")
                 return fallback_response
