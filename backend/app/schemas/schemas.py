@@ -121,3 +121,31 @@ class NotificationOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+class NotificationDetail(BaseModel):
+    id: UUID
+    message: str
+    is_read: bool
+    notification_type: str
+    created_at: datetime
+    company_event_id: UUID
+    
+    # Source Event Fields
+    subject: Optional[str] = None
+    sender: Optional[str] = None
+    body: Optional[str] = None
+    timestamp: Optional[datetime] = None
+    
+    # Parser confidence scores
+    confidence_scores: Dict[str, float] = {}
+
+    class Config:
+        from_attributes = True
+
+class NotificationBundle(BaseModel):
+    company_id: UUID
+    company_name: str
+    role: str
+    category: str
+    unread_count: int
+    notifications: List[NotificationDetail]
