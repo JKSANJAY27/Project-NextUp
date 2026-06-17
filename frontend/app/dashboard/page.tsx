@@ -587,7 +587,7 @@ export default function DashboardPage() {
 
   const handleDrop = async (e: React.DragEvent, colId: string) => {
     e.preventDefault();
-    setDraggedOverColumn(null);
+    setDraggedOverColumn(colId);
     const companyId = e.dataTransfer.getData("text/plain");
     if (companyId) {
       await handleStatusChange(companyId, colId);
@@ -1336,7 +1336,7 @@ export default function DashboardPage() {
                 </h2>
 
                 {formError && (
-                  <div className="border-2 border-red-600 bg-red-650/10 p-4 text-xs font-bold text-red-600 uppercase tracking-wider">
+                  <div className="border-2 border-red-650 bg-red-650/10 p-4 text-xs font-bold text-red-600 uppercase tracking-wider">
                     {formError}
                   </div>
                 )}
@@ -1910,116 +1910,182 @@ export default function DashboardPage() {
               </p>
             </div>
 
-            {/* Outcome Analytics Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
-              <div className="border-2 border-border p-6 bg-card flex flex-col justify-between h-32">
-                <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase">TOTAL APPLICATIONS</span>
-                <span className="text-4xl font-extrabold tracking-tighter text-foreground">{totalAppsCount}</span>
-              </div>
-              <div className="border-2 border-border p-6 bg-card flex flex-col justify-between h-32">
-                <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase">ASSESSMENTS REACHED</span>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-4xl font-extrabold tracking-tighter text-foreground">{oaReachedCount}</span>
-                  <span className="text-xs text-muted-foreground font-mono">({totalAppsCount > 0 ? ((oaReachedCount / totalAppsCount) * 100).toFixed(0) : 0}%)</span>
-                </div>
-              </div>
-              <div className="border-2 border-border p-6 bg-card flex flex-col justify-between h-32">
-                <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase">INTERVIEWS REACHED</span>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-4xl font-extrabold tracking-tighter text-foreground">{interviewReachedCount}</span>
-                  <span className="text-xs text-muted-foreground font-mono">({totalAppsCount > 0 ? ((interviewReachedCount / totalAppsCount) * 100).toFixed(0) : 0}%)</span>
-                </div>
-              </div>
-              <div className="border-2 border-border p-6 bg-card flex flex-col justify-between h-32">
-                <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase">OFFERS RECEIVED</span>
-                <span className="text-4xl font-extrabold tracking-tighter text-accent flex items-center gap-2">
-                  <Award size={28} className="text-accent" />
-                  {offersCount}
-                </span>
-              </div>
-              <div className="border-2 border-border p-6 bg-card flex flex-col justify-between h-32 bg-gradient-to-br from-accent/5 to-transparent border-accent/30">
-                <span className="text-[10px] font-black tracking-widest text-accent uppercase flex items-center gap-1">
-                  <TrendingUp size={12} />
-                  OFFER CONVERSION RATE
-                </span>
-                <span className="text-4xl font-black tracking-tighter text-accent">{conversionRate}%</span>
-              </div>
-            </div>
-
-            {/* List of Applications History */}
-            <div className="space-y-6">
-              <h3 className="text-xl font-bold tracking-tight uppercase">HISTORICAL PLACEMENTS RECORD</h3>
+            {/* Layout Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
               
-              {loading ? (
-                <div className="text-center py-12 text-muted-foreground font-bold">Loading records...</div>
-              ) : filteredCompanies.length === 0 ? (
-                <div className="text-center py-12 border-2 border-dashed border-border text-muted-foreground uppercase font-bold text-xs">
-                  No historical applications recorded yet. Past rejections or offers will list here automatically.
-                </div>
-              ) : (
-                <div className="border-2 border-border overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="border-b-2 border-border bg-muted/30 text-[10px] font-extrabold uppercase tracking-widest text-muted-foreground">
-                          <th className="py-4 px-6">COMPANY / ROLE</th>
-                          <th className="py-4 px-6">CATEGORY</th>
-                          <th className="py-4 px-6">CTC / STIPEND</th>
-                          <th className="py-4 px-6">FINAL STATUS</th>
-                          <th className="py-4 px-6">DECISION STATE</th>
-                          <th className="py-4 px-6 text-right">ACTION</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {filteredCompanies.map((c) => {
-                          const app = applications[c.id];
-                          if (!app) return null;
-                          
-                          return (
-                            <tr key={c.id} className="hover:bg-muted/15 transition-colors">
-                              <td className="py-4 px-6 cursor-pointer" onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}>
-                                <p className="font-bold text-sm uppercase tracking-tight text-foreground">{c.name}</p>
-                                <p className="text-[10px] text-muted-foreground uppercase">{c.role} ✦ {c.job_location || "Unknown"}</p>
-                              </td>
-
-                              <td className="py-4 px-6">
-                                <span className="text-[9px] font-bold tracking-widest uppercase px-1.5 py-0.5 bg-muted border border-border">
-                                  {c.category}
-                                </span>
-                              </td>
-
-                              <td className="py-4 px-6">
-                                <span className="text-xs font-bold font-mono">{c.ctc || "—"}</span>
-                              </td>
-
-                              <td className="py-4 px-6">
-                                <span className={`inline-block text-[9px] font-black uppercase tracking-wider px-2 py-0.5 ${getStatusColor(app.status)}`}>
-                                  {app.status}
-                                </span>
-                              </td>
-
-                              <td className="py-4 px-6">
-                                <span className="text-[10px] font-bold text-muted-foreground uppercase">
-                                  {app.user_decision.toUpperCase()}
-                                </span>
-                              </td>
-
-                              <td className="py-4 px-6 text-right">
-                                <button
-                                  onClick={() => handleUpdateApplication(c.id, { user_decision: 'tracking' })}
-                                  className="h-8 px-3 border border-border bg-background text-foreground hover:bg-accent hover:text-black hover:border-accent font-bold text-[9px] uppercase tracking-wider transition-colors"
-                                >
-                                  Re-Track Workspace
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+              {/* Left Column: Metrics & Table */}
+              <div className="lg:col-span-8 space-y-8">
+                {/* Outcome Analytics Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
+                  <div className="border-2 border-border p-6 bg-card flex flex-col justify-between h-32">
+                    <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase">TOTAL APPLICATIONS</span>
+                    <span className="text-4xl font-extrabold tracking-tighter text-foreground">{totalAppsCount}</span>
+                  </div>
+                  <div className="border-2 border-border p-6 bg-card flex flex-col justify-between h-32">
+                    <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase">ASSESSMENTS REACHED</span>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-4xl font-extrabold tracking-tighter text-foreground">{oaReachedCount}</span>
+                      <span className="text-xs text-muted-foreground font-mono">({totalAppsCount > 0 ? ((oaReachedCount / totalAppsCount) * 100).toFixed(0) : 0}%)</span>
+                    </div>
+                  </div>
+                  <div className="border-2 border-border p-6 bg-card flex flex-col justify-between h-32">
+                    <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase">INTERVIEWS REACHED</span>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-4xl font-extrabold tracking-tighter text-foreground">{interviewReachedCount}</span>
+                      <span className="text-xs text-muted-foreground font-mono">({totalAppsCount > 0 ? ((interviewReachedCount / totalAppsCount) * 100).toFixed(0) : 0}%)</span>
+                    </div>
+                  </div>
+                  <div className="border-2 border-border p-6 bg-card flex flex-col justify-between h-32">
+                    <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase">OFFERS RECEIVED</span>
+                    <span className="text-4xl font-extrabold tracking-tighter text-accent flex items-center gap-2">
+                      <Award size={28} className="text-accent" />
+                      {offersCount}
+                    </span>
+                  </div>
+                  <div className="border-2 border-border p-6 bg-card flex flex-col justify-between h-32 bg-gradient-to-br from-accent/5 to-transparent border-accent/30">
+                    <span className="text-[10px] font-black tracking-widest text-accent uppercase flex items-center gap-1">
+                      <TrendingUp size={12} />
+                      OFFER CONVERSION
+                    </span>
+                    <span className="text-4xl font-black tracking-tighter text-accent">{conversionRate}%</span>
                   </div>
                 </div>
-              )}
+
+                {/* List of Applications History */}
+                <div className="space-y-6">
+                  <h3 className="text-xl font-bold tracking-tight uppercase">HISTORICAL PLACEMENTS RECORD</h3>
+                  
+                  {loading ? (
+                    <div className="text-center py-12 text-muted-foreground font-bold">Loading records...</div>
+                  ) : filteredCompanies.length === 0 ? (
+                    <div className="text-center py-12 border-2 border-dashed border-border text-muted-foreground uppercase font-bold text-xs">
+                      No historical applications recorded yet. Past rejections or offers will list here automatically.
+                    </div>
+                  ) : (
+                    <div className="border-2 border-border overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="border-b-2 border-border bg-muted/30 text-[10px] font-extrabold uppercase tracking-widest text-muted-foreground">
+                              <th className="py-4 px-6">COMPANY / ROLE</th>
+                              <th className="py-4 px-6">CATEGORY</th>
+                              <th className="py-4 px-6">CTC / STIPEND</th>
+                              <th className="py-4 px-6">FINAL STATUS</th>
+                              <th className="py-4 px-6">DECISION STATE</th>
+                              <th className="py-4 px-6 text-right">ACTION</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {filteredCompanies.map((c) => {
+                              const app = applications[c.id];
+                              if (!app) return null;
+                              
+                              return (
+                                <tr key={c.id} className="hover:bg-muted/15 transition-colors">
+                                  <td className="py-4 px-6 cursor-pointer" onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}>
+                                    <p className="font-bold text-sm uppercase tracking-tight text-foreground">{c.name}</p>
+                                    <p className="text-[10px] text-muted-foreground uppercase">{c.role} ✦ {c.job_location || "Unknown"}</p>
+                                  </td>
+
+                                  <td className="py-4 px-6">
+                                    <span className="text-[9px] font-bold tracking-widest uppercase px-1.5 py-0.5 bg-muted border border-border">
+                                      {c.category}
+                                    </span>
+                                  </td>
+
+                                  <td className="py-4 px-6">
+                                    <span className="text-xs font-bold font-mono">{c.ctc || "—"}</span>
+                                  </td>
+
+                                  <td className="py-4 px-6">
+                                    <span className={`inline-block text-[9px] font-black uppercase tracking-wider px-2 py-0.5 ${getStatusColor(app.status)}`}>
+                                      {app.status}
+                                    </span>
+                                  </td>
+
+                                  <td className="py-4 px-6">
+                                    <span className="text-[10px] font-bold text-muted-foreground uppercase">
+                                      {app.user_decision.toUpperCase()}
+                                    </span>
+                                  </td>
+
+                                  <td className="py-4 px-6 text-right">
+                                    <button
+                                      onClick={() => handleUpdateApplication(c.id, { user_decision: 'tracking' })}
+                                      className="h-8 px-3 border border-border bg-background text-foreground hover:bg-accent hover:text-black hover:border-accent font-bold text-[9px] uppercase tracking-wider transition-colors"
+                                    >
+                                      Re-Track Workspace
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Funnel Widget */}
+              <div className="lg:col-span-4 border-2 border-border p-6 bg-muted/10 space-y-4">
+                <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
+                  📊 APPLICATION CONVERSION FUNNEL
+                </h4>
+                
+                <div className="space-y-6 pt-2">
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-[11px] font-black uppercase">
+                      <span>APPLICATIONS SUBMITTED</span>
+                      <span>{totalAppsCount} (100%)</span>
+                    </div>
+                    <div className="h-3.5 w-full bg-muted border border-border">
+                      <div className="h-full bg-blue-600" style={{ width: "100%" }} />
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-[11px] font-black uppercase">
+                      <span>ASSESSMENTS REACHED</span>
+                      <span>{oaReachedCount} ({totalAppsCount > 0 ? ((oaReachedCount / totalAppsCount) * 100).toFixed(0) : 0}%)</span>
+                    </div>
+                    <div className="h-3.5 w-full bg-muted border border-border">
+                      <div 
+                        className="h-full transition-all duration-500" 
+                        style={{ width: `${totalAppsCount > 0 ? (oaReachedCount / totalAppsCount) * 100 : 0}%`, backgroundColor: '#8b5cf6' }} 
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-[11px] font-black uppercase">
+                      <span>INTERVIEWS REACHED</span>
+                      <span>{interviewReachedCount} ({totalAppsCount > 0 ? ((interviewReachedCount / totalAppsCount) * 100).toFixed(0) : 0}%)</span>
+                    </div>
+                    <div className="h-3.5 w-full bg-muted border border-border">
+                      <div 
+                        className="h-full transition-all duration-500" 
+                        style={{ width: `${totalAppsCount > 0 ? (interviewReachedCount / totalAppsCount) * 100 : 0}%`, backgroundColor: '#f97316' }} 
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-[11px] font-black uppercase">
+                      <span>OFFERS RECEIVED</span>
+                      <span className="text-accent">{offersCount} ({totalAppsCount > 0 ? ((offersCount / totalAppsCount) * 100).toFixed(0) : 0}%)</span>
+                    </div>
+                    <div className="h-3.5 w-full bg-muted border border-border">
+                      <div 
+                        className="h-full bg-accent transition-all duration-500" 
+                        style={{ width: `${totalAppsCount > 0 ? (offersCount / totalAppsCount) * 100 : 0}%` }} 
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
             </div>
           </div>
         )}
@@ -2363,7 +2429,6 @@ export default function DashboardPage() {
                             <span className="text-xs font-black uppercase text-foreground truncate block max-w-full">{selectedMeta.source}</span>
                           </div>
                           <div className="border-r border-border/50">
-                            <span className="text-[8px] font-bold text-muted-foreground uppercase block">RECEIVED</span>
                             <span className="text-xs font-mono font-bold text-foreground block">{selectedMeta.received.split(",")[0]}</span>
                           </div>
                           <div>
