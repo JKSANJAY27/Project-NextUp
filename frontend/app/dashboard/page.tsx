@@ -211,6 +211,10 @@ export default function DashboardPage() {
   const [syncing, setSyncing] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
 
+  // Bulk Selection and Comparison states
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([]);
+  const [showComparison, setShowComparison] = useState(false);
+
   // Company Workspace Drawer state
   const [modalTab, setModalTab] = useState<"overview" | "details" | "toolkit">("overview");
   const [editingRoundNote, setEditingRoundNote] = useState<string | null>(null);
@@ -504,6 +508,23 @@ export default function DashboardPage() {
     }
   };
 
+  // Perform bulk actions across selected companies
+  const handleBulkAction = async (action: "tracking" | "interested" | "archived") => {
+    setLoading(true);
+    try {
+      await Promise.all(
+        selectedCompanyIds.map(id => handleUpdateApplication(id, { user_decision: action }))
+      );
+      setSelectedCompanyIds([]);
+      alert(`Bulk action completed: marked as ${action.toUpperCase()}`);
+    } catch (err) {
+      console.error("Bulk action failed:", err);
+      alert("Failed to complete bulk action.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleStatusChange = async (companyId: string, newStatus: string) => {
     await handleUpdateApplication(companyId, {
       status: newStatus,
@@ -577,6 +598,29 @@ export default function DashboardPage() {
   const isSnoozed = (app: Application) => {
     if (!app || !app.snoozed_until) return false;
     return new Date(app.snoozed_until).getTime() > Date.now();
+  };
+
+  // Calculate Pre-application Preparation Readiness score
+  const getPrepScore = (comp: CompanyWithEligibility) => {
+    let score = 0;
+    if (comp.eligibility_status === "ELIGIBLE") {
+      score += 70;
+    } else if (comp.eligibility_status === "CHECK") {
+      score += 40;
+    }
+    
+    if (user && user.neo_id_enc) {
+      score += 20;
+    }
+    
+    const userSkills = user?.skills || [];
+    const compSkills = comp.jd_required_skills || [];
+    const overlap = userSkills.filter((s: string) => compSkills.map((cs: string) => cs.toLowerCase()).includes(s.toLowerCase()));
+    if (overlap.length > 0) {
+      score += 10;
+    }
+    
+    return Math.min(100, score);
   };
 
   // Helper: Get Today's schedule events
@@ -1292,7 +1336,7 @@ export default function DashboardPage() {
                 </h2>
 
                 {formError && (
-                  <div className="border-2 border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-600 uppercase tracking-wider">
+                  <div className="border-2 border-red-600 bg-red-650/10 p-4 text-xs font-bold text-red-600 uppercase tracking-wider">
                     {formError}
                   </div>
                 )}
@@ -1508,16 +1552,31 @@ export default function DashboardPage() {
                 No active placement drives match the current filter criteria.
               </div>
             ) : (
-              <div className="border-2 border-border overflow-hidden">
+              <div className="border-2 border-border overflow-hidden relative">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b-2 border-border bg-muted/30 text-[10px] font-extrabold uppercase tracking-widest text-muted-foreground">
+                        <th className="py-4 px-6 w-12">
+                          <input
+                            type="checkbox"
+                            checked={filteredCompanies.length > 0 && selectedCompanyIds.length === filteredCompanies.length}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedCompanyIds(filteredCompanies.map(c => c.id));
+                              } else {
+                                setSelectedCompanyIds([]);
+                              }
+                            }}
+                            className="h-4.5 w-4.5 rounded-none border-2 border-border text-accent focus:ring-0 bg-transparent cursor-pointer"
+                          />
+                        </th>
                         <th className="py-4 px-6">COMPANY / ROLE</th>
                         <th className="py-4 px-6">CATEGORY</th>
                         <th className="py-4 px-6">CTC / STIPEND</th>
                         <th className="py-4 px-6">DEADLINE</th>
                         <th className="py-4 px-6">ELIGIBILITY</th>
+                        <th className="py-4 px-6">FIT & READINESS</th>
                         <th className="py-4 px-6">TRACKING STAGE</th>
                         <th className="py-4 px-6 text-right">ACTION</th>
                       </tr>
@@ -1528,14 +1587,40 @@ export default function DashboardPage() {
                         const activeStatus = app ? app.status : "";
                         const deadlineDate = c.registration_deadline ? new Date(c.registration_deadline) : null;
                         const isAppSnoozed = app ? isSnoozed(app) : false;
+                        const isRowChecked = selectedCompanyIds.includes(c.id);
                         
                         return (
-                          <tr key={c.id} className="hover:bg-muted/15 transition-colors">
+                          <tr key={c.id} className={`hover:bg-muted/15 transition-colors ${isRowChecked ? 'bg-accent/5' : ''}`}>
+                            <td className="py-5 px-6">
+                              <input
+                                type="checkbox"
+                                checked={isRowChecked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedCompanyIds(prev => [...prev, c.id]);
+                                  } else {
+                                    setSelectedCompanyIds(prev => prev.filter(id => id !== c.id));
+                                  }
+                                }}
+                                className="h-4.5 w-4.5 rounded-none border-2 border-border text-accent focus:ring-0 bg-transparent cursor-pointer"
+                              />
+                            </td>
+
                             <td 
                               className="py-5 px-6 cursor-pointer group"
                               onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}
                             >
-                              <p className="font-bold text-base uppercase tracking-tighter text-foreground group-hover:text-accent transition-colors">{c.name}</p>
+                              <div className="flex items-center gap-2">
+                                <p className="font-bold text-base uppercase tracking-tighter text-foreground group-hover:text-accent transition-colors">{c.name}</p>
+                                {c.jd_required_skills && c.jd_required_skills.length > 0 && (
+                                  <div className="relative group/tooltip inline-block">
+                                    <span className="text-[10px] text-accent cursor-help">💡</span>
+                                    <div className="absolute left-0 bottom-full mb-1 hidden group-hover/tooltip:block bg-background border border-border p-2.5 shadow-xl z-20 text-[9px] uppercase min-w-[220px] leading-normal font-bold">
+                                      Matches your skills: {c.jd_required_skills.slice(0, 3).join(", ")}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
                               <p className="text-xs text-muted-foreground uppercase">{c.role} {c.job_location ? `✦ ${c.job_location}` : ""}</p>
                             </td>
 
@@ -1568,6 +1653,11 @@ export default function DashboardPage() {
                                   {c.eligibility_reason}
                                 </p>
                               )}
+                            </td>
+
+                            <td className="py-5 px-6 font-mono text-[10px] font-bold space-y-0.5">
+                              <p>MATCH: <span className="text-accent">{app?.match_score > 0 ? `${app.match_score}%` : '0%'}</span></p>
+                              <p>PREP: <span className="text-foreground">{getPrepScore(c)}%</span></p>
                             </td>
 
                             <td className="py-5 px-6">
@@ -1936,6 +2026,207 @@ export default function DashboardPage() {
 
       </div>
 
+      {/* Floating Bulk Action Bar */}
+      {selectedCompanyIds.length > 0 && (
+        <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 z-40 bg-card border-2 border-accent px-6 py-4 flex items-center gap-6 shadow-2xl animate-in slide-in-from-bottom-8 duration-300">
+          <span className="text-xs font-black text-accent uppercase tracking-wider">
+            ⚡ {selectedCompanyIds.length} SELECTED
+          </span>
+          
+          <div className="h-6 w-px bg-border" />
+          
+          <div className="flex gap-3">
+            <button
+              onClick={() => handleBulkAction("tracking")}
+              className="h-9 px-4 border border-border bg-foreground text-background font-bold text-xs hover:bg-accent hover:text-black hover:border-accent uppercase tracking-wider transition-all"
+            >
+              🎯 Track Selected
+            </button>
+            <button
+              onClick={() => handleBulkAction("interested")}
+              className="h-9 px-4 border border-border bg-transparent text-foreground font-bold text-xs hover:bg-muted uppercase tracking-wider transition-all"
+            >
+              🎯 Mark Interested
+            </button>
+            <button
+              onClick={() => handleBulkAction("archived")}
+              className="h-9 px-4 border border-border bg-transparent text-muted-foreground font-bold text-xs hover:bg-red-950 hover:text-red-400 hover:border-red-500 uppercase tracking-wider transition-all"
+            >
+              👁️ Archive
+            </button>
+            
+            <button
+              disabled={selectedCompanyIds.length < 2 || selectedCompanyIds.length > 3}
+              onClick={() => setShowComparison(true)}
+              className="h-9 px-4 border-2 border-accent bg-accent text-black font-black text-xs hover:bg-black hover:text-accent hover:border-black uppercase tracking-wider transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Compare 2 or 3 selected drives side-by-side"
+            >
+              📊 Compare Side-by-Side
+            </button>
+          </div>
+          
+          <button
+            onClick={() => setSelectedCompanyIds([])}
+            className="text-muted-foreground hover:text-foreground p-1"
+            title="Clear selection"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* Side-by-Side Comparison Modal */}
+      {showComparison && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200">
+          <div className="relative w-full max-w-5xl border-2 border-border bg-background p-6 md:p-8 space-y-8 animate-in slide-in-from-bottom-4 duration-300 rounded-none">
+            
+            {/* Header */}
+            <div className="flex justify-between items-center border-b-2 border-border pb-4">
+              <div>
+                <h2 className="text-2xl font-black uppercase tracking-tight">OPPORTUNITY SIDE-BY-SIDE COMPARISON</h2>
+                <p className="text-xs text-muted-foreground uppercase">Comparing CTC, Location, Eligibility and fit metrics</p>
+              </div>
+              <button
+                onClick={() => setShowComparison(false)}
+                className="border border-border p-2 bg-card hover:bg-accent hover:text-black hover:border-accent transition-all"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Comparison Grid */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse border-2 border-border">
+                <thead>
+                  <tr className="border-b-2 border-border bg-muted/40 text-[10px] font-extrabold uppercase tracking-widest text-muted-foreground">
+                    <th className="py-4 px-6 border-r border-border">SPECIFICATIONS</th>
+                    {selectedCompanyIds.slice(0, 3).map(id => {
+                      const comp = companies.find(c => c.id === id);
+                      return (
+                        <th key={id} className="py-4 px-6 border-r border-border text-foreground font-black text-sm">
+                          {comp?.name.toUpperCase()}
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border font-medium text-xs text-foreground uppercase">
+                  <tr className="hover:bg-muted/10">
+                    <td className="py-4 px-6 border-r border-border font-black text-muted-foreground">ROLE</td>
+                    {selectedCompanyIds.slice(0, 3).map(id => {
+                      const comp = companies.find(c => c.id === id);
+                      return <td key={id} className="py-4 px-6 border-r border-border">{comp?.role || "—"}</td>;
+                    })}
+                  </tr>
+                  <tr className="hover:bg-muted/10">
+                    <td className="py-4 px-6 border-r border-border font-black text-muted-foreground">CATEGORY</td>
+                    {selectedCompanyIds.slice(0, 3).map(id => {
+                      const comp = companies.find(c => c.id === id);
+                      return <td key={id} className="py-4 px-6 border-r border-border"><span className="px-2 py-0.5 bg-muted border border-border">{comp?.category}</span></td>;
+                    })}
+                  </tr>
+                  <tr className="hover:bg-muted/10">
+                    <td className="py-4 px-6 border-r border-border font-black text-muted-foreground">CTC / STIPEND</td>
+                    {selectedCompanyIds.slice(0, 3).map(id => {
+                      const comp = companies.find(c => c.id === id);
+                      return (
+                        <td key={id} className="py-4 px-6 border-r border-border">
+                          <p className="font-bold">{comp?.ctc || "—"}</p>
+                          <p className="text-[10px] text-muted-foreground">{comp?.stipend ? `Stipend: ${comp?.stipend}` : "No stipend"}</p>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  <tr className="hover:bg-muted/10">
+                    <td className="py-4 px-6 border-r border-border font-black text-muted-foreground">LOCATION</td>
+                    {selectedCompanyIds.slice(0, 3).map(id => {
+                      const comp = companies.find(c => c.id === id);
+                      return <td key={id} className="py-4 px-6 border-r border-border">{comp?.job_location || "—"}</td>;
+                    })}
+                  </tr>
+                  <tr className="hover:bg-muted/10">
+                    <td className="py-4 px-6 border-r border-border font-black text-muted-foreground">ACADEMIC ELIGIBILITY</td>
+                    {selectedCompanyIds.slice(0, 3).map(id => {
+                      const comp = companies.find(c => c.id === id);
+                      return (
+                        <td key={id} className="py-4 px-6 border-r border-border space-y-1.5">
+                          {comp ? (
+                            <>
+                              <div className="flex items-center gap-1.5">
+                                {getEligibilityIcon(comp.eligibility_status)}
+                              </div>
+                              {comp.eligibility_reason && (
+                                <p className="text-[9px] text-muted-foreground leading-normal max-w-xs">{comp.eligibility_reason}</p>
+                              )}
+                            </>
+                          ) : "—"}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  <tr className="hover:bg-muted/10">
+                    <td className="py-4 px-6 border-r border-border font-black text-muted-foreground">ATS MATCH SCORE</td>
+                    {selectedCompanyIds.slice(0, 3).map(id => {
+                      const app = applications[id];
+                      return (
+                        <td key={id} className="py-4 px-6 border-r border-border font-mono font-bold text-sm">
+                          {app?.match_score > 0 ? (
+                            <span className="text-accent">{app.match_score}% MATCH</span>
+                          ) : (
+                            <span className="text-muted-foreground">0% (Not Tailored)</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  <tr className="hover:bg-muted/10">
+                    <td className="py-4 px-6 border-r border-border font-black text-muted-foreground">PREPARATION READINESS</td>
+                    {selectedCompanyIds.slice(0, 3).map(id => {
+                      const comp = companies.find(c => c.id === id);
+                      return (
+                        <td key={id} className="py-4 px-6 border-r border-border font-mono font-bold text-sm">
+                          {comp ? (
+                            <span className="text-foreground">{getPrepScore(comp)}%</span>
+                          ) : "—"}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  <tr className="hover:bg-muted/10">
+                    <td className="py-4 px-6 border-r border-border font-black text-muted-foreground">ACTION</td>
+                    {selectedCompanyIds.slice(0, 3).map(id => {
+                      const comp = companies.find(c => c.id === id);
+                      const app = applications[id];
+                      const isTracking = app && app.user_decision === 'tracking';
+                      
+                      return (
+                        <td key={id} className="py-4 px-6 border-r border-border">
+                          {comp ? (
+                            <button
+                              onClick={async () => {
+                                await handleUpdateApplication(comp.id, { user_decision: isTracking ? 'archived' : 'tracking' });
+                              }}
+                              className={`h-9 px-4 border font-bold text-xs uppercase tracking-wider transition-all ${
+                                isTracking 
+                                  ? "bg-transparent text-muted-foreground border-border hover:bg-red-950 hover:text-red-400 hover:border-red-500" 
+                                  : "bg-foreground text-background hover:bg-accent hover:text-black hover:border-accent"
+                              }`}
+                            >
+                              {isTracking ? "Stop Tracking" : "Start Tracking"}
+                            </button>
+                          ) : null}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+          </div>
+        </div>
+      )}
+
       {/* Global modern Company Workspace Drawer / Modal */}
       {selectedCompany && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200">
@@ -1943,14 +2234,12 @@ export default function DashboardPage() {
             
             {/* Left Nav Pane */}
             <div className="w-full md:w-56 border-r border-border bg-muted/15 flex flex-row md:flex-col shrink-0">
-              {/* Header inside modal */}
               <div className="hidden md:flex h-20 items-center justify-between border-b border-border px-6">
                 <span className="text-xs font-black tracking-widest text-foreground uppercase truncate">
                   {selectedCompany.name}
                 </span>
               </div>
 
-              {/* Navigation Items */}
               <div className="flex flex-row md:flex-col flex-1 py-2 overflow-x-auto md:overflow-x-visible">
                 <button
                   onClick={() => setModalTab("overview")}
@@ -1981,7 +2270,6 @@ export default function DashboardPage() {
                 </button>
               </div>
 
-              {/* Close trigger at bottom left */}
               <button
                 onClick={() => setSelectedCompany(null)}
                 className="hidden md:block h-14 border-t border-border bg-muted/30 hover:bg-red-650 hover:text-white transition-colors text-xs font-bold uppercase tracking-widest"
@@ -1992,7 +2280,6 @@ export default function DashboardPage() {
 
             {/* Right Content Pane */}
             <div className="flex-1 flex flex-col min-h-0 bg-background relative">
-              {/* Close button for mobile / top-right fallback */}
               <button
                 onClick={() => setSelectedCompany(null)}
                 className="absolute top-4 right-4 z-10 border border-border p-2 bg-card hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 md:hidden"
@@ -2228,7 +2515,6 @@ export default function DashboardPage() {
                         </div>
                       </div>
 
-                      {/* Eligibility checklist check */}
                       <div className="border border-border p-4 bg-muted/5 space-y-3">
                         <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ELIGIBILITY DETAILS</h4>
                         <div className="flex items-center gap-2">
