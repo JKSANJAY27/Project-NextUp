@@ -34,13 +34,23 @@ def create_application(
             detail="You have already applied/created an application tracker for this company."
         )
     
+    # Determine default states
+    user_dec = app_in.user_decision or "tracking"
+    rec_state = app_in.recruitment_state or "Registration"
+    if app_in.status == 'Applied' and rec_state == 'Registration':
+        rec_state = 'Awaiting Shortlist'
+
     new_app = Application(
         user_id=current_user.id,
         company_id=app_in.company_id,
         status=app_in.status,
         current_round=app_in.current_round,
         notes_enc=app_in.notes_enc,
-        match_score=0
+        match_score=0,
+        user_decision=user_dec,
+        recruitment_state=rec_state,
+        workspace_priority_override=app_in.workspace_priority_override,
+        snoozed_until=app_in.snoozed_until
     )
     db.add(new_app)
     db.commit()
@@ -81,9 +91,24 @@ def update_application(
             detail="Application tracker not found."
         )
     
+    # Sub-state transitions based on student status changes
+    if app_in.status is not None:
+        if app_in.status == 'Applied' and app.recruitment_state in (None, 'Registration'):
+            app.recruitment_state = 'Awaiting Shortlist'
+        elif app_in.status == 'OA' and app.recruitment_state in (None, 'Registration', 'Shortlisted', 'Awaiting Shortlist'):
+            app.recruitment_state = 'Awaiting OA Result'
+        elif app_in.status == 'Interview' and app.recruitment_state in (None, 'Registration', 'Shortlisted', 'OA', 'Awaiting OA Result'):
+            app.recruitment_state = 'Awaiting Interview Result'
+
     update_data = app_in.dict(exclude_unset=True)
     for field, value in update_data.items():
         setattr(app, field, value)
+        
+    # Enforce Rule of State Isolation: changing user_decision does not modify recruitment_state and vice versa
+    # This is naturally preserved since fields are updated explicitly from app_in schema.
+    
+    from datetime import datetime
+    app.last_user_activity_at = datetime.utcnow()
         
     db.add(app)
     db.commit()

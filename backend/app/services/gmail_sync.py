@@ -126,6 +126,11 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
     # If job_id is passed, we try to lock that specific job. Otherwise, we lock the oldest pending job.
     query = db.query(RawIngestionJob)
     if job_id:
+        if isinstance(job_id, str):
+            try:
+                job_id = UUID(job_id)
+            except ValueError:
+                pass
         # Check if the job exists and is pending, otherwise return False or get the oldest pending
         query = query.filter(RawIngestionJob.id == job_id, RawIngestionJob.status == 'pending')
     else:
@@ -191,6 +196,54 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
         
         company = db.query(Company).filter(Company.fingerprint == fingerprint).first()
+        
+        if not company:
+            # Try fuzzy match based on company name, batch year, and cycle by scanning existing companies
+            candidate_companies = db.query(Company).all()
+            best_match = None
+            best_score = -1
+            
+            for c in candidate_companies:
+                # Clean up names for comparison (remove common suffixes)
+                db_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', c.name, flags=re.I).strip().lower()
+                ext_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', company_name, flags=re.I).strip().lower()
+                
+                # Strip spaces
+                db_name_clean = re.sub(r'\s+', ' ', db_name_clean)
+                ext_name_clean = re.sub(r'\s+', ' ', ext_name_clean)
+                
+                score = 0
+                # 1. Exact match of clean names
+                if db_name_clean == ext_name_clean:
+                    score += 60
+                # 2. Bidirectional substring match
+                elif (len(db_name_clean) >= 3 and db_name_clean in ext_name_clean) or (len(ext_name_clean) >= 3 and ext_name_clean in db_name_clean):
+                    overlap_ratio = len(db_name_clean) / len(ext_name_clean) if len(ext_name_clean) > 0 else 0
+                    if overlap_ratio > 1:
+                        overlap_ratio = 1 / overlap_ratio
+                    score += int(30 * overlap_ratio) + 20
+                # 3. Fallback match: check if the company name appears in the email subject
+                elif len(db_name_clean) >= 3 and db_name_clean in subject.lower():
+                    score += 40
+                
+                # Match cycle
+                if c.recruitment_cycle.lower() == recruitment_cycle.lower():
+                    score += 20
+                elif recruitment_cycle.lower() == "default" or c.recruitment_cycle.lower() == "default":
+                    score += 10
+                    
+                # Match batch year if possible (from created_at of company)
+                c_batch = c.created_at.year if c.created_at else datetime.utcnow().year
+                if abs(c_batch - batch_year) <= 1:
+                    score += 20
+                    
+                if score > best_score:
+                    best_score = score
+                    best_match = c
+            
+            if best_score >= 50:
+                company = best_match
+                logger.info(f"Fuzzy matched incoming email to existing company: {company.name} (ID: {company.id}, Match Score: {best_score})")
         
         # Eligibility rules JSONB setup
         eligibility_rules = {
@@ -258,6 +311,8 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             event_type = 'INTERVIEW'
         elif 'offer' in subject.lower() or 'congratulations' in subject.lower():
             event_type = 'OFFER'
+        elif 'regret' in subject.lower() or 'not selected' in subject.lower() or 'rejection' in subject.lower() or 'reject' in subject.lower():
+            event_type = 'REJECTION'
             
         event = db.query(CompanyEvent).filter(
             CompanyEvent.company_id == company.id,
@@ -286,6 +341,9 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             db.add(notification_job)
         else:
             logger.info(f"Re-using existing company event {event.id} ingested by Edge Function.")
+            
+        # Update recruitment states for student applications under this company
+        update_recruitment_states(db, company, event_type, email_timestamp, body)
         
         # 6. Parse and store attachments
         for att in attachments:
@@ -347,12 +405,16 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 
                 # Check for zero-knowledge matches in student profiles
                 matched_count = 0
+                matched_user_ids = set()
+                shortlist_hashes = set()
+                
                 for nid in neo_ids:
-                    # Calculate blind index hash
                     nid_hash = generate_blind_index(nid, settings.PEPPER)
+                    shortlist_hashes.add(nid_hash)
                     
                     profile = db.query(StudentProfile).filter(StudentProfile.neo_id_hash == nid_hash).first()
                     if profile:
+                        matched_user_ids.add(profile.user_id)
                         # Create or update application for student
                         app = db.query(Application).filter(
                             Application.user_id == profile.user_id,
@@ -364,6 +426,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                                 user_id=profile.user_id,
                                 company_id=company.id,
                                 status='Shortlisted',
+                                recruitment_state='Shortlisted',
                                 current_round='Shortlist Announcement'
                             )
                             db.add(app)
@@ -371,6 +434,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                             # If they are already offers or rejected, don't overwrite status
                             if app.status not in ('Offer', 'Rejected', 'Declined', 'Ignored'):
                                 app.status = 'Shortlisted'
+                                app.recruitment_state = 'Shortlisted'
                                 app.current_round = 'Shortlisted'
                                 
                         # Insert Direct Notification
@@ -388,6 +452,22 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                                 notification_type='shortlist'
                             ))
                         matched_count += 1
+                        
+                # Auto Off-ramp & Likely Rejected logic:
+                # Find all other student applications under this company that are NOT in the shortlist
+                # but are currently active (status is Applied, Shortlisted, OA, or Interview).
+                active_apps = db.query(Application).filter(
+                    Application.company_id == company.id,
+                    Application.status.in_(('Applied', 'Shortlisted', 'OA', 'Interview'))
+                ).all()
+                
+                for app in active_apps:
+                    if app.user_id not in matched_user_ids:
+                        # Double check student profile hash
+                        profile = db.query(StudentProfile).filter(StudentProfile.user_id == app.user_id).first()
+                        if profile and profile.neo_id_hash not in shortlist_hashes:
+                            app.status = 'Likely Rejected'
+                            logger.info(f"Student {app.user_id} marked as Likely Rejected for company {company.name}")
                 logger.info(f"Processed Shortlist Excel attachment: {filename}. Matched {matched_count} system students.")
                 
         # 7. Complete job successfully
@@ -498,3 +578,61 @@ def process_notification_jobs(db: Session):
             job.status = 'failed'
             logger.error(f"Failed to process notification job {job.id}: {str(e)}")
             db.commit()
+
+def update_recruitment_states(db: Session, company: Company, event_type: str, event_timestamp: datetime, email_body: str):
+    """
+    Updates recruitment_state for all student applications linked to the company
+    based on the type of incoming event.
+    """
+    apps = db.query(Application).filter(Application.company_id == company.id).all()
+    
+    for app in apps:
+        old_state = app.recruitment_state
+        
+        if event_type == 'REGISTRATION':
+            if app.recruitment_state is None or app.recruitment_state == 'Registration':
+                app.recruitment_state = 'Registration'
+                
+        elif event_type == 'OA':
+            # Check if event is in the past, or email says it is done
+            is_past = event_timestamp < datetime.utcnow()
+            if is_past or any(k in email_body.lower() for k in ["completed", "results", "conducted", "held"]):
+                app.recruitment_state = 'Awaiting OA Result'
+            else:
+                if app.recruitment_state in (None, 'Registration', 'Shortlisted', 'Awaiting Shortlist'):
+                    app.recruitment_state = 'OA'
+                    if app.status in ('Applied', 'Shortlisted'):
+                        app.status = 'OA'
+                        
+        elif event_type == 'INTERVIEW':
+            is_past = event_timestamp < datetime.utcnow()
+            if is_past or any(k in email_body.lower() for k in ["completed", "results", "conducted", "held", "feedback"]):
+                app.recruitment_state = 'Awaiting Interview Result'
+            else:
+                if app.recruitment_state in (None, 'Registration', 'Shortlisted', 'OA', 'Awaiting OA Result'):
+                    app.recruitment_state = 'Interview'
+                    if app.status in ('Applied', 'Shortlisted', 'OA'):
+                        app.status = 'Interview'
+                        
+        elif event_type == 'OFFER':
+            if app.recruitment_state in (None, 'Registration', 'Shortlisted', 'OA', 'Interview', 'Awaiting Interview Result'):
+                app.recruitment_state = 'Offer'
+                if app.status not in ('Rejected', 'Declined', 'Ignored'):
+                    app.status = 'Offer'
+                    
+        elif event_type == 'REJECTION':
+            app.recruitment_state = 'Rejected'
+            app.status = 'Rejected'
+            
+        elif event_type == 'SHORTLIST':
+            if app.recruitment_state in (None, 'Registration', 'Awaiting Shortlist'):
+                app.recruitment_state = 'Shortlisted'
+                if app.status == 'Applied':
+                    app.status = 'Shortlisted'
+                    
+        # Update last user activity if changed
+        if app.recruitment_state != old_state:
+            app.last_user_activity_at = datetime.utcnow()
+            logger.info(f"Updated Application {app.id} recruitment_state: {old_state} -> {app.recruitment_state}")
+    
+    db.commit()

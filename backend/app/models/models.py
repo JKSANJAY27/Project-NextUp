@@ -116,6 +116,11 @@ class Application(Base):
     notes_enc = Column(String)
     match_score = Column(Integer, default=0)
     applied_at = Column(DateTime, default=datetime.utcnow)
+    user_decision = Column(String, default="unseen")
+    recruitment_state = Column(String, default="Registration")
+    last_user_activity_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    workspace_priority_override = Column(String, default=None, nullable=True)
+    snoozed_until = Column(DateTime, default=None, nullable=True)
 
     user = relationship("User", back_populates="applications")
     company = relationship("Company", back_populates="applications")

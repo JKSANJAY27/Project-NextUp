@@ -132,12 +132,17 @@ CREATE TABLE IF NOT EXISTS applications (
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
     status VARCHAR(100) DEFAULT 'Applied' CHECK (
-        status IN ('Applied', 'Shortlisted', 'OA', 'Interview', 'Offer', 'Rejected', 'Declined', 'Ignored')
+        status IN ('Applied', 'Shortlisted', 'OA', 'Interview', 'Offer', 'Rejected', 'Declined', 'Ignored', 'Likely Rejected')
     ),
     current_round VARCHAR(255) DEFAULT 'Applied',
     notes_enc TEXT,
     match_score INT DEFAULT 0,
     applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    user_decision VARCHAR(50) DEFAULT 'unseen' CHECK (user_decision IN ('unseen', 'interested', 'tracking', 'archived', 'snoozed')),
+    recruitment_state VARCHAR(50) DEFAULT 'Registration' CHECK (recruitment_state IN ('Registration', 'Shortlisted', 'OA', 'Interview', 'Offer', 'Rejected', 'Awaiting Result', 'Awaiting Shortlist', 'Awaiting OA Result', 'Awaiting Interview Result')),
+    last_user_activity_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    workspace_priority_override VARCHAR(50) DEFAULT NULL,
+    snoozed_until TIMESTAMP WITH TIME ZONE DEFAULT NULL,
     UNIQUE(user_id, company_id)
 );
 

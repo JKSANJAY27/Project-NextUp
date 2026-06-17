@@ -74,11 +74,19 @@ class ApplicationCreate(BaseModel):
     status: str
     current_round: Optional[str] = "Applied"
     notes_enc: Optional[str] = None
+    user_decision: Optional[str] = "tracking"
+    recruitment_state: Optional[str] = "Registration"
+    workspace_priority_override: Optional[str] = None
+    snoozed_until: Optional[datetime] = None
 
 class ApplicationUpdate(BaseModel):
     status: Optional[str] = None
     current_round: Optional[str] = None
     notes_enc: Optional[str] = None
+    user_decision: Optional[str] = None
+    recruitment_state: Optional[str] = None
+    workspace_priority_override: Optional[str] = None
+    snoozed_until: Optional[datetime] = None
 
 class ApplicationOut(BaseModel):
     id: UUID
@@ -89,6 +97,11 @@ class ApplicationOut(BaseModel):
     applied_at: datetime
     notes_enc: Optional[str]
     match_score: int
+    user_decision: Optional[str]
+    recruitment_state: Optional[str]
+    last_user_activity_at: datetime
+    workspace_priority_override: Optional[str]
+    snoozed_until: Optional[datetime]
     company: CompanyOut
 
     class Config:

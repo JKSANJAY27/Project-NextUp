@@ -127,28 +127,36 @@ async def import_placement_file(
         if x_client_key and profile and profile.neo_id_enc:
             try:
                 decrypted_neo = decrypt_field(profile.neo_id_enc, x_client_key).upper().strip()
+                app = db.query(Application).filter(
+                    Application.user_id == current_user.id,
+                    Application.company_id == company_id
+                ).first()
+                
                 if decrypted_neo in extracted_ids:
                     is_shortlisted = True
                     
                     # Update application tracker status
-                    app = db.query(Application).filter(
-                        Application.user_id == current_user.id,
-                        Application.company_id == company_id
-                    ).first()
-                    
                     if app:
                         app.status = "Shortlisted"
+                        app.recruitment_state = "Shortlisted"
                         app.current_round = "Shortlisted"
                     else:
                         app = Application(
                             user_id=current_user.id,
                             company_id=company_id,
                             status="Shortlisted",
+                            recruitment_state="Shortlisted",
                             current_round="Shortlisted",
                             match_score=0
                         )
                     db.add(app)
                     db.commit()
+                else:
+                    # User not in shortlist, set status to Likely Rejected if they were previously active
+                    if app and app.status in ('Applied', 'Shortlisted', 'OA', 'Interview'):
+                        app.status = "Likely Rejected"
+                        db.add(app)
+                        db.commit()
             except Exception as e:
                 logger.error(f"Failed to decrypt user neo_id or shortlist check: {str(e)}")
                 
