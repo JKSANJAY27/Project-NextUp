@@ -211,6 +211,13 @@ export default function DashboardPage() {
   const [syncing, setSyncing] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
 
+  // Company Workspace Drawer state
+  const [modalTab, setModalTab] = useState<"overview" | "details" | "toolkit">("overview");
+  const [editingRoundNote, setEditingRoundNote] = useState<string | null>(null);
+  const [tempNoteText, setTempNoteText] = useState("");
+  const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
+  const [decryptedNotes, setDecryptedNotes] = useState<Record<string, string>>({});
+
   // Manual Company Form State
   const [compName, setCompName] = useState("");
   const [compCategory, setCompCategory] = useState("Dream");
@@ -349,6 +356,34 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, encryptionKey]);
 
+  // Decrypt notes whenever selectedCompany changes or encryption key is available
+  useEffect(() => {
+    const decryptNotesObj = async () => {
+      if (!selectedCompany || !encryptionKey) {
+        setDecryptedNotes({});
+        return;
+      }
+      const app = applications[selectedCompany.id];
+      if (!app || !app.notes_enc) {
+        setDecryptedNotes({});
+        return;
+      }
+      
+      try {
+        const { decryptData } = await import("@/lib/crypto");
+        const plaintext = await decryptData(app.notes_enc, encryptionKey);
+        const parsed = JSON.parse(plaintext);
+        setDecryptedNotes(parsed || {});
+      } catch (err) {
+        console.error("Failed to decrypt notes:", err);
+        setDecryptedNotes({
+          [app.status || "Applied"]: app.notes_enc
+        });
+      }
+    };
+    decryptNotesObj();
+  }, [selectedCompany, applications, encryptionKey]);
+
   // Handle manual company creation
   const handleAddCompany = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -476,6 +511,31 @@ export default function DashboardPage() {
     });
   };
 
+  // Timeline Notes GCM Encryption & Save
+  const handleSaveRoundNote = async (roundKey: string, noteText: string) => {
+    if (!selectedCompany || !encryptionKey) return;
+    const app = applications[selectedCompany.id];
+    
+    const updatedNotes = {
+      ...decryptedNotes,
+      [roundKey]: noteText
+    };
+    
+    try {
+      const { encryptData } = await import("@/lib/crypto");
+      const plaintext = JSON.stringify(updatedNotes);
+      const encrypted = await encryptData(plaintext, encryptionKey);
+      
+      await handleUpdateApplication(selectedCompany.id, {
+        notes_enc: encrypted
+      });
+      setDecryptedNotes(updatedNotes);
+    } catch (err) {
+      console.error("Failed to save round note:", err);
+      alert("Failed to save note. Please verify encryption key.");
+    }
+  };
+
   // Manual trigger for email sync (calls FastAPI queue processing webhook)
   const handleTriggerSync = async () => {
     setSyncing(true);
@@ -596,7 +656,6 @@ export default function DashboardPage() {
       });
       focusText = `Your focus: Prep for ${compNames.join(", ")}.`;
     } else if (trackedApps.length > 0) {
-      // sort tracked apps by priority score
       const sortedTracked = [...trackedApps].sort((a, b) => b.priority_score - a.priority_score);
       const c = companies.find(comp => comp.id === sortedTracked[0].company_id);
       if (c) {
@@ -652,23 +711,115 @@ export default function DashboardPage() {
     return 'low';
   };
 
+  // Compile timeline events list for the selected company drawer
+  const getTimelineEvents = () => {
+    if (!selectedCompany) return [];
+    
+    const bundle = notificationBundles.find(b => b.company_id === selectedCompany.id);
+    const events: any[] = [];
+    
+    if (bundle && bundle.notifications.length > 0) {
+      bundle.notifications.forEach(n => {
+        events.push({
+          id: n.id,
+          type: n.notification_type,
+          title: n.notification_type.toUpperCase(),
+          message: n.message,
+          body: n.body || n.message,
+          sender: n.sender || "CDC Mail",
+          timestamp: n.timestamp ? new Date(n.timestamp) : new Date(n.created_at),
+          confidence_scores: n.confidence_scores || {}
+        });
+      });
+    } else {
+      events.push({
+        id: "baseline",
+        type: "system",
+        title: "WORKSPACE CREATED",
+        message: `Application workspace for ${selectedCompany.name} is initialized.`,
+        body: `Workspace tracking started for ${selectedCompany.role} position at ${selectedCompany.name}.`,
+        sender: "System Event",
+        timestamp: selectedCompany.registration_deadline ? new Date(selectedCompany.registration_deadline) : new Date(),
+        confidence_scores: {}
+      });
+    }
+    
+    return events.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  };
+
+  // Calculate Application Health Score checkmarks
+  const getHealthScore = (app: Application | undefined) => {
+    if (!app) return 0;
+    
+    let score = 0;
+    const stage = app.recruitment_state || app.status || 'Registration';
+    const stageLower = stage.toLowerCase();
+    
+    if (stageLower.includes('registration') || stageLower.includes('interested')) {
+      score += 15;
+    } else if (stageLower.includes('applied') || stageLower.includes('awaiting shortlist')) {
+      score += 40;
+    } else if (stageLower.includes('shortlisted')) {
+      score += 55;
+    } else if (stageLower.includes('oa') || stageLower.includes('awaiting oa result')) {
+      score += 70;
+    } else if (stageLower.includes('interview') || stageLower.includes('awaiting interview result')) {
+      score += 85;
+    } else if (stageLower.includes('offer') || stageLower.includes('rejected') || stageLower.includes('likely rejected')) {
+      score += 100;
+    }
+    
+    if (app.match_score > 0) {
+      score += 10;
+    }
+    
+    if (app.notes_enc) {
+      score += 5;
+    }
+    
+    return Math.min(100, score);
+  };
+
+  // Get Last Verified Update transparency parameters
+  const getLastVerifiedUpdate = (bundle: NotificationBundle | undefined, comp: Company) => {
+    if (!bundle || bundle.notifications.length === 0) {
+      return {
+        source: "Manual Ingestion",
+        received: comp.registration_deadline ? new Date(comp.registration_deadline).toLocaleString("en-IN") : "Unknown",
+        confidence: 100
+      };
+    }
+    
+    const latestNotif = bundle.notifications[0];
+    let avgConfidence = 95;
+    if (latestNotif.confidence_scores) {
+      const scores = Object.values(latestNotif.confidence_scores);
+      if (scores.length > 0) {
+        avgConfidence = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 100);
+      }
+    }
+    
+    return {
+      source: latestNotif.sender || "CDC Mail",
+      received: new Date(latestNotif.created_at).toLocaleString("en-IN"),
+      confidence: avgConfidence
+    };
+  };
+
   // Filter lists based on tab selection
   const filteredCompanies = companies.filter((c) => {
     const app = applications[c.id];
     
-    // Opportunities Drives Board Tab: Hide archived/dismissed drives
     if (activeTab === "opportunities") {
       if (app && app.user_decision === "archived") return false;
     }
     
-    // Active Tracking Tab: Show only tracking applications that are not snoozed
     if (activeTab === "tracking") {
       if (!app || app.user_decision !== "tracking") return false;
       if (isSnoozed(app)) return false;
       if (focusMode && app.workspace_priority_override !== 'pinned') return false;
     }
 
-    // My Applications (Analytics/History) Tab: Show only finished/rejected or archived ones
     if (activeTab === "applications") {
       if (!app) return false;
       const isArchived = app.user_decision === "archived";
@@ -710,11 +861,7 @@ export default function DashboardPage() {
 
   // Pre-calculate variables for Action Center and My Applications
   const todayEvents = getTodayEvents();
-  
-  // Untriaged notifications bundles
   const untriagedBundles = notificationBundles.filter(b => b.unread_count > 0);
-
-  // Tracked Applications list for Immediate Actions
   const trackedApps = Object.values(applications)
     .filter(app => app.user_decision === 'tracking' && !isSnoozed(app))
     .sort((a, b) => b.priority_score - a.priority_score);
@@ -726,6 +873,18 @@ export default function DashboardPage() {
   const interviewReachedCount = historyApps.filter(app => ["Technical", "HR", "Offer"].includes(app.status) || app.recruitment_state.includes("Interview")).length;
   const offersCount = historyApps.filter(app => app.status === "Offer" || app.recruitment_state === "Offer").length;
   const conversionRate = totalAppsCount > 0 ? ((offersCount / totalAppsCount) * 100).toFixed(1) : "0.0";
+
+  // Timeline and Workspace Drawer computed states
+  const workspaceEvents = getTimelineEvents();
+  const selectedApp = selectedCompany ? applications[selectedCompany.id] : undefined;
+  const healthVal = getHealthScore(selectedApp);
+  const selectedMeta = selectedCompany ? getLastVerifiedUpdate(notificationBundles.find(b => b.company_id === selectedCompany.id), selectedCompany) : null;
+  const selectedNextAction = selectedCompany && selectedApp ? getNextActionMessage(selectedApp, selectedCompany) : "Track this workspace to begin preparation.";
+
+  // circular progress SVG values
+  const radius = 30;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (healthVal / 100) * circumference;
 
   return (
     <div className="flex-1 bg-background flex flex-col min-h-screen">
@@ -1036,7 +1195,7 @@ export default function DashboardPage() {
                           </div>
                         </div>
 
-                        <div className="cursor-pointer" onClick={() => setSelectedCompany(comp)}>
+                        <div className="cursor-pointer" onClick={() => { setSelectedCompany(comp); setModalTab("overview"); }}>
                           <h4 className="font-extrabold text-base uppercase tracking-tighter hover:text-accent transition-colors">
                             {comp.name}
                           </h4>
@@ -1067,7 +1226,7 @@ export default function DashboardPage() {
 
                         <div className="flex justify-between items-center border-t border-border pt-3">
                           <button 
-                            onClick={() => setSelectedCompany(comp)}
+                            onClick={() => { setSelectedCompany(comp); setModalTab("overview"); }}
                             className="text-xs font-bold text-accent hover:underline uppercase"
                           >
                             Open Workspace →
@@ -1374,7 +1533,7 @@ export default function DashboardPage() {
                           <tr key={c.id} className="hover:bg-muted/15 transition-colors">
                             <td 
                               className="py-5 px-6 cursor-pointer group"
-                              onClick={() => setSelectedCompany(c)}
+                              onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}
                             >
                               <p className="font-bold text-base uppercase tracking-tighter text-foreground group-hover:text-accent transition-colors">{c.name}</p>
                               <p className="text-xs text-muted-foreground uppercase">{c.role} {c.job_location ? `✦ ${c.job_location}` : ""}</p>
@@ -1520,7 +1679,7 @@ export default function DashboardPage() {
                 Loading workspace tracker board...
               </div>
             ) : filteredCompanies.length === 0 ? (
-              <div className="text-center py-20 border-2 border-dashed border-border font-bold uppercase tracking-wider text-muted-foreground">
+              <div className="text-center py-20 border-2 border-dashed border-border text-muted-foreground font-bold uppercase tracking-wider text-xs">
                 {focusMode 
                   ? "No focus/pinned applications in active tracking. Pin workspaces to display them in focus mode."
                   : "No companies currently in active tracking. Go to the Opportunities board to start tracking drives."}
@@ -1600,7 +1759,7 @@ export default function DashboardPage() {
                                   </button>
                                 </div>
 
-                                <div onClick={() => setSelectedCompany(c)} className="cursor-pointer">
+                                <div onClick={() => { setSelectedCompany(c); setModalTab("overview"); }} className="cursor-pointer">
                                   <h4 className="font-extrabold text-sm uppercase tracking-tighter text-foreground truncate group-hover:text-accent transition-colors">
                                     {c.name}
                                   </h4>
@@ -1728,7 +1887,7 @@ export default function DashboardPage() {
                           
                           return (
                             <tr key={c.id} className="hover:bg-muted/15 transition-colors">
-                              <td className="py-4 px-6 cursor-pointer" onClick={() => setSelectedCompany(c)}>
+                              <td className="py-4 px-6 cursor-pointer" onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}>
                                 <p className="font-bold text-sm uppercase tracking-tight text-foreground">{c.name}</p>
                                 <p className="text-[10px] text-muted-foreground uppercase">{c.role} ✦ {c.job_location || "Unknown"}</p>
                               </td>
@@ -1777,148 +1936,439 @@ export default function DashboardPage() {
 
       </div>
 
-      {/* Global modern kinetic company details modal */}
+      {/* Global modern Company Workspace Drawer / Modal */}
       {selectedCompany && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200">
-          <div className="relative w-full max-w-4xl border-2 border-border bg-background p-6 md:p-8 space-y-8 animate-in slide-in-from-bottom-4 duration-300 rounded-none">
-            {/* Close button */}
-            <button
-              onClick={() => setSelectedCompany(null)}
-              className="absolute top-4 right-4 border-2 border-border p-2 bg-card hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95"
-              aria-label="Close modal"
-            >
-              <X size={16} />
-            </button>
-
-            {/* Title & Category */}
-            <div className="border-b-2 border-border pb-6 space-y-2">
-              <div className="flex flex-wrap gap-2 items-center">
-                <span className="bg-accent px-2 py-1 text-[10px] font-extrabold tracking-widest text-black border border-accent uppercase">
-                  {selectedCompany.category}
-                </span>
-                <span className="bg-muted px-2 py-1 text-[10px] font-bold tracking-widest text-muted-foreground border border-border uppercase">
-                  {selectedCompany.job_location || "LOCATION UNKNOWN"}
+          <div className="relative w-full max-w-5xl border-2 border-border bg-background flex flex-col md:flex-row h-[85vh] animate-in slide-in-from-bottom-4 duration-300 rounded-none overflow-hidden">
+            
+            {/* Left Nav Pane */}
+            <div className="w-full md:w-56 border-r border-border bg-muted/15 flex flex-row md:flex-col shrink-0">
+              {/* Header inside modal */}
+              <div className="hidden md:flex h-20 items-center justify-between border-b border-border px-6">
+                <span className="text-xs font-black tracking-widest text-foreground uppercase truncate">
+                  {selectedCompany.name}
                 </span>
               </div>
-              <h2 className="text-3xl md:text-4xl font-extrabold tracking-tighter uppercase leading-none">
-                {selectedCompany.name}
-              </h2>
-              <p className="text-sm font-bold text-muted-foreground uppercase tracking-widest">
-                {selectedCompany.role || "Software Engineer"}
-              </p>
+
+              {/* Navigation Items */}
+              <div className="flex flex-row md:flex-col flex-1 py-2 overflow-x-auto md:overflow-x-visible">
+                <button
+                  onClick={() => setModalTab("overview")}
+                  className={`flex-1 md:flex-none flex items-center gap-3 px-6 py-3.5 text-xs font-bold uppercase tracking-wider transition-all text-left ${
+                    modalTab === "overview" ? "bg-accent text-black font-black" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  <Calendar size={14} />
+                  <span>OVERVIEW</span>
+                </button>
+                <button
+                  onClick={() => setModalTab("details")}
+                  className={`flex-1 md:flex-none flex items-center gap-3 px-6 py-3.5 text-xs font-bold uppercase tracking-wider transition-all text-left ${
+                    modalTab === "details" ? "bg-accent text-black font-black" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  <Link2 size={14} />
+                  <span>JOB DETAILS</span>
+                </button>
+                <button
+                  onClick={() => setModalTab("toolkit")}
+                  className={`flex-1 md:flex-none flex items-center gap-3 px-6 py-3.5 text-xs font-bold uppercase tracking-wider transition-all text-left ${
+                    modalTab === "toolkit" ? "bg-accent text-black font-black" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  <Award size={14} />
+                  <span>AI TOOLKIT</span>
+                </button>
+              </div>
+
+              {/* Close trigger at bottom left */}
+              <button
+                onClick={() => setSelectedCompany(null)}
+                className="hidden md:block h-14 border-t border-border bg-muted/30 hover:bg-red-650 hover:text-white transition-colors text-xs font-bold uppercase tracking-widest"
+              >
+                CLOSE WORKSPACE
+              </button>
             </div>
 
-            {/* Split specifications */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 border-b border-border pb-6">
-              <div>
-                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">CTC / SALARY</span>
-                <span className="text-lg font-black uppercase text-foreground">{selectedCompany.ctc || "—"}</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">STIPEND</span>
-                <span className="text-lg font-black uppercase text-foreground">{selectedCompany.stipend || "—"}</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">REGISTRATION DEADLINE</span>
-                <span className="text-xs font-mono font-bold text-foreground">
-                  {selectedCompany.registration_deadline 
-                    ? new Date(selectedCompany.registration_deadline).toLocaleString("en-IN")
-                    : "—"}
-                </span>
-              </div>
-            </div>
+            {/* Right Content Pane */}
+            <div className="flex-1 flex flex-col min-h-0 bg-background relative">
+              {/* Close button for mobile / top-right fallback */}
+              <button
+                onClick={() => setSelectedCompany(null)}
+                className="absolute top-4 right-4 z-10 border border-border p-2 bg-card hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 md:hidden"
+                aria-label="Close modal"
+              >
+                <X size={16} />
+              </button>
 
-            {/* Split layout details */}
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
-              {/* Left Column: Requirements & Links */}
-              <div className="md:col-span-5 space-y-6">
-                {/* Eligibility Check */}
-                <div className="border border-border p-4 bg-muted/10 space-y-3">
-                  <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ELIGIBILITY DETAILS</h4>
-                  <div className="flex items-center gap-2">
-                    {getEligibilityIcon(selectedCompany.eligibility_status)}
-                    <span className="text-xs font-bold uppercase">{selectedCompany.eligibility_status}</span>
-                  </div>
-                  {selectedCompany.eligibility_reason && (
-                    <p className="text-[10px] text-muted-foreground uppercase leading-snug">
-                      {selectedCompany.eligibility_reason}
-                    </p>
-                  )}
-                </div>
+              <div className="flex-1 p-6 md:p-8 overflow-y-auto space-y-8 select-text">
+                
+                {/* 1. OVERVIEW & TIMELINE TAB */}
+                {modalTab === "overview" && (
+                  <div className="space-y-8">
+                    {/* Header Summary */}
+                    <div className="border-b border-border pb-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div>
+                        <h2 className="text-2xl font-black uppercase tracking-tighter leading-none">{selectedCompany.name} Workspace</h2>
+                        <p className="text-xs text-muted-foreground uppercase mt-1">{selectedCompany.role} ✦ {selectedCompany.job_location || "Unknown location"}</p>
+                      </div>
+                      <span className="bg-accent px-2 py-0.5 border border-accent text-[9px] font-black text-black uppercase w-max">
+                        {selectedCompany.category}
+                      </span>
+                    </div>
 
-                {/* ATS / JD Keywords */}
-                {selectedCompany.jd_ats_keywords && selectedCompany.jd_ats_keywords.length > 0 && (
-                  <div className="space-y-2">
-                    <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ATS KEYWORDS</h4>
-                    <div className="flex flex-wrap gap-1.5">
-                      {selectedCompany.jd_ats_keywords.map((kw: string, i: number) => (
-                        <span key={i} className="text-[9px] font-bold bg-muted border border-border px-2 py-0.5 text-foreground uppercase">
-                          {kw}
-                        </span>
-                      ))}
+                    {/* Next Action & Health Indicator */}
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-stretch">
+                      {/* Strictly Singular Next Action */}
+                      <div className="md:col-span-8 border-2 border-border p-5 bg-gradient-to-r from-accent/5 to-transparent relative overflow-hidden flex flex-col justify-between">
+                        <div className="absolute -right-12 -top-12 w-32 h-32 bg-accent/10 rounded-full blur-2xl" />
+                        <span className="text-[9px] font-black tracking-widest text-accent uppercase block">⚡ NEXT RECOMMENDATION</span>
+                        <p className="text-sm font-bold text-foreground uppercase leading-relaxed mt-2 relative z-10">
+                          👉 {selectedNextAction}
+                        </p>
+                      </div>
+
+                      {/* Application Health Score */}
+                      <div className="md:col-span-4 border-2 border-border p-5 bg-muted/5 flex items-center justify-between">
+                        <div>
+                          <span className="text-[9px] font-black tracking-widest text-muted-foreground uppercase block">HEALTH SCORE</span>
+                          <span className="text-xs font-bold text-muted-foreground uppercase block mt-1">Application readiness</span>
+                        </div>
+                        {selectedApp ? (
+                          <div className="relative flex items-center justify-center h-16 w-16">
+                            <svg className="w-full h-full transform -rotate-90">
+                              <circle
+                                cx="32"
+                                cy="32"
+                                r={radius}
+                                className="stroke-muted"
+                                strokeWidth="5"
+                                fill="transparent"
+                              />
+                              <circle
+                                cx="32"
+                                cy="32"
+                                r={radius}
+                                className="stroke-accent transition-all duration-500"
+                                strokeWidth="5"
+                                fill="transparent"
+                                strokeDasharray={circumference}
+                                strokeDashoffset={strokeDashoffset}
+                              />
+                            </svg>
+                            <span className="absolute text-xs font-black">{healthVal}%</span>
+                          </div>
+                        ) : (
+                          <span className="text-xs font-bold text-muted-foreground uppercase">NOT TRACKED</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Last Verified Update Widget */}
+                    {selectedMeta && (
+                      <div className="border border-border p-4 bg-muted/5 space-y-2">
+                        <h4 className="text-[10px] font-black tracking-widest text-muted-foreground uppercase">
+                          ✓ LAST VERIFIED UPDATE
+                        </h4>
+                        <div className="grid grid-cols-3 gap-4 text-center">
+                          <div className="border-r border-border/50">
+                            <span className="text-[8px] font-bold text-muted-foreground uppercase block">SOURCE</span>
+                            <span className="text-xs font-black uppercase text-foreground truncate block max-w-full">{selectedMeta.source}</span>
+                          </div>
+                          <div className="border-r border-border/50">
+                            <span className="text-[8px] font-bold text-muted-foreground uppercase block">RECEIVED</span>
+                            <span className="text-xs font-mono font-bold text-foreground block">{selectedMeta.received.split(",")[0]}</span>
+                          </div>
+                          <div>
+                            <span className="text-[8px] font-bold text-muted-foreground uppercase block">PARSER CONFIDENCE</span>
+                            <span className="text-xs font-black text-accent block">{selectedMeta.confidence}%</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Timeline & Notes list */}
+                    <div className="space-y-4">
+                      <h3 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
+                        📅 WORKSPACE TIMELINE MILESTONES
+                      </h3>
+
+                      <div className="relative border-l-2 border-border ml-3 pl-6 space-y-8">
+                        {workspaceEvents.map((evt: any) => (
+                          <div key={evt.id} className="relative space-y-3">
+                            <div className="absolute -left-[31px] top-1.5 h-4 w-4 bg-accent border-2 border-black" />
+                            
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <span className="text-[10px] font-mono font-bold text-accent block">
+                                  {evt.timestamp.toLocaleString("en-IN")}
+                                </span>
+                                <h5 className="text-sm font-black uppercase tracking-tight text-foreground mt-0.5">
+                                  {evt.title}
+                                </h5>
+                                <span className="text-[9px] text-muted-foreground uppercase">
+                                  Sender: {evt.sender}
+                                </span>
+                              </div>
+                              <button
+                                onClick={() => setExpandedEmailId(expandedEmailId === evt.id ? null : evt.id)}
+                                className="text-[9px] font-bold text-accent hover:underline uppercase border border-border px-2.5 py-1 bg-background"
+                              >
+                                {expandedEmailId === evt.id ? "Hide Source" : "View Source Email"}
+                              </button>
+                            </div>
+
+                            {/* Confidence indicators */}
+                            {evt.confidence_scores && Object.keys(evt.confidence_scores).length > 0 && (
+                              <div className="flex flex-wrap gap-1.5">
+                                {Object.entries(evt.confidence_scores).map(([field, score]: any) => (
+                                  <span 
+                                    key={field} 
+                                    className={`text-[8px] font-mono font-bold px-1.5 py-0.5 border ${
+                                      score >= 0.85 ? 'bg-emerald-950/25 border-emerald-500/50 text-emerald-400' :
+                                      score >= 0.70 ? 'bg-amber-950/25 border-amber-500/50 text-amber-400' :
+                                      'bg-red-950/25 border-red-500/50 text-red-400'
+                                    }`}
+                                  >
+                                    {field.toUpperCase()}: {Math.round(score * 100)}% CONFIDENCE
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Collapsible Source Email */}
+                            {expandedEmailId === evt.id && (
+                              <div className="border border-border/80 p-4 bg-muted/20 font-mono text-[10px] leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto border-dashed">
+                                {evt.body}
+                              </div>
+                            )}
+
+                            {/* Timeline Notes Integration */}
+                            {encryptionKey && selectedApp ? (
+                              editingRoundNote === evt.id ? (
+                                <div className="space-y-2 max-w-xl">
+                                  <textarea
+                                    value={tempNoteText}
+                                    onChange={(e) => setTempNoteText(e.target.value)}
+                                    className="w-full border-2 border-border bg-background p-2 text-xs font-bold focus:border-accent focus:outline-none"
+                                    rows={3}
+                                    placeholder="Type preparation notes, dates, or questions here..."
+                                  />
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => {
+                                        handleSaveRoundNote(evt.id, tempNoteText);
+                                        setEditingRoundNote(null);
+                                      }}
+                                      className="h-8 px-3 border border-border bg-foreground text-background font-bold text-[10px] hover:bg-accent hover:text-black hover:border-accent uppercase tracking-wider transition-all"
+                                    >
+                                      Save Note
+                                    </button>
+                                    <button
+                                      onClick={() => setEditingRoundNote(null)}
+                                      className="h-8 px-3 border border-border bg-transparent text-foreground font-bold text-[10px] hover:bg-muted uppercase tracking-wider transition-all"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="max-w-xl">
+                                  <div className="flex justify-between items-center bg-muted/15 border border-border px-3 py-1.5">
+                                    <span className="text-[9px] text-muted-foreground uppercase font-bold">📝 Notes for this round</span>
+                                    <button
+                                      onClick={() => {
+                                        setEditingRoundNote(evt.id);
+                                        setTempNoteText(decryptedNotes[evt.id] || "");
+                                      }}
+                                      className="text-[9px] font-black text-accent hover:underline uppercase"
+                                    >
+                                      {decryptedNotes[evt.id] ? "Edit Note" : "+ Add Note"}
+                                    </button>
+                                  </div>
+                                  {decryptedNotes[evt.id] && (
+                                    <p className="text-[11px] text-foreground bg-muted/5 px-3 py-2.5 font-mono border-x border-b border-border leading-normal">
+                                      {decryptedNotes[evt.id]}
+                                    </p>
+                                  )}
+                                </div>
+                              )
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}
 
-                {/* Important Links & Miscellaneous */}
-                <div className="space-y-3">
-                  <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">IMPORTANT LINKS</h4>
-                  <div className="space-y-2">
-                    {selectedCompany.registration_link && (
-                      <a
-                        href={selectedCompany.registration_link}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center gap-2 text-xs font-bold text-accent hover:underline uppercase"
-                      >
-                        <Link2 size={14} />
-                        <span>Apply via CDC Portal</span>
-                      </a>
+                {/* 2. JOB DETAILS TAB */}
+                {modalTab === "details" && (
+                  <div className="space-y-6">
+                    <div className="border-b border-border pb-4">
+                      <h2 className="text-2xl font-black uppercase tracking-tighter">Placement Specifications</h2>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-4">
+                        <div className="border border-border p-4 bg-muted/5">
+                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">CTC / SALARY</span>
+                          <span className="text-lg font-black uppercase text-foreground">{selectedCompany.ctc || "—"}</span>
+                        </div>
+                        <div className="border border-border p-4 bg-muted/5">
+                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">STIPEND</span>
+                          <span className="text-lg font-black uppercase text-foreground">{selectedCompany.stipend || "—"}</span>
+                        </div>
+                        <div className="border border-border p-4 bg-muted/5">
+                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">REGISTRATION DEADLINE</span>
+                          <span className="text-xs font-mono font-bold text-foreground">
+                            {selectedCompany.registration_deadline 
+                              ? new Date(selectedCompany.registration_deadline).toLocaleString("en-IN")
+                              : "—"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Eligibility checklist check */}
+                      <div className="border border-border p-4 bg-muted/5 space-y-3">
+                        <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ELIGIBILITY DETAILS</h4>
+                        <div className="flex items-center gap-2">
+                          {getEligibilityIcon(selectedCompany.eligibility_status)}
+                          <span className="text-xs font-bold uppercase">{selectedCompany.eligibility_status}</span>
+                        </div>
+                        {selectedCompany.eligibility_reason && (
+                          <p className="text-[10px] text-muted-foreground uppercase leading-snug">
+                            {selectedCompany.eligibility_reason}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* ATS Keywords */}
+                    {selectedCompany.jd_ats_keywords && selectedCompany.jd_ats_keywords.length > 0 && (
+                      <div className="space-y-2">
+                        <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ATS KEYWORDS</h4>
+                        <div className="flex flex-wrap gap-1.5">
+                          {selectedCompany.jd_ats_keywords.map((kw: string, i: number) => (
+                            <span key={i} className="text-[9px] font-bold bg-muted border border-border px-2 py-0.5 text-foreground uppercase">
+                              {kw}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                    {selectedCompany.website && (
-                      <a
-                        href={selectedCompany.website}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center gap-2 text-xs font-bold text-muted-foreground hover:underline uppercase"
-                      >
-                        <Link2 size={14} />
-                        <span>Corporate Website</span>
-                      </a>
-                    )}
-                    {selectedCompany.additional_info && selectedCompany.additional_info.important_links && 
-                      selectedCompany.additional_info.important_links.map((link: ImportantLink, i: number) => (
-                        <a
-                          key={i}
-                          href={link.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex items-center gap-2 text-xs font-bold text-accent hover:underline uppercase"
-                        >
-                          <Link2 size={14} />
-                          <span>{link.label}</span>
-                        </a>
-                      ))
-                    }
+
+                    {/* Important links */}
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">IMPORTANT LINKS</h4>
+                      <div className="space-y-2">
+                        {selectedCompany.registration_link && (
+                          <a
+                            href={selectedCompany.registration_link}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-2 text-xs font-bold text-accent hover:underline uppercase"
+                          >
+                            <Link2 size={14} />
+                            <span>Apply via CDC Portal</span>
+                          </a>
+                        )}
+                        {selectedCompany.website && (
+                          <a
+                            href={selectedCompany.website}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-2 text-xs font-bold text-muted-foreground hover:underline uppercase"
+                          >
+                            <Link2 size={14} />
+                            <span>Corporate Website</span>
+                          </a>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Full JD text */}
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">JOB DESCRIPTION</h4>
+                      <div className="border border-border p-4 bg-muted/10 max-h-60 overflow-y-auto rounded-none font-mono text-[10px] leading-relaxed whitespace-pre-wrap text-foreground">
+                        {selectedCompany.jd_text || "No detailed job description text loaded."}
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
 
-                <div className="pt-4 border-t border-border">
-                  <Link
-                    href={`/ai-toolkit?companyId=${selectedCompany.id}`}
-                    className="flex w-full items-center justify-center gap-2 border-2 border-accent bg-accent text-black font-extrabold text-xs tracking-widest uppercase h-11 hover:bg-black hover:text-accent hover:border-black active:scale-95 transition-all"
-                  >
-                    <span>✨ Open AI Placement Toolkit</span>
-                  </Link>
-                </div>
-              </div>
+                {/* 3. AI TOOLKIT TAB */}
+                {modalTab === "toolkit" && (
+                  <div className="space-y-6">
+                    <div className="border-b border-border pb-4">
+                      <h2 className="text-2xl font-black uppercase tracking-tighter">AI Placement Toolkit</h2>
+                    </div>
 
-              {/* Right Column: Original Email Message Viewer */}
-              <div className="md:col-span-7 space-y-4">
-                <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ORIGINAL EMAIL ANNOUNCEMENT</h4>
-                <div className="border-2 border-border p-4 bg-muted/20 max-h-72 overflow-y-auto rounded-none font-mono text-[11px] leading-relaxed whitespace-pre-wrap select-text text-foreground border-dashed">
-                  {selectedCompany.source_email_body || selectedCompany.jd_text || "No original email body attached to this drive announcement."}
-                </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="border border-border p-5 bg-card flex flex-col justify-between h-36">
+                        <div>
+                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">MATCH SCORE</span>
+                          <span className="text-[9px] text-muted-foreground uppercase block mt-0.5">Resume vs JD overlap</span>
+                        </div>
+                        <span className="text-3xl font-extrabold tracking-tighter text-foreground">
+                          {selectedApp?.match_score || 0}%
+                        </span>
+                      </div>
+                      <div className="border border-border p-5 bg-card flex flex-col justify-between h-36">
+                        <div>
+                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">PREPARATION SCORE</span>
+                          <span className="text-[9px] text-muted-foreground uppercase block mt-0.5">Pre-application readiness</span>
+                        </div>
+                        <span className="text-3xl font-extrabold tracking-tighter text-foreground">
+                          {selectedCompany.eligibility_status === 'ELIGIBLE' ? '100%' : '50%'}
+                        </span>
+                      </div>
+                      <div className="border border-border p-5 bg-card flex flex-col justify-between h-36">
+                        <div>
+                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">APPLICATION HEALTH</span>
+                          <span className="text-[9px] text-muted-foreground uppercase block mt-0.5">Completion checklists</span>
+                        </div>
+                        <span className="text-3xl font-extrabold tracking-tighter text-accent">
+                          {healthVal}%
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="pt-6 space-y-4">
+                      <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">LAUNCH TOOLKIT ACTIONS</h4>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <Link
+                          href={`/ai-toolkit?companyId=${selectedCompany.id}&tab=ats`}
+                          className="flex items-center justify-between border border-border p-4 bg-muted/15 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase"
+                        >
+                          <span className="text-xs font-black tracking-wider">Tailor & Optimize Resume</span>
+                          <ArrowRight size={14} />
+                        </Link>
+                        <Link
+                          href={`/ai-toolkit?companyId=${selectedCompany.id}&tab=sop`}
+                          className="flex items-center justify-between border border-border p-4 bg-muted/15 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase"
+                        >
+                          <span className="text-xs font-black tracking-wider">Generate Statement of Purpose</span>
+                          <ArrowRight size={14} />
+                        </Link>
+                        <Link
+                          href={`/ai-toolkit?companyId=${selectedCompany.id}&tab=cl`}
+                          className="flex items-center justify-between border border-border p-4 bg-muted/15 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase"
+                        >
+                          <span className="text-xs font-black tracking-wider">Draft Cover Letter</span>
+                          <ArrowRight size={14} />
+                        </Link>
+                        <Link
+                          href={`/ai-toolkit?companyId=${selectedCompany.id}&tab=prep`}
+                          className="flex items-center justify-between border border-border p-4 bg-muted/15 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase"
+                        >
+                          <span className="text-xs font-black tracking-wider">Practice Mock Interview Questions</span>
+                          <ArrowRight size={14} />
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
