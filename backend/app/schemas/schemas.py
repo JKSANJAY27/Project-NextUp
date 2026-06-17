@@ -102,6 +102,8 @@ class ApplicationOut(BaseModel):
     last_user_activity_at: datetime
     workspace_priority_override: Optional[str]
     snoozed_until: Optional[datetime]
+    priority_score: int = 0
+    is_stale: bool = False
     company: CompanyOut
 
     class Config:

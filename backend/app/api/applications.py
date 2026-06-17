@@ -6,6 +6,8 @@ from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models.models import User, Application, Company
 from app.schemas.schemas import ApplicationCreate, ApplicationUpdate, ApplicationOut
+from app.services.priority_scorer import calculate_priority_score
+from app.services.stale_detector import is_application_stale
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
@@ -56,10 +58,14 @@ def create_application(
     db.commit()
     db.refresh(new_app)
     
-    # Reload with company relationship loaded
+    # Reload with company and events loaded for score computations
     new_app_loaded = db.query(Application).options(
-        joinedload(Application.company)
+        joinedload(Application.company).joinedload(Company.events)
     ).filter(Application.id == new_app.id).first()
+    
+    # Populate computed fields
+    new_app_loaded.priority_score = calculate_priority_score(new_app_loaded, new_app_loaded.company, new_app_loaded.company.events)
+    new_app_loaded.is_stale = is_application_stale(new_app_loaded)
     
     return new_app_loaded
 
@@ -68,10 +74,17 @@ def list_applications(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Fetch all applications for user with company loaded
+    # Fetch all applications for user with company and events loaded
     apps = db.query(Application).options(
-        joinedload(Application.company)
+        joinedload(Application.company).joinedload(Company.events)
     ).filter(Application.user_id == current_user.id).all()
+    
+    # Calculate computed fields and sort by priority score descending
+    for app in apps:
+        app.priority_score = calculate_priority_score(app, app.company, app.company.events)
+        app.is_stale = is_application_stale(app)
+        
+    apps.sort(key=lambda x: x.priority_score, reverse=True)
     return apps
 
 @router.patch("/{id}", response_model=ApplicationOut)
@@ -114,10 +127,14 @@ def update_application(
     db.commit()
     db.refresh(app)
     
-    # Reload with relationship loaded
+    # Reload with company and events loaded for score computations
     app_loaded = db.query(Application).options(
-        joinedload(Application.company)
+        joinedload(Application.company).joinedload(Company.events)
     ).filter(Application.id == app.id).first()
+    
+    # Populate computed fields
+    app_loaded.priority_score = calculate_priority_score(app_loaded, app_loaded.company, app_loaded.company.events)
+    app_loaded.is_stale = is_application_stale(app_loaded)
     
     return app_loaded
 
