@@ -5,10 +5,9 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { 
   LayoutDashboard, 
-  FileText, 
-  Calendar as CalendarIcon, 
-  BarChart3, 
-  Users, 
+  Target, 
+  Activity, 
+  Briefcase, 
   User, 
   LogOut, 
   ShieldCheck,
@@ -18,12 +17,14 @@ import {
   X
 } from "lucide-react";
 import { useAppStore } from "@/lib/store";
+import { useSearchParams } from "next/navigation";
 
 import { supabase } from "@/lib/supabase";
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { logout, user } = useAppStore();
   const [theme, setTheme] = useState("dark");
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -51,12 +52,13 @@ export default function Sidebar() {
     router.push("/login");
   };
 
+  const activeTab = searchParams.get("tab") || "action-center";
+
   const menuItems = [
-    { name: "DASHBOARD", href: "/dashboard", icon: LayoutDashboard },
-    { name: "RESUME", href: "/resume", icon: FileText },
-    { name: "CALENDAR", href: "/calendar", icon: CalendarIcon },
-    { name: "ANALYTICS", href: "/analytics", icon: BarChart3 },
-    { name: "COMMUNITY", href: "/community", icon: Users },
+    { name: "ACTION CENTER", href: "/dashboard", icon: LayoutDashboard },
+    { name: "OPPORTUNITIES", href: "/dashboard?tab=opportunities", icon: Target },
+    { name: "ACTIVE TRACKING", href: "/dashboard?tab=tracking", icon: Activity },
+    { name: "MY APPLICATIONS", href: "/dashboard?tab=applications", icon: Briefcase },
     { name: "PROFILE", href: "/profile", icon: User },
   ];
 
@@ -107,7 +109,13 @@ export default function Sidebar() {
         {/* Nav links */}
         <nav className="flex-1 space-y-1 py-8">
           {menuItems.map((item) => {
-            const isActive = pathname.startsWith(item.href);
+            const itemUrl = new URL(item.href, "http://localhost");
+            const itemPath = itemUrl.pathname;
+            const itemTab = itemUrl.searchParams.get("tab") || "action-center";
+            
+            const isActive = pathname === itemPath && (
+              itemPath !== "/dashboard" || activeTab === itemTab
+            );
             const Icon = item.icon;
             return (
               <Link
