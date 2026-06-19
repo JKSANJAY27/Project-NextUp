@@ -152,12 +152,16 @@ def parse_with_ollama(context_text: str) -> Dict[str, Any]:
     Attempts to parse placement context using the Ollama endpoint
     (can be local or a HuggingFace Space running Ollama).
     """
+    if os.getenv("DISABLE_OLLAMA", "").lower() == "true":
+        logger.info("Ollama is disabled via DISABLE_OLLAMA env var. Skipping.")
+        return {}
+
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
     ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
     prompt = get_parser_prompt(context_text)
 
     # Wake-up ping — HF free-tier spaces sleep after inactivity
-    if not ping_ollama(ollama_base_url, timeout=15):
+    if not ping_ollama(ollama_base_url, timeout=5):
         logger.warning(f"Ollama endpoint at {ollama_base_url} is not responding (sleeping or offline). Skipping.")
         return {}
 
@@ -174,7 +178,7 @@ def parse_with_ollama(context_text: str) -> Dict[str, Any]:
                     "num_predict": 1200
                 }
             },
-            timeout=120
+            timeout=10
         )
         if response.status_code == 200:
             result = response.json()
@@ -402,14 +406,17 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     if stipend_match:
         data["stipend"] = stipend_match.group(1).strip()
     else:
-        # Look for standalone amounts (e.g. "10,000" near "stipend" keyword)
-        stipend_num_match = re.search(
-            r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:pm|per\s*month|/month|K|k|thousand)?",
-            email_body,
-            re.IGNORECASE
-        )
-        if stipend_num_match and "stipend" in email_body.lower():
-            data["stipend"] = stipend_num_match.group(1).replace(",", "").strip()
+        # Look for standalone amounts near "stipend" keyword (within 200 chars following it)
+        idx = email_body.lower().find("stipend")
+        if idx != -1:
+            stipend_sub = email_body[idx:]
+            stipend_num_match = re.search(
+                r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:pm|per\s*month|/month|K|k|thousand)?",
+                stipend_sub[:200],
+                re.IGNORECASE
+            )
+            if stipend_num_match:
+                data["stipend"] = stipend_num_match.group(1).replace(",", "").strip()
 
     # 6. Registration Deadline
     deadline_match = re.search(

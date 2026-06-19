@@ -292,15 +292,22 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     ext_name_clean = re.sub(r'\s+', ' ', ext_name_clean)
                     
                     score = role_score
+                    name_matched = False
                     if db_name_clean == ext_name_clean:
                         score += 60
+                        name_matched = True
                     elif (len(db_name_clean) >= 3 and db_name_clean in ext_name_clean) or (len(ext_name_clean) >= 3 and ext_name_clean in db_name_clean):
                         overlap_ratio = len(db_name_clean) / len(ext_name_clean) if len(ext_name_clean) > 0 else 0
                         if overlap_ratio > 1:
                             overlap_ratio = 1 / overlap_ratio
                         score += int(30 * overlap_ratio) + 20
+                        name_matched = True
                     elif len(db_name_clean) >= 3 and db_name_clean in subject.lower():
                         score += 40
+                        name_matched = True
+                        
+                    if not name_matched:
+                        continue
                     
                     if c.recruitment_cycle.lower() == recruitment_cycle.lower():
                         score += 20
