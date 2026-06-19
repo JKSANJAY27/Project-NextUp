@@ -1,4 +1,4 @@
-import React from "react";
+import React, { Suspense } from "react";
 import Sidebar from "@/components/Sidebar";
 import NotificationsDropdown from "@/components/NotificationsDropdown";
 
@@ -9,7 +9,9 @@ export default function DashboardLayout({
 }) {
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
-      <Sidebar />
+      <Suspense fallback={<div className="w-64 bg-background border-r-2 border-border hidden md:block" />}>
+        <Sidebar />
+      </Suspense>
       <div className="flex-1 md:pl-64 flex flex-col min-h-screen w-full">
         {/* Sticky top navigation bar */}
         <header className="flex h-16 w-full items-center justify-between border-b-2 border-border bg-card/50 backdrop-blur-md px-8 sticky top-0 z-30">

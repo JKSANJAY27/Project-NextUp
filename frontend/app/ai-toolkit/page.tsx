@@ -19,13 +19,7 @@ import {
   Download,
   Play,
   Target,
-  CheckCircle,
-  FileText,
-  Briefcase,
-  GraduationCap,
-  FolderKanban,
-  Wrench,
-  ChevronRight
+  FileText
 } from "lucide-react";
 import {
   generateInBrowser,
@@ -333,7 +327,7 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
           setLocalDownloadProgress(Math.round(p * 100));
           setLocalStatusMessage(`Downloading model weights: ${Math.round(p * 100)}%`);
         },
-        onToken: (text) => {
+        onToken: () => {
           // Streaming parsing is hard for complete JSON, but we can log or just wait for complete text
         }
       });

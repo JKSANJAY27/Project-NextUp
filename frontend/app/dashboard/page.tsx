@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useAppStore } from "@/lib/store";
@@ -17,16 +17,13 @@ import {
   AlertCircle,
   X,
   Link2,
-  Bell,
   Clock,
   Calendar,
   ArrowRight,
   Pin,
   TrendingUp,
   Award,
-  AlertTriangle,
-  Check,
-  CheckCheck
+  AlertTriangle
 } from "lucide-react";
 
 interface ImportantLink {
@@ -38,6 +35,25 @@ interface AdditionalInfo {
   subject?: string;
   sender?: string;
   important_links?: ImportantLink[];
+}
+
+interface TodayEvent {
+  time: Date;
+  title: string;
+  description: string;
+  type: string;
+  companyId: string;
+}
+
+interface TimelineEvent {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  body: string;
+  sender: string;
+  timestamp: Date;
+  confidence_scores: Record<string, number>;
 }
 
 interface Company {
@@ -194,7 +210,7 @@ function getEligibility(user: any, company: Company): { status: string; reason: 
   return { status: "ELIGIBLE", reason: "You meet all academic criteria." };
 }
 
-export default function DashboardPage() {
+function DashboardPageContent() {
   const { user, encryptionKey } = useAppStore();
   const searchParams = useSearchParams();
   const activeTab = searchParams.get("tab") || "action-center";
@@ -503,7 +519,7 @@ export default function DashboardPage() {
         }));
       }
       fetchDashboardData();
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to update application tracker:", err);
       alert("FAILED TO UPDATE TRACKING STATUS.");
     }
@@ -536,7 +552,6 @@ export default function DashboardPage() {
   // Timeline Notes GCM Encryption & Save
   const handleSaveRoundNote = async (roundKey: string, noteText: string) => {
     if (!selectedCompany || !encryptionKey) return;
-    const app = applications[selectedCompany.id];
     
     const updatedNotes = {
       ...decryptedNotes,
@@ -630,7 +645,7 @@ export default function DashboardPage() {
     const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
     const endOfDay = startOfDay + 24 * 60 * 60 * 1000;
     
-    const events: any[] = [];
+    const events: TodayEvent[] = [];
     
     // 1. Company registration deadlines today
     companies.forEach(comp => {
@@ -761,7 +776,7 @@ export default function DashboardPage() {
     if (!selectedCompany) return [];
     
     const bundle = notificationBundles.find(b => b.company_id === selectedCompany.id);
-    const events: any[] = [];
+    const events: TimelineEvent[] = [];
     
     if (bundle && bundle.notifications.length > 0) {
       bundle.notifications.forEach(n => {
@@ -1077,7 +1092,7 @@ export default function DashboardPage() {
                     </div>
                   ) : (
                     <div className="relative border-l-2 border-border ml-2 pl-4 space-y-6">
-                      {todayEvents.map((evt: any, idx: number) => (
+                      {todayEvents.map((evt, idx) => (
                         <div key={idx} className="relative">
                           <div className="absolute -left-[23px] top-1 h-3 w-3 bg-accent border-2 border-black" />
                           <div className="space-y-1">
@@ -2461,7 +2476,7 @@ export default function DashboardPage() {
                       </h3>
 
                       <div className="relative border-l-2 border-border ml-3 pl-6 space-y-8">
-                        {workspaceEvents.map((evt: any) => (
+                        {workspaceEvents.map((evt: TimelineEvent) => (
                           <div key={evt.id} className="relative space-y-3">
                             <div className="absolute -left-[31px] top-1.5 h-4 w-4 bg-accent border-2 border-black" />
                             
@@ -2488,7 +2503,7 @@ export default function DashboardPage() {
                             {/* Confidence indicators */}
                             {evt.confidence_scores && Object.keys(evt.confidence_scores).length > 0 && (
                               <div className="flex flex-wrap gap-1.5">
-                                {Object.entries(evt.confidence_scores).map(([field, score]: any) => (
+                                {Object.entries(evt.confidence_scores).map(([field, score]) => (
                                   <span 
                                     key={field} 
                                     className={`text-[8px] font-mono font-bold px-1.5 py-0.5 border ${
@@ -2757,5 +2772,13 @@ export default function DashboardPage() {
       )}
 
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={<div className="p-8 flex items-center justify-center font-mono">LOADING SYSTEM...</div>}>
+      <DashboardPageContent />
+    </Suspense>
   );
 }
