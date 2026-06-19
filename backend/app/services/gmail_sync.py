@@ -18,12 +18,14 @@ from app.core.database import SessionLocal
 from app.core.security import generate_blind_index
 from app.models.models import (
     User, StudentProfile, Company, CompanyEvent, CompanyChangeLog,
-    Application, Notification, RawIngestionJob, AttachmentMetadata, NotificationJob
+    Application, Notification, RawIngestionJob, AttachmentMetadata, NotificationJob,
+    IngestionAuditLog
 )
 from app.services.email_parser import parse_placement_email
 from app.services.excel_parser import extract_neo_ids_from_excel
 from app.services.pdf_extractor import parse_job_description
 from app.services.ai_service import precompute_jd_intelligence_deterministic
+from app.services.validator import validate_and_normalize_parsed_data, normalize_role_name
 
 logger = logging.getLogger(__name__)
 
@@ -164,20 +166,48 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         
         email_timestamp = datetime.fromisoformat(email_timestamp_str.replace("Z", "+00:00")) if email_timestamp_str else datetime.utcnow()
         
-        # 3. Parse Email Body
-        parsed_info = parse_placement_email(body)
-        company_name = parsed_info.get("company", "Unknown").strip()
-        role = parsed_info.get("role", "Software Engineer").strip()
-        category = parsed_info.get("category", "Dream").strip()
-        ctc = parsed_info.get("ctc")
-        stipend = parsed_info.get("stipend")
-        location = parsed_info.get("job_location")
-        eligible_branches = parsed_info.get("eligible_branches", [])
-        min_cgpa = parsed_info.get("min_cgpa")
-        requires_no_arrears = parsed_info.get("requires_no_arrears", False)
-        registration_deadline_str = parsed_info.get("deadline_iso")
+        # 3. Pre-extract PDF text from attachments to provide context to LLM
+        attachment_texts = []
+        for att in attachments:
+            filename = att.get("filename", "")
+            base64_data = att.get("base64_data", "")
+            if not base64_data:
+                continue
+            file_bytes = base64.b64decode(base64_data)
+            if filename.lower().endswith(".pdf"):
+                try:
+                    jd_info = parse_job_description(file_bytes)
+                    txt = jd_info.get("jd_text", "")
+                    if txt:
+                        attachment_texts.append(f"--- ATTACHMENT: {filename} ---\n{txt}")
+                except Exception as e:
+                    logger.warning(f"Failed to pre-extract text from PDF {filename}: {str(e)}")
+                    
+        attachment_text = "\n\n".join(attachment_texts)
+
+        # 4. Parse Email Body with Escalating LLM chain
+        raw_parsed_info = parse_placement_email(body, subject, attachment_text)
+        
+        # Save raw parsed response into DB
+        job.parsed_output = raw_parsed_info
+        db.commit()
+        
+        # 5. Run Validation & Normalization
+        validated_info = validate_and_normalize_parsed_data(raw_parsed_info, db)
+        
+        # Save validated response into DB
+        job.validated_output = validated_info
+        db.commit()
+        
+        # Extract fields from validated output
+        ext_data = validated_info.get("extracted_data", {})
+        company_name = ext_data.get("company", {}).get("value", "Unknown Company").strip()
+        event_type = ext_data.get("event_type", {}).get("value", "GENERAL_UPDATE").strip()
+        location = ext_data.get("job_location", {}).get("value")
+        registration_deadline_str = ext_data.get("deadline_iso", {}).get("value")
         registration_deadline = datetime.fromisoformat(registration_deadline_str) if registration_deadline_str else None
-        registration_link = parsed_info.get("registration_link")
+        registration_link = ext_data.get("registration_link", {}).get("value")
+        requires_review = validated_info.get("parser_metadata", {}).get("requires_review", False)
         
         # Determine Batch Year from email subject or body, default to current/next year
         batch_year = datetime.utcnow().year
@@ -189,286 +219,311 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         cycle_match = re.search(r"\b(Internship|Full-Time|Placement|Summer Intern)\b", subject + " " + body, re.I)
         if cycle_match:
             recruitment_cycle = cycle_match.group(1)
-            
-        # 4. Generate Fingerprint & check if Company already exists
-        # Fingerprint Input = Company|Role|Category|Batch|Cycle
-        fingerprint_input = f"{company_name.upper()}|{role.upper()}|{category.upper()}|{batch_year}|{recruitment_cycle.upper()}"
-        fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
-        
-        company = db.query(Company).filter(Company.fingerprint == fingerprint).first()
-        
-        if not company:
-            # Try fuzzy match based on company name, batch year, and cycle by scanning existing companies
-            candidate_companies = db.query(Company).all()
-            best_match = None
-            best_score = -1
-            
-            for c in candidate_companies:
-                # Clean up names for comparison (remove common suffixes)
-                db_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', c.name, flags=re.I).strip().lower()
-                ext_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', company_name, flags=re.I).strip().lower()
-                
-                # Strip spaces
-                db_name_clean = re.sub(r'\s+', ' ', db_name_clean)
-                ext_name_clean = re.sub(r'\s+', ' ', ext_name_clean)
-                
-                score = 0
-                # 1. Exact match of clean names
-                if db_name_clean == ext_name_clean:
-                    score += 60
-                # 2. Bidirectional substring match
-                elif (len(db_name_clean) >= 3 and db_name_clean in ext_name_clean) or (len(ext_name_clean) >= 3 and ext_name_clean in db_name_clean):
-                    overlap_ratio = len(db_name_clean) / len(ext_name_clean) if len(ext_name_clean) > 0 else 0
-                    if overlap_ratio > 1:
-                        overlap_ratio = 1 / overlap_ratio
-                    score += int(30 * overlap_ratio) + 20
-                # 3. Fallback match: check if the company name appears in the email subject
-                elif len(db_name_clean) >= 3 and db_name_clean in subject.lower():
-                    score += 40
-                
-                # Match cycle
-                if c.recruitment_cycle.lower() == recruitment_cycle.lower():
-                    score += 20
-                elif recruitment_cycle.lower() == "default" or c.recruitment_cycle.lower() == "default":
-                    score += 10
-                    
-                # Match batch year if possible (from created_at of company)
-                c_batch = c.created_at.year if c.created_at else datetime.utcnow().year
-                if abs(c_batch - batch_year) <= 1:
-                    score += 20
-                    
-                if score > best_score:
-                    best_score = score
-                    best_match = c
-            
-            if best_score >= 50:
-                company = best_match
-                logger.info(f"Fuzzy matched incoming email to existing company: {company.name} (ID: {company.id}, Match Score: {best_score})")
-        
-        # Eligibility rules JSONB setup
-        eligibility_rules = {
-            "min_cgpa": min_cgpa,
-            "min_tenth_marks": None,
-            "min_twelfth_marks": None,
-            "requires_no_arrears": requires_no_arrears
-        }
-        
-        if not company:
-            company = Company(
-                name=company_name,
-                role=role,
-                category=category,
-                ctc=ctc,
-                stipend=stipend,
-                job_location=location,
-                eligible_branches=eligible_branches,
-                eligibility_rules=eligibility_rules,
-                registration_deadline=registration_deadline,
-                registration_link=registration_link,
-                recruitment_cycle=recruitment_cycle,
-                fingerprint=fingerprint
-            )
-            db.add(company)
-            db.flush() # Populate company.id
-            logger.info(f"Created new company registry: {company_name} - {role}")
-        else:
-            # Update and log modifications in company_change_logs
-            updates = {
-                "ctc": ctc,
-                "stipend": stipend,
-                "job_location": location,
-                "registration_deadline": registration_deadline,
-                "registration_link": registration_link,
-                "eligibility_rules": eligibility_rules,
-                "eligible_branches": eligible_branches
-            }
-            for key, val in updates.items():
-                old_val = getattr(company, key)
-                # Standardize comparison for dict / list
-                if isinstance(old_val, (dict, list)) or isinstance(val, (dict, list)):
-                    has_changed = json.dumps(old_val, sort_keys=True) != json.dumps(val, sort_keys=True)
-                else:
-                    has_changed = old_val != val
-                    
-                if val is not None and has_changed:
-                    # Log change
-                    db.add(CompanyChangeLog(
-                        company_id=company.id,
-                        field_name=key,
-                        old_value=str(old_val) if old_val is not None else "",
-                        new_value=str(val)
-                    ))
-                    setattr(company, key, val)
-            logger.info(f"Updated existing company registry: {company_name} - {role}")
-            
-        # 5. Insert Company Event (Check if already created by Edge Function)
-        event_type = 'REGISTRATION'
-        if 'shortlist' in subject.lower() or 'shortlist' in body.lower():
-            event_type = 'SHORTLIST'
-        elif 'online test' in subject.lower() or 'assessment' in subject.lower() or ' oa ' in (' ' + subject.lower() + ' '):
-            event_type = 'OA'
-        elif 'interview' in subject.lower() or 'schedule' in subject.lower():
-            event_type = 'INTERVIEW'
-        elif 'offer' in subject.lower() or 'congratulations' in subject.lower():
-            event_type = 'OFFER'
-        elif 'regret' in subject.lower() or 'not selected' in subject.lower() or 'rejection' in subject.lower() or 'reject' in subject.lower():
-            event_type = 'REJECTION'
-            
-        event = db.query(CompanyEvent).filter(
-            CompanyEvent.company_id == company.id,
-            CompanyEvent.event_type == event_type,
-            CompanyEvent.subject == subject,
-            CompanyEvent.timestamp == email_timestamp
-        ).first()
 
-        if not event:
-            event = CompanyEvent(
-                company_id=company.id,
-                event_type=event_type,
-                subject=subject,
-                sender=sender,
-                body=body,
-                timestamp=email_timestamp
-            )
-            db.add(event)
-            db.flush() # Populate event.id
-            
-            # Queue notification job for this event only if we created it new
-            notification_job = NotificationJob(
-                company_event_id=event.id,
-                status='pending'
-            )
-            db.add(notification_job)
-        else:
-            logger.info(f"Re-using existing company event {event.id} ingested by Edge Function.")
-            
-        # Update recruitment states for student applications under this company
-        update_recruitment_states(db, company, event_type, email_timestamp, body)
+        # Multi-Role Splitting: Process each role in validated_info["extracted_data"]["roles"]
+        roles_list = ext_data.get("roles", [])
         
-        # 6. Parse and store attachments
-        for att in attachments:
-            filename = att.get("filename", "")
-            content_type = att.get("content_type", "")
-            base64_data = att.get("base64_data", "")
-            if not base64_data:
-                continue
-                
-            file_bytes = base64.b64decode(base64_data)
+        processed_events = []
+        for r_item in roles_list:
+            role = r_item.get("role", {}).get("value", "Software Engineer").strip()
+            ctc = r_item.get("ctc", {}).get("value")
+            stipend = r_item.get("stipend", {}).get("value")
+            eligible_branches = r_item.get("eligible_branches", {}).get("value", [])
+            min_cgpa = r_item.get("min_cgpa", {}).get("value")
+            requires_no_arrears = r_item.get("requires_no_arrears", {}).get("value", False)
             
-            # Check if attachment metadata already exists (Edge Function might have inserted it)
-            att_meta = db.query(AttachmentMetadata).filter(
-                AttachmentMetadata.company_event_id == event.id,
-                AttachmentMetadata.file_name == filename
+            # Determine category from text using regex to match legacy fingerprints
+            cat_match = re.search(r"(Dream\s*Internship|Super\s*Dream|Mass\s*Recruiter|Dream\s*Offer|Dream|Regular)", subject + " " + body, re.I)
+            category = "Dream"
+            if cat_match:
+                cat = cat_match.group(1).lower()
+                if "super" in cat:
+                    category = "Super Dream"
+                elif "mass" in cat:
+                    category = "Mass Recruiter"
+                elif "internship" in cat:
+                    category = "Internship"
+                else:
+                    category = "Dream"
+                    
+            fingerprint_input = f"{company_name.upper()}|{role.upper()}|{category.upper()}|{batch_year}|{recruitment_cycle.upper()}"
+            fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
+            
+            # Check if company exists
+            company = db.query(Company).filter(Company.fingerprint == fingerprint).first()
+            
+            # Fuzzy match candidates
+            if not company:
+                candidate_companies = db.query(Company).all()
+                best_match = None
+                best_score = -1
+                for c in candidate_companies:
+                    # Only match if the role is the same (normalized)
+                    if normalize_role_name(c.role) != normalize_role_name(role):
+                        continue
+                        
+                    db_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', c.name, flags=re.I).strip().lower()
+                    ext_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', company_name, flags=re.I).strip().lower()
+                    
+                    db_name_clean = re.sub(r'\s+', ' ', db_name_clean)
+                    ext_name_clean = re.sub(r'\s+', ' ', ext_name_clean)
+                    
+                    score = 0
+                    if db_name_clean == ext_name_clean:
+                        score += 60
+                    elif (len(db_name_clean) >= 3 and db_name_clean in ext_name_clean) or (len(ext_name_clean) >= 3 and ext_name_clean in db_name_clean):
+                        overlap_ratio = len(db_name_clean) / len(ext_name_clean) if len(ext_name_clean) > 0 else 0
+                        if overlap_ratio > 1:
+                            overlap_ratio = 1 / overlap_ratio
+                        score += int(30 * overlap_ratio) + 20
+                    elif len(db_name_clean) >= 3 and db_name_clean in subject.lower():
+                        score += 40
+                    
+                    if c.recruitment_cycle.lower() == recruitment_cycle.lower():
+                        score += 20
+                    elif recruitment_cycle.lower() == "default" or c.recruitment_cycle.lower() == "default":
+                        score += 10
+                        
+                    c_batch = c.created_at.year if c.created_at else datetime.utcnow().year
+                    if abs(c_batch - batch_year) <= 1:
+                        score += 20
+                        
+                    if score > best_score:
+                        best_score = score
+                        best_match = c
+                        
+                if best_score >= 50:
+                    company = best_match
+                    logger.info(f"Fuzzy matched incoming email to existing company: {company.name} (ID: {company.id}, Match Score: {best_score})")
+
+            eligibility_rules = {
+                "min_cgpa": min_cgpa,
+                "min_tenth_marks": None,
+                "min_twelfth_marks": None,
+                "requires_no_arrears": requires_no_arrears
+            }
+            
+            if not company:
+                company = Company(
+                    name=company_name,
+                    role=role,
+                    category=category,
+                    ctc=ctc,
+                    stipend=stipend,
+                    job_location=location,
+                    eligible_branches=eligible_branches,
+                    eligibility_rules=eligibility_rules,
+                    registration_deadline=registration_deadline,
+                    registration_link=registration_link,
+                    recruitment_cycle=recruitment_cycle,
+                    fingerprint=fingerprint,
+                    requires_review=requires_review
+                )
+                db.add(company)
+                db.flush()
+                logger.info(f"Created new company registry: {company_name} - {role}")
+            else:
+                updates = {
+                    "ctc": ctc,
+                    "stipend": stipend,
+                    "job_location": location,
+                    "registration_deadline": registration_deadline,
+                    "registration_link": registration_link,
+                    "eligibility_rules": eligibility_rules,
+                    "eligible_branches": eligible_branches,
+                    "requires_review": requires_review
+                }
+                for key, val in updates.items():
+                    old_val = getattr(company, key)
+                    if isinstance(old_val, (dict, list)) or isinstance(val, (dict, list)):
+                        has_changed = json.dumps(old_val, sort_keys=True) != json.dumps(val, sort_keys=True)
+                    else:
+                        has_changed = old_val != val
+                        
+                    if val is not None and has_changed:
+                        db.add(CompanyChangeLog(
+                            company_id=company.id,
+                            field_name=key,
+                            old_value=str(old_val) if old_val is not None else "",
+                            new_value=str(val)
+                        ))
+                        setattr(company, key, val)
+                logger.info(f"Updated existing company registry: {company_name} - {role}")
+
+            # Create Company Event for this role/workspace
+            event = db.query(CompanyEvent).filter(
+                CompanyEvent.company_id == company.id,
+                CompanyEvent.event_type == event_type,
+                CompanyEvent.subject == subject,
+                CompanyEvent.timestamp == email_timestamp
             ).first()
 
-            if not att_meta:
-                # Record attachment metadata (Storage path is simulated for zero-cost local / supabase storage)
-                att_meta = AttachmentMetadata(
-                    company_event_id=event.id,
-                    file_name=filename,
-                    file_type="JD_PDF" if filename.lower().endswith(".pdf") else "SHORTLIST_EXCEL",
-                    storage_path=f"attachments/{event.id}/{filename}",
-                    parsed_meta={}
+            if not event:
+                event = CompanyEvent(
+                    company_id=company.id,
+                    event_type=event_type,
+                    subject=subject,
+                    sender=sender,
+                    body=body,
+                    timestamp=email_timestamp
                 )
-                db.add(att_meta)
+                db.add(event)
                 db.flush()
+                
+                notification_job = NotificationJob(
+                    company_event_id=event.id,
+                    status='pending'
+                )
+                db.add(notification_job)
             else:
-                logger.info(f"Re-using existing attachment metadata for {filename}.")
+                logger.info(f"Re-using existing company event {event.id} ingested by Edge Function.")
+                
+            processed_events.append(event)
+            update_recruitment_states(db, company, event_type, email_timestamp, body)
+
+            # Log audit items in ingestion_audit_logs for low-confidence fields
+            if requires_review:
+                for field_name, f_data in ext_data.items():
+                    if field_name == "roles":
+                        continue
+                    if isinstance(f_data, dict) and "confidence" in f_data:
+                        conf = f_data["confidence"]
+                        val = f_data.get("value")
+                        if conf < 0.80 and val is not None:
+                            exist_log = db.query(IngestionAuditLog).filter(
+                                IngestionAuditLog.company_event_id == event.id,
+                                IngestionAuditLog.field_name == field_name
+                            ).first()
+                            if not exist_log:
+                                db.add(IngestionAuditLog(
+                                    company_event_id=event.id,
+                                    field_name=field_name,
+                                    original_text=str(val),
+                                    parsed_value=str(val),
+                                    confidence_score=conf * 100,
+                                    status='pending'
+                                ))
+
+        # 6. Parse and store attachments for each processed event
+        for event in processed_events:
+            company = event.company
             
-            # Process JD PDF
-            if filename.lower().endswith(".pdf"):
-                jd_info = parse_job_description(file_bytes)
-                jd_text = jd_info.get("jd_text", "")
-                required_skills = jd_info.get("skills", [])
-                
-                company.jd_text = jd_text
-                company.jd_required_skills = required_skills
-                company.jd_ats_keywords = jd_info.get("ats_keywords", [])
-                
-                # Precompute JD Intelligence (preferred skills & topics)
-                jd_intel = precompute_jd_intelligence_deterministic(jd_text, required_skills)
-                company.jd_preferred_skills = jd_intel.get("preferred_skills", [])
-                company.interview_topics = jd_intel.get("interview_topics", [])
-                
-                att_meta.parsed_meta = {
-                    "skills": required_skills,
-                    "preferred_skills": company.jd_preferred_skills,
-                    "interview_topics": company.interview_topics,
-                    "ats_keywords_count": len(company.jd_ats_keywords)
-                }
-                logger.info(f"Processed JD PDF attachment: {filename} with precomputed JD intelligence.")
-                
-            # Process Shortlist Excel
-            elif filename.lower().endswith((".xls", ".xlsx")):
-                neo_ids = extract_neo_ids_from_excel(file_bytes)
-                att_meta.parsed_meta = {"extracted_count": len(neo_ids)}
-                
-                # Check for zero-knowledge matches in student profiles
-                matched_count = 0
-                matched_user_ids = set()
-                shortlist_hashes = set()
-                
-                for nid in neo_ids:
-                    nid_hash = generate_blind_index(nid, settings.PEPPER)
-                    shortlist_hashes.add(nid_hash)
+            for att in attachments:
+                filename = att.get("filename", "")
+                base64_data = att.get("base64_data", "")
+                if not base64_data:
+                    continue
                     
-                    profile = db.query(StudentProfile).filter(StudentProfile.neo_id_hash == nid_hash).first()
-                    if profile:
-                        matched_user_ids.add(profile.user_id)
-                        # Create or update application for student
-                        app = db.query(Application).filter(
-                            Application.user_id == profile.user_id,
-                            Application.company_id == company.id
-                        ).first()
-                        
-                        if not app:
-                            app = Application(
-                                user_id=profile.user_id,
-                                company_id=company.id,
-                                status='Shortlisted',
-                                recruitment_state='Shortlisted',
-                                current_round='Shortlist Announcement'
-                            )
-                            db.add(app)
-                        else:
-                            # If they are already offers or rejected, don't overwrite status
-                            if app.status not in ('Offer', 'Rejected', 'Declined', 'Ignored'):
-                                app.status = 'Shortlisted'
-                                app.recruitment_state = 'Shortlisted'
-                                app.current_round = 'Shortlisted'
-                                
-                        # Insert Direct Notification
-                        notif_msg = f"🎉 Congratulations! You are shortlisted in the {company_name} drive for the {role} role."
-                        # Unique constraint prevents duplicate notifications
-                        existing_notif = db.query(Notification).filter(
-                            Notification.user_id == profile.user_id,
-                            Notification.company_event_id == event.id
-                        ).first()
-                        if not existing_notif:
-                            db.add(Notification(
-                                user_id=profile.user_id,
-                                company_event_id=event.id,
-                                message=notif_msg,
-                                notification_type='shortlist'
-                            ))
-                        matched_count += 1
-                        
-                # Auto Off-ramp & Likely Rejected logic:
-                # Find all other student applications under this company that are NOT in the shortlist
-                # but are currently active (status is Applied, Shortlisted, OA, or Interview).
-                active_apps = db.query(Application).filter(
-                    Application.company_id == company.id,
-                    Application.status.in_(('Applied', 'Shortlisted', 'OA', 'Interview'))
-                ).all()
+                file_bytes = base64.b64decode(base64_data)
                 
-                for app in active_apps:
-                    if app.user_id not in matched_user_ids:
-                        # Double check student profile hash
-                        profile = db.query(StudentProfile).filter(StudentProfile.user_id == app.user_id).first()
-                        if profile and profile.neo_id_hash not in shortlist_hashes:
-                            app.status = 'Likely Rejected'
-                            logger.info(f"Student {app.user_id} marked as Likely Rejected for company {company.name}")
-                logger.info(f"Processed Shortlist Excel attachment: {filename}. Matched {matched_count} system students.")
+                att_meta = db.query(AttachmentMetadata).filter(
+                    AttachmentMetadata.company_event_id == event.id,
+                    AttachmentMetadata.file_name == filename
+                ).first()
+
+                if not att_meta:
+                    att_meta = AttachmentMetadata(
+                        company_event_id=event.id,
+                        file_name=filename,
+                        file_type="JD_PDF" if filename.lower().endswith(".pdf") else "SHORTLIST_EXCEL",
+                        storage_path=f"attachments/{event.id}/{filename}",
+                        parsed_meta={}
+                    )
+                    db.add(att_meta)
+                    db.flush()
+                else:
+                    logger.info(f"Re-using existing attachment metadata for {filename}.")
+                
+                # Process JD PDF
+                if filename.lower().endswith(".pdf"):
+                    try:
+                        jd_info = parse_job_description(file_bytes)
+                        jd_text = jd_info.get("jd_text", "")
+                        required_skills = jd_info.get("skills", [])
+                        
+                        company.jd_text = jd_text
+                        company.jd_required_skills = required_skills
+                        company.jd_ats_keywords = jd_info.get("ats_keywords", [])
+                        
+                        jd_intel = precompute_jd_intelligence_deterministic(jd_text, required_skills)
+                        company.jd_preferred_skills = jd_intel.get("preferred_skills", [])
+                        company.interview_topics = jd_intel.get("interview_topics", [])
+                        
+                        att_meta.parsed_meta = {
+                            "skills": required_skills,
+                            "preferred_skills": company.jd_preferred_skills,
+                            "interview_topics": company.interview_topics,
+                            "ats_keywords_count": len(company.jd_ats_keywords)
+                        }
+                        logger.info(f"Processed JD PDF attachment: {filename} for event {event.id}.")
+                    except Exception as e:
+                        logger.error(f"Failed to process PDF {filename}: {str(e)}")
+                    
+                # Process Shortlist Excel
+                elif filename.lower().endswith((".xls", ".xlsx")):
+                    try:
+                        neo_ids = extract_neo_ids_from_excel(file_bytes)
+                        att_meta.parsed_meta = {"extracted_count": len(neo_ids)}
+                        
+                        matched_count = 0
+                        matched_user_ids = set()
+                        shortlist_hashes = set()
+                        
+                        for nid in neo_ids:
+                            nid_hash = generate_blind_index(nid, settings.PEPPER)
+                            shortlist_hashes.add(nid_hash)
+                            
+                            profile = db.query(StudentProfile).filter(StudentProfile.neo_id_hash == nid_hash).first()
+                            if profile:
+                                matched_user_ids.add(profile.user_id)
+                                app = db.query(Application).filter(
+                                    Application.user_id == profile.user_id,
+                                    Application.company_id == company.id
+                                ).first()
+                                
+                                if not app:
+                                    app = Application(
+                                        user_id=profile.user_id,
+                                        company_id=company.id,
+                                        status='Shortlisted',
+                                        recruitment_state='Shortlisted',
+                                        current_round='Shortlist Announcement'
+                                    )
+                                    db.add(app)
+                                else:
+                                    if app.status not in ('Offer', 'Rejected', 'Declined', 'Ignored'):
+                                        app.status = 'Shortlisted'
+                                        app.recruitment_state = 'Shortlisted'
+                                        app.current_round = 'Shortlisted'
+                                        
+                                notif_msg = f"🎉 Congratulations! You are shortlisted in the {company.name} drive for the {company.role} role."
+                                existing_notif = db.query(Notification).filter(
+                                    Notification.user_id == profile.user_id,
+                                    Notification.company_event_id == event.id
+                                ).first()
+                                if not existing_notif:
+                                    db.add(Notification(
+                                        user_id=profile.user_id,
+                                        company_event_id=event.id,
+                                        message=notif_msg,
+                                        notification_type='shortlist'
+                                    ))
+                                matched_count += 1
+                                
+                        active_apps = db.query(Application).filter(
+                            Application.company_id == company.id,
+                            Application.status.in_(('Applied', 'Shortlisted', 'OA', 'Interview'))
+                        ).all()
+                        
+                        for app in active_apps:
+                            if app.user_id not in matched_user_ids:
+                                profile = db.query(StudentProfile).filter(StudentProfile.user_id == app.user_id).first()
+                                if profile and profile.neo_id_hash not in shortlist_hashes:
+                                    app.status = 'Likely Rejected'
+                                    logger.info(f"Student {app.user_id} marked as Likely Rejected for company {company.name}")
+                        logger.info(f"Processed Shortlist Excel attachment: {filename}. Matched {matched_count} system students.")
+                    except Exception as e:
+                        logger.error(f"Failed to process Shortlist Excel {filename}: {str(e)}")
                 
         # 7. Complete job successfully
         job.status = 'completed'

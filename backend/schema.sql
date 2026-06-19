@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS raw_ingestion_jobs (
     locked_by VARCHAR(255),
     error_message TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    processed_at TIMESTAMP WITH TIME ZONE
+    processed_at TIMESTAMP WITH TIME ZONE,
+    parsed_output JSONB DEFAULT NULL,
+    validated_output JSONB DEFAULT NULL
 );
 
 -- 4. Student Profiles (Hybrid Privacy Model)
@@ -102,7 +104,8 @@ CREATE TABLE IF NOT EXISTS companies (
     interview_topics TEXT[] DEFAULT '{}',
     recruitment_cycle VARCHAR(100) DEFAULT 'Default',
     fingerprint VARCHAR(64) UNIQUE NOT NULL, -- SHA256 of Company|Role|Category|Batch|Cycle
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    requires_review BOOLEAN DEFAULT FALSE
 );
 
 -- 7. Company Version Change Logs

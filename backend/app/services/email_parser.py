@@ -1,4 +1,5 @@
 import re
+import os
 import json
 import logging
 from typing import Dict, Any, List, Optional
@@ -24,50 +25,193 @@ except OSError:
         logger.error(f"Failed to download spaCy model: {str(e)}")
         nlp = None
 
-def parse_with_ollama(email_body: str) -> Dict[str, Any]:
-    """
-    Attempts to parse email body using local Ollama model llama3.2:3b.
-    Returns structured JSON or empty dictionary on failure.
-    """
-    prompt = f"""Extract the following fields from this university placement email as JSON:
+def clean_json_string(s: str) -> str:
+    s = s.strip()
+    match = re.search(r"```(?:json)?\s*(.*?)\s*```", s, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return s
+
+def get_parser_prompt(context_text: str) -> str:
+    return f"""Analyze the following university placement email subject, body, and attachment content.
+Extract the required fields and output them EXACTLY in the JSON format specified below.
+Evaluate your confidence (between 0.00 and 1.00) for each field extraction based on evidence in the text.
+
+Required JSON Output Format:
 {{
-  "company": "Company Name",
-  "role": "Role Name",
-  "category": "Dream or Super Dream or Mass Recruiter or Internship or Regular or null",
-  "ctc": "CTC like '12 LPA' or '12 Lakhs' or null",
-  "stipend": "Stipend like '35,000 per month' or null",
-  "deadline_iso": "Deadline date-time in ISO format or null",
-  "eligible_branches": ["CSE", "IT"],
-  "min_cgpa": 7.0,
-  "requires_no_arrears": true/false,
-  "job_location": "Location name or null",
-  "registration_link": "URL near registration keyword or null"
+  "parser_metadata": {{
+    "parser_version": "v2",
+    "model_used": "llm-extracted"
+  }},
+  "overall_confidence": 0.90,
+  "extracted_data": {{
+    "company": {{
+      "value": "Google",
+      "confidence": 0.99
+    }},
+    "event_type": {{
+      "value": "NEW_DRIVE",
+      "confidence": 0.98
+    }},
+    "job_location": {{
+      "value": "Bangalore",
+      "confidence": 0.90
+    }},
+    "deadline_iso": {{
+      "value": "2026-06-25T23:59:00",
+      "confidence": 0.92
+    }},
+    "registration_link": {{
+      "value": "https://forms.gle/xyz",
+      "confidence": 0.99
+    }},
+    "roles": [
+      {{
+        "role": {{ "value": "Software Engineer", "confidence": 0.98 }},
+        "ctc": {{ "value": "18 LPA", "confidence": 0.95 }},
+        "stipend": {{ "value": null, "confidence": 0.99 }},
+        "min_cgpa": {{ "value": 8.0, "confidence": 0.97 }},
+        "requires_no_arrears": {{ "value": true, "confidence": 0.96 }},
+        "eligible_branches": {{ "value": ["CSE", "IT"], "confidence": 0.94 }}
+      }}
+    ]
+  }}
 }}
 
-Email Body:
-{email_body}
+Guidelines for event_type value (choose the single best matching type):
+- NEW_DRIVE: Company registration announcements or opening drives.
+- DEADLINE_EXTENSION: Notices extending the last date to register.
+- SHORTLIST_RELEASED: List of candidates shortlisted for OA or interviews.
+- OA_SCHEDULED: Online Test/Assessment schedules, test links, instructions.
+- OA_RESULT: Results of the Online Assessment.
+- INTERVIEW_SCHEDULED: Interview dates, batches, slots, venues.
+- INTERVIEW_RESULT: Results of the interview rounds.
+- OFFER_RELEASED: Announcements of selectees receiving offers.
+- REJECTION_RELEASED: Regrets/non-selected candidates lists.
+- GENERAL_UPDATE: Venue changes, list corrections, general instructions.
 
-Return ONLY valid JSON. No explanations, no markdown blocks.
+Content to analyze:
+{context_text}
+
+Return ONLY the raw JSON block. Do not wrap it in markdown code fences. No conversational text.
 """
+
+def parse_with_ollama(context_text: str) -> Dict[str, Any]:
+    """
+    Attempts to parse placement context using local Ollama endpoint.
+    """
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip('/')
+    ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
+    prompt = get_parser_prompt(context_text)
+    
     try:
-        # User specified local model: llama3.2:3b
         response = requests.post(
-            "http://localhost:11434/api/generate",
+            f"{ollama_base_url}/api/generate",
             json={
-                "model": "llama3.2:3b",
+                "model": ollama_model,
                 "prompt": prompt,
                 "stream": False,
-                "format": "json"
+                "format": "json",
+                "options": {
+                    "temperature": 0.1
+                }
             },
-            timeout=10
+            timeout=25
         )
         if response.status_code == 200:
             result = response.json()
             response_text = result.get("response", "{}").strip()
-            return json.loads(response_text)
+            clean_str = clean_json_string(response_text)
+            parsed = json.loads(clean_str)
+            if "parser_metadata" in parsed:
+                parsed["parser_metadata"]["model_used"] = f"ollama-{ollama_model}"
+            return parsed
     except Exception as e:
-        logger.warning(f"Ollama llama3.2:3b fallback unavailable: {str(e)}")
+        logger.warning(f"Ollama ({ollama_model}) parsing failed: {str(e)}")
     return {}
+
+def parse_with_huggingface(context_text: str) -> Dict[str, Any]:
+    """
+    Escalates parsing to Hugging Face Serverless Inference API (Qwen2.5-72B-Instruct).
+    """
+    hf_token = os.getenv("HF_API_TOKEN", "")
+    if not hf_token:
+        logger.warning("HF_API_TOKEN not found in environment. Skipping Hugging Face escalation.")
+        return {}
+        
+    model_id = "Qwen/Qwen2.5-72B-Instruct"
+    api_url = f"https://api-inference.huggingface.co/models/{model_id}"
+    headers = {"Authorization": f"Bearer {hf_token}"}
+    prompt = get_parser_prompt(context_text)
+    
+    try:
+        response = requests.post(
+            api_url,
+            headers=headers,
+            json={
+                "inputs": prompt,
+                "parameters": {
+                    "max_new_tokens": 1024,
+                    "temperature": 0.1,
+                    "return_full_text": False
+                }
+            },
+            timeout=25
+        )
+        if response.status_code == 200:
+            res_json = response.json()
+            if isinstance(res_json, list) and len(res_json) > 0:
+                generated_text = res_json[0].get("generated_text", "").strip()
+            elif isinstance(res_json, dict):
+                generated_text = res_json.get("generated_text", "").strip()
+            else:
+                generated_text = str(res_json).strip()
+                
+            clean_str = clean_json_string(generated_text)
+            parsed = json.loads(clean_str)
+            if "parser_metadata" in parsed:
+                parsed["parser_metadata"]["model_used"] = f"huggingface-{model_id}"
+            return parsed
+        else:
+            logger.warning(f"Hugging Face API returned error ({response.status_code}): {response.text}")
+    except Exception as e:
+        logger.warning(f"Hugging Face escalation parsing failed: {str(e)}")
+    return {}
+
+def is_high_confidence(parsed: Dict[str, Any]) -> bool:
+    """
+    Checks if the overall confidence and core field confidences meet the quality thresholds.
+    Thresholds:
+      - Overall Confidence >= 0.75
+      - Core fields (company, event_type) >= 0.80
+      - deadline_iso >= 0.80 (if present)
+    """
+    if not parsed or not isinstance(parsed, dict):
+        return False
+        
+    ext = parsed.get("extracted_data")
+    if not ext or not isinstance(ext, dict):
+        return False
+        
+    overall = parsed.get("overall_confidence", 0.0)
+    if overall < 0.75:
+        return False
+        
+    # Check core fields
+    for field in ["company", "event_type"]:
+        field_data = ext.get(field)
+        if not field_data or not isinstance(field_data, dict):
+            return False
+        if field_data.get("confidence", 0.0) < 0.80:
+            return False
+            
+    # Check deadline if present
+    deadline = ext.get("deadline_iso")
+    if deadline and isinstance(deadline, dict) and deadline.get("value"):
+        if deadline.get("confidence", 0.0) < 0.80:
+            return False
+            
+    return True
 
 def extract_placements_regex(email_body: str) -> Dict[str, Any]:
     """
@@ -218,15 +362,13 @@ def extract_placements_regex(email_body: str) -> Dict[str, Any]:
 
     return data
 
-def parse_placement_email(email_body: str) -> Dict[str, Any]:
+def build_regex_fallback_response(email_body: str) -> Dict[str, Any]:
     """
-    Main entry point to parse a placement email.
-    Attempts Regex extraction, uses spaCy NER for fillers, and falls back to Ollama.
+    Builds a mock LLM structure response from the legacy regex+spaCy output.
     """
-    # Step 1: Run regex
     parsed = extract_placements_regex(email_body)
 
-    # Step 2: Use spaCy NER as fallback for missing fields (dates/locations/orgs)
+    # Use spaCy NER as fallback for missing fields (dates/locations/orgs)
     if nlp and ("deadline_iso" not in parsed or "job_location" not in parsed or "company" not in parsed):
         doc = nlp(email_body)
         orgs = []
@@ -241,7 +383,6 @@ def parse_placement_email(email_body: str) -> Dict[str, Any]:
                 gpes.append(ent.text)
 
         if "company" not in parsed and orgs:
-            # First organization that isn't VIT
             for org in orgs:
                 if not any(k in org.lower() for k in ["vit", "vellore", "institute", "university", "cdc"]):
                     parsed["company"] = org.strip()
@@ -258,24 +399,96 @@ def parse_placement_email(email_body: str) -> Dict[str, Any]:
         if "job_location" not in parsed and gpes:
             parsed["job_location"] = gpes[0].strip()
 
-    # Step 3: Ollama fallback if core fields (company/role) are missing
-    if not parsed.get("company") or not parsed.get("role"):
-        logger.info("Regex + spaCy extraction failed to find core fields. Querying Ollama...")
-        ollama_data = parse_with_ollama(email_body)
+    # Final defaults
+    company = parsed.get("company", "Unknown Company").strip()
+    role = parsed.get("role", "Software Engineer").strip()
+    category = parsed.get("category", "Dream").strip()
+    ctc = parsed.get("ctc")
+    stipend = parsed.get("stipend")
+    eligible_branches = parsed.get("eligible_branches", [])
+    min_cgpa = parsed.get("min_cgpa")
+    requires_no_arrears = parsed.get("requires_no_arrears", False)
+    deadline_iso = parsed.get("deadline_iso")
+    job_location = parsed.get("job_location")
+    registration_link = parsed.get("registration_link")
+
+    # Determine event type based on subject/body heuristics
+    event_type = "NEW_DRIVE"
+    body_lower = email_body.lower()
+    if 'shortlist' in body_lower:
+        event_type = "SHORTLIST_RELEASED"
+    elif 'online test' in body_lower or 'assessment' in body_lower or ' oa ' in (' ' + body_lower + ' '):
+        event_type = "OA_SCHEDULED"
+    elif 'interview' in body_lower:
+        event_type = "INTERVIEW_SCHEDULED"
+    elif 'offer' in body_lower or 'congratulations' in body_lower:
+        event_type = "OFFER_RELEASED"
+    elif 'regret' in body_lower or 'not selected' in body_lower or 'rejection' in body_lower or 'reject' in body_lower:
+        event_type = "REJECTION_RELEASED"
+
+    return {
+        "parser_metadata": {
+            "parser_version": "v2-regex-fallback",
+            "model_used": "regex-rules"
+        },
+        "overall_confidence": 0.50,
+        "extracted_data": {
+            "company": {
+                "value": company,
+                "confidence": 0.50
+            },
+            "event_type": {
+                "value": event_type,
+                "confidence": 0.50
+            },
+            "job_location": {
+                "value": job_location,
+                "confidence": 0.50
+            },
+            "deadline_iso": {
+                "value": deadline_iso,
+                "confidence": 0.50
+            },
+            "registration_link": {
+                "value": registration_link,
+                "confidence": 0.50
+            },
+            "roles": [
+                {
+                    "role": { "value": role, "confidence": 0.50 },
+                    "ctc": { "value": ctc, "confidence": 0.50 },
+                    "stipend": { "value": stipend, "confidence": 0.50 },
+                    "eligible_branches": { "value": eligible_branches, "confidence": 0.50 },
+                    "min_cgpa": { "value": min_cgpa, "confidence": 0.50 },
+                    "requires_no_arrears": { "value": requires_no_arrears, "confidence": 0.50 }
+                }
+            ]
+        }
+    }
+
+def parse_placement_email(email_body: str, subject: str = "", attachment_text: str = "") -> Dict[str, Any]:
+    """
+    Main entry point to parse a placement email using the escalate-on-threshold chain:
+    Ollama -> Validate -> If low confidence/offline -> HF Serverless API -> Regex Fallback.
+    """
+    # 1. Prepare context text
+    context_text = f"Subject: {subject}\n\nBody:\n{email_body}"
+    if attachment_text:
+        context_text += f"\n\nAttachment Content:\n{attachment_text}"
         
-        # Merge Ollama results for missing fields only
-        for k, v in ollama_data.items():
-            if v and (k not in parsed or not parsed[k]):
-                parsed[k] = v
-
-    # Final defaults/sanitizations
-    if "company" not in parsed:
-        parsed["company"] = "Unknown Company"
-    if "role" not in parsed:
-        parsed["role"] = "Software Engineer"
-    if "category" not in parsed:
-        parsed["category"] = "Dream"
-    if "requires_no_arrears" not in parsed:
-        parsed["requires_no_arrears"] = False
-
-    return parsed
+    logger.info("Attempting local Ollama parser...")
+    parsed = parse_with_ollama(context_text)
+    
+    if is_high_confidence(parsed):
+        logger.info("Local Ollama parser returned HIGH confidence output. Proceeding.")
+        return parsed
+        
+    logger.info("Local Ollama parser output is low confidence or failed. Escalating to Hugging Face...")
+    parsed_hf = parse_with_huggingface(context_text)
+    
+    if parsed_hf and parsed_hf.get("extracted_data"):
+        logger.info("Hugging Face parser returned structured output. Proceeding.")
+        return parsed_hf
+        
+    logger.warning("Hugging Face escalation failed or returned empty. Falling back to Regex parser.")
+    return build_regex_fallback_response(email_body)

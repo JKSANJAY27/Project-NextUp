@@ -71,6 +71,7 @@ class Company(Base):
     recruitment_cycle = Column(String, default="Default")
     fingerprint = Column(String(64), unique=True, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    requires_review = Column(Boolean, default=False)
 
     applications = relationship("Application", back_populates="company", cascade="all, delete-orphan")
     events = relationship("CompanyEvent", back_populates="company", cascade="all, delete-orphan")
@@ -188,6 +189,8 @@ class RawIngestionJob(Base):
     error_message = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime)
+    parsed_output = Column(JSON, default=None)
+    validated_output = Column(JSON, default=None)
 
     source = relationship("IngestionSource", back_populates="jobs")
 

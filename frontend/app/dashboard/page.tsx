@@ -59,6 +59,7 @@ interface Company {
   jd_ats_keywords: string[] | null;
   source_email_body: string | null;
   additional_info: AdditionalInfo | null;
+  requires_review?: boolean;
 }
 
 interface CompanyWithEligibility extends Company {
@@ -2359,6 +2360,20 @@ export default function DashboardPage() {
                 {/* 1. OVERVIEW & TIMELINE TAB */}
                 {modalTab === "overview" && (
                   <div className="space-y-8">
+                    {/* Warning notice if low confidence */}
+                    {selectedCompany.requires_review && (
+                      <div className="border-2 border-dashed border-amber-500 bg-amber-500/10 p-4 flex items-start gap-3">
+                        <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-wider text-amber-500">
+                            ⚠️ PARSER VERIFICATION NOTICE
+                          </p>
+                          <p className="text-[10px] text-muted-foreground uppercase leading-relaxed mt-0.5">
+                            Some fields in this workspace were automatically parsed with low confidence. Please verify the timeline dates, CTC, and location parameters using the <strong className="text-accent">[View Source Email]</strong> button on the milestone items.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                     {/* Header Summary */}
                     <div className="border-b border-border pb-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
                       <div>
@@ -2562,15 +2577,30 @@ export default function DashboardPage() {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="space-y-4">
-                        <div className="border border-border p-4 bg-muted/5">
+                        <div className="border border-border p-4 bg-muted/5 relative">
+                          {selectedCompany.requires_review && (
+                            <span className="absolute top-2 right-2 text-[8px] font-black text-amber-500 uppercase flex items-center gap-1">
+                              <AlertTriangle size={10} /> VERIFY FROM SOURCE
+                            </span>
+                          )}
                           <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">CTC / SALARY</span>
                           <span className="text-lg font-black uppercase text-foreground">{selectedCompany.ctc || "—"}</span>
                         </div>
-                        <div className="border border-border p-4 bg-muted/5">
+                        <div className="border border-border p-4 bg-muted/5 relative">
+                          {selectedCompany.requires_review && (
+                            <span className="absolute top-2 right-2 text-[8px] font-black text-amber-500 uppercase flex items-center gap-1">
+                              <AlertTriangle size={10} /> VERIFY FROM SOURCE
+                            </span>
+                          )}
                           <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">STIPEND</span>
                           <span className="text-lg font-black uppercase text-foreground">{selectedCompany.stipend || "—"}</span>
                         </div>
-                        <div className="border border-border p-4 bg-muted/5">
+                        <div className="border border-border p-4 bg-muted/5 relative">
+                          {selectedCompany.requires_review && (
+                            <span className="absolute top-2 right-2 text-[8px] font-black text-amber-500 uppercase flex items-center gap-1">
+                              <AlertTriangle size={10} /> VERIFY FROM SOURCE
+                            </span>
+                          )}
                           <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">REGISTRATION DEADLINE</span>
                           <span className="text-xs font-mono font-bold text-foreground">
                             {selectedCompany.registration_deadline 
