@@ -74,6 +74,7 @@ class ApplicationCreate(BaseModel):
     status: str
     current_round: Optional[str] = "Applied"
     notes_enc: Optional[str] = None
+    tailored_resume_enc: Optional[str] = None
     user_decision: Optional[str] = "tracking"
     recruitment_state: Optional[str] = "Registration"
     workspace_priority_override: Optional[str] = None
@@ -83,6 +84,7 @@ class ApplicationUpdate(BaseModel):
     status: Optional[str] = None
     current_round: Optional[str] = None
     notes_enc: Optional[str] = None
+    tailored_resume_enc: Optional[str] = None
     user_decision: Optional[str] = None
     recruitment_state: Optional[str] = None
     workspace_priority_override: Optional[str] = None
@@ -96,6 +98,7 @@ class ApplicationOut(BaseModel):
     current_round: Optional[str]
     applied_at: datetime
     notes_enc: Optional[str]
+    tailored_resume_enc: Optional[str] = None
     match_score: int
     user_decision: Optional[str]
     recruitment_state: Optional[str]

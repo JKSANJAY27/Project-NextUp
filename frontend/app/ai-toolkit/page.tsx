@@ -9,6 +9,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
 import { isProfileComplete } from "@/lib/profile-utils";
 import api from "@/lib/api";
+import { decryptData, encryptData } from "@/lib/crypto";
 import {
   Sparkles,
   Save,
@@ -20,7 +21,11 @@ import {
   Download,
   Play,
   Target,
-  FileText
+  FileText,
+  Plus,
+  Trash2,
+  ChevronDown,
+  ChevronUp
 } from "lucide-react";
 import {
   generateInBrowser,
@@ -74,7 +79,7 @@ interface InterviewPrep {
 function AIToolkitContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { user, token } = useAppStore();
+  const { user, token, encryptionKey } = useAppStore();
 
   useEffect(() => {
     if (!token) {
@@ -102,6 +107,14 @@ function AIToolkitContent() {
   const [atsModel, setAtsModel] = useState<BrowserModelType>("qwen-0.5b");
   const [optimizerSubView, setOptimizerSubView] = useState<"tailored" | "highlight">("tailored");
   const [masterResume, setMasterResume] = useState<any>(null);
+  const [activeApplication, setActiveApplication] = useState<any>(null);
+  const [tailoredResumeData, setTailoredResumeData] = useState<any>(null);
+  const [hasTailoredResume, setHasTailoredResume] = useState(false);
+  
+  // Helper inputs for additions inside tailored resume editor
+  const [newCert, setNewCert] = useState("");
+  const [newLang, setNewLang] = useState("");
+  const [newAward, setNewAward] = useState("");
 
   // SOP State
   const [sopContent, setSopContent] = useState("");
@@ -176,14 +189,49 @@ function AIToolkitContent() {
     }
   }, [companyId]);
 
-  const fetchMasterResume = async () => {
+  const fetchApplicationAndResume = async (compId: string) => {
     try {
       const res = await api.get("/resumes/me");
+      let masterData = null;
       if (res.data && res.data.resume_data) {
-        setMasterResume(res.data.resume_data);
+        masterData = res.data.resume_data;
+        setMasterResume(masterData);
+      }
+
+      const appsRes = await api.get("/applications");
+      const activeApp = appsRes.data.find((a: any) => a.company_id === compId);
+      setActiveApplication(activeApp || null);
+
+      if (activeApp && activeApp.tailored_resume_enc && encryptionKey) {
+        try {
+          const decResume = await decryptData(activeApp.tailored_resume_enc, encryptionKey);
+          const trData = JSON.parse(decResume);
+          setTailoredResumeData(trData);
+          setHasTailoredResume(true);
+        } catch (e) {
+          console.error("Failed to decrypt tailored resume:", e);
+          if (masterData) {
+            setTailoredResumeData(JSON.parse(JSON.stringify(masterData)));
+          }
+          setHasTailoredResume(false);
+        }
+      } else {
+        if (masterData) {
+          setTailoredResumeData(JSON.parse(JSON.stringify(masterData)));
+        } else {
+          setTailoredResumeData({
+            personal: { name: user?.full_name || "", email: user?.email || "", phone: "", location: "" },
+            summary: "",
+            education: [],
+            experience: [],
+            projects: [],
+            skills: user?.skills || []
+          });
+        }
+        setHasTailoredResume(false);
       }
     } catch (err) {
-      console.error("Failed to load master resume:", err);
+      console.error("Failed to load application and resume details:", err);
     }
   };
 
@@ -206,7 +254,7 @@ function AIToolkitContent() {
         fetchLatestDraft(id, "cover_letter"),
         fetchDocumentVersions(id, "sop"),
         fetchDocumentVersions(id, "cover_letter"),
-        fetchMasterResume()
+        fetchApplicationAndResume(id)
       ]);
       
       // Run deterministic ATS Match and fetch Interview Prep deterministically first
@@ -596,68 +644,268 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
   };
 
   // 4. Apply optimized sections to Master Resume
-  const applySuggestionsToMaster = async () => {
-    if (!atsResult || !atsResult.tailored_resume || !company) return;
+  // 4. Apply optimized sections to Tailored Resume (not master!)
+  const applySuggestionsToTailored = () => {
+    if (!atsResult || !atsResult.tailored_resume || !tailoredResumeData) return;
+    
+    const opt = atsResult.tailored_resume;
+    const updatedData = JSON.parse(JSON.stringify(tailoredResumeData));
+    
+    if (opt.optimized_summary) {
+      updatedData.summary = opt.optimized_summary;
+    }
+    
+    if (opt.optimized_skills && opt.optimized_skills.length > 0) {
+      const mergedSkills = Array.from(new Set([
+        ...opt.optimized_skills,
+        ...(updatedData.skills || [])
+      ]));
+      updatedData.skills = mergedSkills;
+    }
+    
+    if (opt.optimized_projects && opt.optimized_projects.length > 0) {
+      const projects = updatedData.projects || [];
+      opt.optimized_projects.forEach((optProj: any) => {
+        const match = projects.find((p: any) => 
+          p.title.trim().toLowerCase() === optProj.title.trim().toLowerCase()
+        );
+        if (match) {
+          match.description = optProj.description;
+        } else if (projects.length > 0) {
+          if (projects.length === 1 && opt.optimized_projects.length === 1) {
+            projects[0].description = opt.optimized_projects[0].description;
+          }
+        }
+      });
+    }
+    
+    setTailoredResumeData(updatedData);
+    showSuccess("AI suggestions applied to Tailored Resume! Save to persist.");
+  };
+
+  // 5. Save tailored resume securely to applications table
+  const handleSaveTailoredResume = async () => {
+    if (!company || !encryptionKey || !tailoredResumeData) {
+      setErrorMsg("Decryption Key or Resume Data missing. Ensure Vault is unlocked.");
+      return;
+    }
     
     try {
       setSavingDoc(true);
       setErrorMsg("");
       setSuccessMsg("");
       
-      const res = await api.get("/resumes/me");
-      const currentData = res.data?.resume_data || {
-        personal: { name: user?.full_name || "", email: user?.email || "", phone: "", location: "" },
-        summary: "",
-        education: [],
-        experience: [],
-        projects: [],
-        skills: []
-      };
+      const encResume = await encryptData(JSON.stringify(tailoredResumeData), encryptionKey);
       
-      const updatedData = JSON.parse(JSON.stringify(currentData));
-      const opt = atsResult.tailored_resume;
-      
-      if (opt.optimized_summary) {
-        updatedData.summary = opt.optimized_summary;
-      }
-      
-      if (opt.optimized_skills && opt.optimized_skills.length > 0) {
-        const mergedSkills = Array.from(new Set([
-          ...opt.optimized_skills,
-          ...(updatedData.skills || [])
-        ]));
-        updatedData.skills = mergedSkills;
-      }
-      
-      if (opt.optimized_projects && opt.optimized_projects.length > 0) {
-        const projects = updatedData.projects || [];
-        opt.optimized_projects.forEach((optProj: any) => {
-          const match = projects.find((p: any) => 
-            p.title.trim().toLowerCase() === optProj.title.trim().toLowerCase()
-          );
-          if (match) {
-            match.description = optProj.description;
-          } else if (projects.length > 0) {
-            if (projects.length === 1 && opt.optimized_projects.length === 1) {
-              projects[0].description = opt.optimized_projects[0].description;
-            }
-          }
+      if (activeApplication) {
+        // Update existing tracker
+        const res = await api.patch(`/applications/${activeApplication.id}`, {
+          tailored_resume_enc: encResume
         });
+        setActiveApplication(res.data);
+      } else {
+        // Create tracker automatically
+        const res = await api.post("/applications", {
+          company_id: company.id,
+          status: "Applied",
+          tailored_resume_enc: encResume,
+          recruitment_state: "Registration"
+        });
+        setActiveApplication(res.data);
       }
       
-      await api.put("/resumes/me", {
-        template: res.data?.template || "Classic Single",
-        resume_data: updatedData
-      });
-      
-      setMasterResume(updatedData);
-      showSuccess("AI suggestions successfully applied to Master Resume!");
+      setHasTailoredResume(true);
+      showSuccess("Tailored resume saved securely for this application!");
     } catch (err: any) {
-      console.error("Failed to apply suggestions:", err);
-      setErrorMsg("Failed to update Master Resume with AI suggestions.");
+      console.error("Failed to save tailored resume:", err);
+      setErrorMsg(err.response?.data?.detail || "Failed to save tailored resume.");
     } finally {
       setSavingDoc(false);
     }
+  };
+
+  // 6. Reset tailored resume to master resume values
+  const resetTailoredToMaster = () => {
+    if (!masterResume) {
+      setErrorMsg("No master resume found to reset to.");
+      return;
+    }
+    setTailoredResumeData(JSON.parse(JSON.stringify(masterResume)));
+    showSuccess("Tailored resume reset to Master Resume values!");
+  };
+
+  // 7. Download tailored resume as text file
+  const downloadTailoredResumeText = () => {
+    if (!tailoredResumeData) return;
+    let text = `=== TAILORED RESUME: ${tailoredResumeData.personal?.name || ""} ===\n`;
+    text += `Target: ${company?.name || ""} - ${company?.role || ""}\n\n`;
+    
+    text += `--- PERSONAL DETAILS ---\n`;
+    text += `Name: ${tailoredResumeData.personal?.name || ""}\n`;
+    text += `Email: ${tailoredResumeData.personal?.email || ""}\n`;
+    text += `Phone: ${tailoredResumeData.personal?.phone || ""}\n`;
+    text += `Location: ${tailoredResumeData.personal?.location || ""}\n`;
+    if (tailoredResumeData.personal?.title) text += `Title: ${tailoredResumeData.personal.title}\n`;
+    if (tailoredResumeData.personal?.github) text += `GitHub: ${tailoredResumeData.personal.github}\n`;
+    if (tailoredResumeData.personal?.linkedin) text += `LinkedIn: ${tailoredResumeData.personal.linkedin}\n`;
+    if (tailoredResumeData.personal?.website) text += `Website: ${tailoredResumeData.personal.website}\n`;
+    
+    text += `\n--- PROFESSIONAL SUMMARY ---\n`;
+    text += `${tailoredResumeData.summary || ""}\n`;
+    
+    text += `\n--- EDUCATION HISTORY ---\n`;
+    (tailoredResumeData.education || []).forEach((edu: any) => {
+      text += `${edu.degree} at ${edu.institution} (${edu.year}) - Score: ${edu.score}\n`;
+    });
+    
+    text += `\n--- WORK EXPERIENCE ---\n`;
+    (tailoredResumeData.experience || []).forEach((exp: any) => {
+      text += `${exp.role} at ${exp.company} (${exp.period})\nDescription: ${exp.description}\n\n`;
+    });
+    
+    text += `\n--- PROJECTS ---\n`;
+    (tailoredResumeData.projects || []).forEach((proj: any) => {
+      text += `${proj.title} (Tech: ${proj.tech})\nDescription: ${proj.description}\n\n`;
+    });
+    
+    text += `--- SKILLS ---\n`;
+    text += `${(tailoredResumeData.skills || []).join(", ")}\n`;
+    
+    if (tailoredResumeData.certifications?.length) {
+      text += `\n--- CERTIFICATIONS ---\n${tailoredResumeData.certifications.join(", ")}\n`;
+    }
+    if (tailoredResumeData.languages?.length) {
+      text += `\n--- LANGUAGES ---\n${tailoredResumeData.languages.join(", ")}\n`;
+    }
+    if (tailoredResumeData.awards?.length) {
+      text += `\n--- AWARDS & HONORS ---\n${tailoredResumeData.awards.join(", ")}\n`;
+    }
+    
+    downloadAsTextFile(`tailored_resume_${company?.name || "company"}.txt`, text);
+  };
+
+  const updateTailoredPersonal = (field: string, val: string) => {
+    setTailoredResumeData((prev: any) => ({
+      ...prev,
+      personal: { ...prev.personal, [field]: val }
+    }));
+  };
+
+  const addTailoredEducation = () => {
+    setTailoredResumeData((prev: any) => ({
+      ...prev,
+      education: [...(prev.education || []), { degree: "", institution: "", year: "", score: "" }]
+    }));
+  };
+
+  const removeTailoredEducation = (index: number) => {
+    setTailoredResumeData((prev: any) => ({
+      ...prev,
+      education: (prev.education || []).filter((_: any, i: number) => i !== index)
+    }));
+  };
+
+  const updateTailoredEducation = (index: number, field: string, val: string) => {
+    setTailoredResumeData((prev: any) => {
+      const list = [...(prev.education || [])];
+      list[index] = { ...list[index], [field]: val };
+      return { ...prev, education: list };
+    });
+  };
+
+  const addTailoredExperience = () => {
+    setTailoredResumeData((prev: any) => ({
+      ...prev,
+      experience: [...(prev.experience || []), { role: "", company: "", period: "", description: "" }]
+    }));
+  };
+
+  const removeTailoredExperience = (index: number) => {
+    setTailoredResumeData((prev: any) => ({
+      ...prev,
+      experience: (prev.experience || []).filter((_: any, i: number) => i !== index)
+    }));
+  };
+
+  const updateTailoredExperience = (index: number, field: string, val: string) => {
+    setTailoredResumeData((prev: any) => {
+      const list = [...(prev.experience || [])];
+      list[index] = { ...list[index], [field]: val };
+      return { ...prev, experience: list };
+    });
+  };
+
+  const addTailoredProject = () => {
+    setTailoredResumeData((prev: any) => ({
+      ...prev,
+      projects: [...(prev.projects || []), { title: "", tech: "", description: "" }]
+    }));
+  };
+
+  const removeTailoredProject = (index: number) => {
+    setTailoredResumeData((prev: any) => ({
+      ...prev,
+      projects: (prev.projects || []).filter((_: any, i: number) => i !== index)
+    }));
+  };
+
+  const updateTailoredProject = (index: number, field: string, val: string) => {
+    setTailoredResumeData((prev: any) => {
+      const list = [...(prev.projects || [])];
+      list[index] = { ...list[index], [field]: val };
+      return { ...prev, projects: list };
+    });
+  };
+
+  const addTailoredCert = () => {
+    if (newCert.trim() && !tailoredResumeData.certifications?.includes(newCert.trim())) {
+      setTailoredResumeData((prev: any) => ({
+        ...prev,
+        certifications: [...(prev.certifications || []), newCert.trim()]
+      }));
+      setNewCert("");
+    }
+  };
+
+  const removeTailoredCert = (val: string) => {
+    setTailoredResumeData((prev: any) => ({
+      ...prev,
+      certifications: (prev.certifications || []).filter((c: string) => c !== val)
+    }));
+  };
+
+  const addTailoredLang = () => {
+    if (newLang.trim() && !tailoredResumeData.languages?.includes(newLang.trim())) {
+      setTailoredResumeData((prev: any) => ({
+        ...prev,
+        languages: [...(prev.languages || []), newLang.trim()]
+      }));
+      setNewLang("");
+    }
+  };
+
+  const removeTailoredLang = (val: string) => {
+    setTailoredResumeData((prev: any) => ({
+      ...prev,
+      languages: (prev.languages || []).filter((l: string) => l !== val)
+    }));
+  };
+
+  const addTailoredAward = () => {
+    if (newAward.trim() && !tailoredResumeData.awards?.includes(newAward.trim())) {
+      setTailoredResumeData((prev: any) => ({
+        ...prev,
+        awards: [...(prev.awards || []), newAward.trim()]
+      }));
+      setNewAward("");
+    }
+  };
+
+  const removeTailoredAward = (val: string) => {
+    setTailoredResumeData((prev: any) => ({
+      ...prev,
+      awards: (prev.awards || []).filter((a: string) => a !== val)
+    }));
   };
 
   const downloadAsTextFile = (filename: string, text: string) => {
@@ -1015,7 +1263,7 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
                               : "border-border hover:bg-muted text-muted-foreground"
                           }`}
                         >
-                          📝 Tailored Suggestions
+                          📝 Tailored Workspace
                         </button>
                         <button
                           onClick={() => setOptimizerSubView("highlight")}
@@ -1028,89 +1276,397 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
                           🔍 ATS Keyword Highlighting
                         </button>
                       </div>
-                      
-                      {atsResult?.tailored_resume && optimizerSubView === "tailored" && (
-                        <button
-                          onClick={applySuggestionsToMaster}
-                          disabled={savingDoc}
-                          className="h-9 px-4 border-2 border-accent bg-accent text-black hover:bg-black hover:text-accent hover:border-black text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 active:scale-95 transition-all disabled:opacity-50"
-                        >
-                          <Sparkles size={11} />
-                          <span>Apply to Master Resume</span>
-                        </button>
-                      )}
                     </div>
 
                     {optimizerSubView === "tailored" ? (
                       <>
                         <div className="border-2 border-border p-6 space-y-4">
-                          <h3 className="text-lg font-black uppercase tracking-tighter">TAILORED RESUME SUGGESTIONS</h3>
+                          <h3 className="text-lg font-black uppercase tracking-tighter">TAILORED APPLICATION RESUME</h3>
                           <p className="text-xs text-muted-foreground uppercase leading-relaxed">
-                            These sections are optimized for {company.name}&apos;s specific requirements. Click the button above to merge them directly into your master resume, or copy them manually.
+                            Personalize your resume details below specifically for {company.name}. Manual changes here are saved securely to your application record, keeping your Master Resume untouched.
                           </p>
                         </div>
 
-                        {atsResult?.tailored_resume ? (
+                        {tailoredResumeData ? (
                           <div className="space-y-6">
-                            
-                            {/* Summary Section */}
-                            <div className="border-2 border-border p-4 bg-muted/10 space-y-3">
-                              <div className="flex justify-between items-center">
-                                <span className="text-[10px] font-black text-muted-foreground uppercase">OPTIMIZED PROFESSIONAL PROFILE SUMMARY</span>
+                            {/* Premium Actions Bar */}
+                            <div className="flex flex-wrap gap-3 items-center justify-between border-2 border-border p-4 bg-muted/20">
+                              <div className="flex items-center gap-2 text-xs font-black uppercase text-accent">
+                                <Target size={14} />
+                                <span>Customized Resume Workspace</span>
+                              </div>
+
+                              <div className="flex flex-wrap gap-2">
+                                {atsResult?.tailored_resume && (
+                                  <button
+                                    onClick={applySuggestionsToTailored}
+                                    className="h-9 px-3 border border-accent bg-accent/10 hover:bg-accent hover:text-black text-accent text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
+                                  >
+                                    <Sparkles size={11} />
+                                    <span>Apply AI suggestions</span>
+                                  </button>
+                                )}
                                 <button
-                                  onClick={() => copyToClipboard(atsResult.tailored_resume.optimized_summary)}
-                                  className="h-8 px-3 border border-border bg-background hover:bg-muted text-[10px] font-bold uppercase flex items-center gap-1"
+                                  onClick={handleSaveTailoredResume}
+                                  disabled={savingDoc}
+                                  className="h-9 px-3 bg-foreground text-background hover:bg-accent hover:text-black border border-border text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
                                 >
-                                  <Copy size={10} />
-                                  <span>COPY</span>
+                                  <Save size={11} />
+                                  <span>{savingDoc ? "Saving..." : "Save Custom Resume"}</span>
+                                </button>
+                                <button
+                                  onClick={downloadTailoredResumeText}
+                                  className="h-9 px-3 bg-muted border border-border hover:border-accent hover:text-accent text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
+                                >
+                                  <Download size={11} />
+                                  <span>Export as Text</span>
+                                </button>
+                                <button
+                                  onClick={resetTailoredToMaster}
+                                  className="h-9 px-3 border border-red-500/50 hover:bg-red-500 hover:text-white text-red-500 text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
+                                >
+                                  Reset to Master
                                 </button>
                               </div>
-                              <p className="text-xs font-mono bg-background border border-border p-3 select-all leading-relaxed whitespace-pre-wrap">
-                                {atsResult.tailored_resume.optimized_summary}
-                              </p>
                             </div>
 
-                            {/* Projects Section */}
-                            {atsResult.tailored_resume.optimized_projects && atsResult.tailored_resume.optimized_projects.length > 0 && (
+                            {/* The Interactive Form Fields */}
+                            <div className="border-2 border-border p-6 bg-card space-y-8">
+                              
+                              {/* 1. Contact / Personal */}
                               <div className="space-y-4">
-                                <span className="text-[10px] font-black text-muted-foreground uppercase">OPTIMIZED WORK PROJECTS DESCRIPTIONS</span>
-                                
-                                {atsResult.tailored_resume.optimized_projects.map((proj, i) => (
-                                  <div key={i} className="border border-border p-4 bg-muted/5 space-y-2.5">
-                                    <div className="flex justify-between items-center">
-                                      <span className="text-[10px] font-bold text-foreground">{proj.title.toUpperCase()}</span>
+                                <h4 className="text-xs font-black uppercase tracking-widest text-accent">Personal Details</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                  <div className="space-y-1">
+                                    <label className="text-[9px] font-black uppercase text-zinc-500">Full Name</label>
+                                    <input
+                                      type="text"
+                                      value={tailoredResumeData.personal?.name || ""}
+                                      onChange={(e) => updateTailoredPersonal("name", e.target.value)}
+                                      className="w-full h-10 border border-border bg-background text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-[9px] font-black uppercase text-zinc-500">Email</label>
+                                    <input
+                                      type="text"
+                                      value={tailoredResumeData.personal?.email || ""}
+                                      onChange={(e) => updateTailoredPersonal("email", e.target.value)}
+                                      className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-[9px] font-black uppercase text-zinc-500">Phone</label>
+                                    <input
+                                      type="text"
+                                      value={tailoredResumeData.personal?.phone || ""}
+                                      onChange={(e) => updateTailoredPersonal("phone", e.target.value)}
+                                      className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-[9px] font-black uppercase text-zinc-500">Location</label>
+                                    <input
+                                      type="text"
+                                      value={tailoredResumeData.personal?.location || ""}
+                                      onChange={(e) => updateTailoredPersonal("location", e.target.value)}
+                                      className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* 2. Professional Summary */}
+                              <div className="space-y-2">
+                                <label className="text-xs font-black uppercase tracking-widest text-accent">Professional Summary</label>
+                                <textarea
+                                  value={tailoredResumeData.summary || ""}
+                                  onChange={(e) => setTailoredResumeData((prev: any) => ({ ...prev, summary: e.target.value }))}
+                                  rows={3}
+                                  className="w-full border border-border bg-background text-xs p-3 focus:border-accent focus:outline-none uppercase font-bold"
+                                />
+                              </div>
+
+                              {/* 3. Skills */}
+                              <div className="space-y-2">
+                                <label className="text-xs font-black uppercase tracking-widest text-accent">Skills Tags (Comma-separated)</label>
+                                <input
+                                  type="text"
+                                  value={tailoredResumeData.skills ? tailoredResumeData.skills.join(", ") : ""}
+                                  onChange={(e) => {
+                                    const arr = e.target.value.split(",").map(s => s.trim());
+                                    setTailoredResumeData((prev: any) => ({ ...prev, skills: arr }));
+                                  }}
+                                  className="w-full h-10 border border-border bg-background text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none"
+                                />
+                              </div>
+
+                              {/* 4. Education History */}
+                              <div className="space-y-4 pt-4 border-t border-border">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-xs font-black uppercase tracking-widest text-accent">Education History</span>
+                                  <button
+                                    type="button"
+                                    onClick={addTailoredEducation}
+                                    className="flex items-center gap-1 text-[9px] bg-muted border border-border hover:bg-accent hover:text-black px-2 py-1 uppercase font-bold"
+                                  >
+                                    <Plus size={11} />
+                                    <span>Add Education</span>
+                                  </button>
+                                </div>
+                                <div className="space-y-3">
+                                  {(tailoredResumeData.education || []).map((edu: any, idx: number) => (
+                                    <div key={idx} className="flex flex-col md:flex-row gap-3 border border-border p-3 bg-background">
+                                      <input
+                                        type="text"
+                                        value={edu.degree}
+                                        onChange={(e) => updateTailoredEducation(idx, "degree", e.target.value)}
+                                        placeholder="Degree / Course"
+                                        className="flex-2 border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                                      />
+                                      <input
+                                        type="text"
+                                        value={edu.institution}
+                                        onChange={(e) => updateTailoredEducation(idx, "institution", e.target.value)}
+                                        placeholder="School / University"
+                                        className="flex-2 border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                                      />
+                                      <input
+                                        type="text"
+                                        value={edu.year}
+                                        onChange={(e) => updateTailoredEducation(idx, "year", e.target.value)}
+                                        placeholder="Year"
+                                        className="flex-1 border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
+                                      />
+                                      <input
+                                        type="text"
+                                        value={edu.score}
+                                        onChange={(e) => updateTailoredEducation(idx, "score", e.target.value)}
+                                        placeholder="Score"
+                                        className="flex-1 border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
+                                      />
                                       <button
-                                        onClick={() => copyToClipboard(`${proj.title}\n${proj.description}`)}
-                                        className="h-7 px-2 border border-border bg-background hover:bg-muted text-[9px] font-bold uppercase flex items-center gap-1"
+                                        type="button"
+                                        onClick={() => removeTailoredEducation(idx)}
+                                        className="border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-3 h-10 flex items-center justify-center"
                                       >
-                                        <Copy size={9} />
-                                        <span>COPY BULLETS</span>
+                                        <Trash2 size={13} />
                                       </button>
                                     </div>
-                                    <p className="text-xs font-mono bg-background border border-border p-3 select-all leading-relaxed">
-                                      {proj.description}
-                                    </p>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* 5. Work Experience */}
+                              <div className="space-y-4 pt-4 border-t border-border">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-xs font-black uppercase tracking-widest text-accent">Work Experience</span>
+                                  <button
+                                    type="button"
+                                    onClick={addTailoredExperience}
+                                    className="flex items-center gap-1 text-[9px] bg-muted border border-border hover:bg-accent hover:text-black px-2 py-1 uppercase font-bold"
+                                  >
+                                    <Plus size={11} />
+                                    <span>Add Experience</span>
+                                  </button>
+                                </div>
+                                <div className="space-y-4">
+                                  {(tailoredResumeData.experience || []).map((exp: any, idx: number) => (
+                                    <div key={idx} className="border border-border p-4 bg-background space-y-3">
+                                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                        <input
+                                          type="text"
+                                          value={exp.role}
+                                          onChange={(e) => updateTailoredExperience(idx, "role", e.target.value)}
+                                          placeholder="Job Role / Title"
+                                          className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                                        />
+                                        <input
+                                          type="text"
+                                          value={exp.company}
+                                          onChange={(e) => updateTailoredExperience(idx, "company", e.target.value)}
+                                          placeholder="Company Name"
+                                          className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                                        />
+                                        <input
+                                          type="text"
+                                          value={exp.period}
+                                          onChange={(e) => updateTailoredExperience(idx, "period", e.target.value)}
+                                          placeholder="Period"
+                                          className="border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
+                                        />
+                                      </div>
+                                      <textarea
+                                        value={exp.description}
+                                        onChange={(e) => updateTailoredExperience(idx, "description", e.target.value)}
+                                        placeholder="Description..."
+                                        rows={3}
+                                        className="w-full border border-border bg-background text-xs p-3 focus:outline-none focus:border-accent font-mono uppercase"
+                                      />
+                                      <div className="flex justify-end">
+                                        <button
+                                          type="button"
+                                          onClick={() => removeTailoredExperience(idx)}
+                                          className="flex items-center gap-1 text-[9px] border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-3 py-1 uppercase font-bold"
+                                        >
+                                          <Trash2 size={11} />
+                                          <span>Remove Experience</span>
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* 6. Projects */}
+                              <div className="space-y-4 pt-4 border-t border-border">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-xs font-black uppercase tracking-widest text-accent">Academic / Personal Projects</span>
+                                  <button
+                                    type="button"
+                                    onClick={addTailoredProject}
+                                    className="flex items-center gap-1 text-[9px] bg-muted border border-border hover:bg-accent hover:text-black px-2 py-1 uppercase font-bold"
+                                  >
+                                    <Plus size={11} />
+                                    <span>Add Project</span>
+                                  </button>
+                                </div>
+                                <div className="space-y-4">
+                                  {(tailoredResumeData.projects || []).map((proj: any, idx: number) => (
+                                    <div key={idx} className="border border-border p-4 bg-background space-y-3">
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <input
+                                          type="text"
+                                          value={proj.title}
+                                          onChange={(e) => updateTailoredProject(idx, "title", e.target.value)}
+                                          placeholder="Project Title"
+                                          className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                                        />
+                                        <input
+                                          type="text"
+                                          value={proj.tech}
+                                          onChange={(e) => updateTailoredProject(idx, "tech", e.target.value)}
+                                          placeholder="Tech Stack Used"
+                                          className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                                        />
+                                      </div>
+                                      <textarea
+                                        value={proj.description}
+                                        onChange={(e) => updateTailoredProject(idx, "description", e.target.value)}
+                                        placeholder="Description..."
+                                        rows={3}
+                                        className="w-full border border-border bg-background text-xs p-3 focus:outline-none focus:border-accent font-mono uppercase"
+                                      />
+                                      <div className="flex justify-end">
+                                        <button
+                                          type="button"
+                                          onClick={() => removeTailoredProject(idx)}
+                                          className="flex items-center gap-1 text-[9px] border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-3 py-1 uppercase font-bold"
+                                        >
+                                          <Trash2 size={11} />
+                                          <span>Remove Project</span>
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* 7. Certifications, Languages, Awards */}
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t border-border">
+                                {/* Certifications */}
+                                <div className="space-y-3">
+                                  <span className="text-xs font-black uppercase tracking-widest text-accent block">Certifications</span>
+                                  <div className="flex gap-2">
+                                    <input
+                                      type="text"
+                                      value={newCert}
+                                      onChange={(e) => setNewCert(e.target.value)}
+                                      placeholder="AWS, GCP, GCP-ML..."
+                                      className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={addTailoredCert}
+                                      className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black text-xs font-bold uppercase"
+                                    >
+                                      Add
+                                    </button>
                                   </div>
-                                ))}
-                              </div>
-                            )}
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {(tailoredResumeData.certifications || []).map((val: string, i: number) => (
+                                      <span key={i} className="inline-flex items-center gap-1 bg-muted px-2 py-1 text-[9px] font-bold border border-border uppercase">
+                                        <span>{val}</span>
+                                        <button type="button" onClick={() => removeTailoredCert(val)} className="text-red-500 hover:text-white">×</button>
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
 
-                            {/* Skills optimization */}
-                            <div className="border border-border p-4 bg-muted/5 space-y-3">
-                              <span className="text-[10px] font-black text-muted-foreground uppercase">SUGGESTED TECH STACK (ORDERED BY JD RELEVANCE)</span>
-                              <div className="flex flex-wrap gap-1.5">
-                                {atsResult.tailored_resume.optimized_skills.map((s, i) => (
-                                  <span key={i} className="text-[9px] font-bold bg-background border border-accent text-accent px-2 py-0.5 uppercase">
-                                    {s}
-                                  </span>
-                                ))}
+                                {/* Languages */}
+                                <div className="space-y-3">
+                                  <span className="text-xs font-black uppercase tracking-widest text-accent block">Languages</span>
+                                  <div className="flex gap-2">
+                                    <input
+                                      type="text"
+                                      value={newLang}
+                                      onChange={(e) => setNewLang(e.target.value)}
+                                      placeholder="English, French..."
+                                      className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={addTailoredLang}
+                                      className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black text-xs font-bold uppercase"
+                                    >
+                                      Add
+                                    </button>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {(tailoredResumeData.languages || []).map((val: string, i: number) => (
+                                      <span key={i} className="inline-flex items-center gap-1 bg-muted px-2 py-1 text-[9px] font-bold border border-border uppercase">
+                                        <span>{val}</span>
+                                        <button type="button" onClick={() => removeTailoredLang(val)} className="text-red-500 hover:text-white">×</button>
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                {/* Awards */}
+                                <div className="space-y-3">
+                                  <span className="text-xs font-black uppercase tracking-widest text-accent block">Awards & Honors</span>
+                                  <div className="flex gap-2">
+                                    <input
+                                      type="text"
+                                      value={newAward}
+                                      onChange={(e) => setNewAward(e.target.value)}
+                                      placeholder="Hackathon 1st..."
+                                      className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={addTailoredAward}
+                                      className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black text-xs font-bold uppercase"
+                                    >
+                                      Add
+                                    </button>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {(tailoredResumeData.awards || []).map((val: string, i: number) => (
+                                      <span key={i} className="inline-flex items-center gap-1 bg-muted px-2 py-1 text-[9px] font-bold border border-border uppercase">
+                                        <span>{val}</span>
+                                        <button type="button" onClick={() => removeTailoredAward(val)} className="text-red-500 hover:text-white">×</button>
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
                               </div>
+
                             </div>
-
                           </div>
                         ) : (
                           <div className="text-center py-20 border border-dashed border-border text-xs font-bold text-muted-foreground uppercase">
-                            Tailored suggestions are computed dynamically.
+                            Loading your tailored workspace...
                           </div>
                         )}
                       </>

@@ -69,7 +69,9 @@ def get_user_resume(
         return {
             "template": resume.latex_template,
             "resume_data": resume_data,
-            "raw_text_enc": resume.raw_text_enc
+            "raw_text_enc": resume.raw_text_enc,
+            "pdf_file_enc": resume.pdf_file_enc,
+            "pdf_filename_enc": resume.pdf_filename_enc
         }
     except Exception as e:
         logger.error(f"Failed to decrypt resume for user {current_user.id}: {str(e)}")
@@ -91,6 +93,8 @@ def update_user_resume(
     template = payload.get("template", "Classic")
     resume_data = payload.get("resume_data", {})
     raw_text_enc = payload.get("raw_text_enc", None)
+    pdf_file_enc = payload.get("pdf_file_enc", None)
+    pdf_filename_enc = payload.get("pdf_filename_enc", None)
     
     if not resume_data:
         raise HTTPException(status_code=400, detail="Missing resume structured details.")
@@ -108,6 +112,8 @@ def update_user_resume(
             user_id=current_user.id,
             resume_json_enc=encrypted_str,
             raw_text_enc=raw_text_enc,
+            pdf_file_enc=pdf_file_enc,
+            pdf_filename_enc=pdf_filename_enc,
             latex_template=template
         )
         db.add(resume)
@@ -116,6 +122,10 @@ def update_user_resume(
         resume.latex_template = template
         if raw_text_enc is not None:
             resume.raw_text_enc = raw_text_enc
+        if pdf_file_enc is not None:
+            resume.pdf_file_enc = pdf_file_enc
+        if pdf_filename_enc is not None:
+            resume.pdf_filename_enc = pdf_filename_enc
         
     db.commit()
     return {"status": "success", "message": "Resume updated and encrypted successfully."}

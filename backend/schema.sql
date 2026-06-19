@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS resumes (
     latex_template VARCHAR(100) DEFAULT 'Classic',
     resume_json_enc TEXT NOT NULL, -- Encrypted client-side standard layout JSON
     raw_text_enc TEXT, -- Encrypted client-side raw text of the resume
+    pdf_file_enc TEXT, -- Encrypted client-side base64 of original PDF
+    pdf_filename_enc TEXT, -- Encrypted client-side PDF filename
     skills TEXT[] DEFAULT '{}',
     uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -140,6 +142,7 @@ CREATE TABLE IF NOT EXISTS applications (
     ),
     current_round VARCHAR(255) DEFAULT 'Applied',
     notes_enc TEXT,
+    tailored_resume_enc TEXT,
     match_score INT DEFAULT 0,
     applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     user_decision VARCHAR(50) DEFAULT 'unseen' CHECK (user_decision IN ('unseen', 'interested', 'tracking', 'archived', 'snoozed')),

@@ -6,14 +6,6 @@ import { useAppStore } from "@/lib/store";
 import { decryptData, encryptData, deriveKey, exportKeyToHex } from "@/lib/crypto";
 import { isProfileComplete } from "@/lib/profile-utils";
 import api from "@/lib/api";
-
-interface ApiError {
-  response?: {
-    data?: {
-      detail?: string;
-    };
-  };
-}
 import { 
   ShieldCheck, 
   Unlock, 
@@ -22,8 +14,64 @@ import {
   FileText, 
   AlertCircle, 
   CheckCircle2, 
-  Lock
+  Lock,
+  Plus,
+  Trash2,
+  Globe,
+  Phone,
+  MapPin,
+  ChevronDown,
+  ChevronUp
 } from "lucide-react";
+
+interface ApiError {
+  response?: {
+    data?: {
+      detail?: string;
+    };
+  };
+}
+
+interface EducationEntry {
+  degree: string;
+  institution: string;
+  year: string;
+  score: string;
+}
+
+interface ExperienceEntry {
+  role: string;
+  company: string;
+  period: string;
+  description: string;
+}
+
+interface ProjectEntry {
+  title: string;
+  tech: string;
+  description: string;
+}
+
+interface ResumeData {
+  personal: {
+    name: string;
+    email: string;
+    phone: string;
+    location: string;
+    title?: string;
+    github?: string;
+    linkedin?: string;
+    website?: string;
+  };
+  summary?: string;
+  education: EducationEntry[];
+  experience: ExperienceEntry[];
+  projects: ProjectEntry[];
+  skills: string[];
+  certifications?: string[];
+  languages?: string[];
+  awards?: string[];
+}
 
 async function getDeterministicSalt(email: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -48,6 +96,16 @@ export default function ProfilePage() {
   const [parsing, setParsing] = useState(false);
   const [rawText, setRawText] = useState("");
   const [hasSavedResume, setHasSavedResume] = useState(false);
+  const [pdfFileEnc, setPdfFileEnc] = useState<string | null>(null);
+  const [pdfFilenameEnc, setPdfFilenameEnc] = useState<string | null>(null);
+  const [existingPdfFileEnc, setExistingPdfFileEnc] = useState<string | null>(null);
+  const [existingPdfFilenameEnc, setExistingPdfFilenameEnc] = useState<string | null>(null);
+  const [savedPdfFilename, setSavedPdfFilename] = useState<string>("");
+  const [savedPdfFile, setSavedPdfFile] = useState<string>("");
+  const [showPdfViewer, setShowPdfViewer] = useState(false);
+
+  // Collapsible Resume Editor Section
+  const [showResumeEditor, setShowResumeEditor] = useState(false);
 
   // Profile Form Fields (Plaintext)
   const [fullName, setFullName] = useState("");
@@ -61,6 +119,24 @@ export default function ProfilePage() {
   const [tenthMarks, setTenthMarks] = useState("");
   const [twelfthMarks, setTwelfthMarks] = useState("");
   const [hasArrears, setHasArrears] = useState(false);
+
+  // Full Structured Resume State
+  const [resumeData, setResumeData] = useState<ResumeData>({
+    personal: { name: "", email: "", phone: "", location: "", title: "", github: "", linkedin: "", website: "" },
+    summary: "",
+    education: [],
+    experience: [],
+    projects: [],
+    skills: [],
+    certifications: [],
+    languages: [],
+    awards: []
+  });
+
+  // Inputs for additions
+  const [newCert, setNewCert] = useState("");
+  const [newLang, setNewLang] = useState("");
+  const [newAward, setNewAward] = useState("");
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -96,7 +172,7 @@ export default function ProfilePage() {
       setNeoId(dNeoId);
       setUnlocked(true);
 
-      // Fetch saved resume raw text
+      // Fetch saved resume
       fetchResumeData();
     } catch (err) {
       console.error("Decryption error:", err);
@@ -117,6 +193,47 @@ export default function ProfilePage() {
           } catch (e) {
             console.error("Failed to decrypt raw resume text:", e);
           }
+        }
+        if (res.data.pdf_filename_enc) {
+          setExistingPdfFilenameEnc(res.data.pdf_filename_enc);
+          try {
+            const decFilename = await decryptData(res.data.pdf_filename_enc, encryptionKey);
+            setSavedPdfFilename(decFilename);
+          } catch (e) {
+            console.error("Failed to decrypt PDF filename:", e);
+          }
+        }
+        if (res.data.pdf_file_enc) {
+          setExistingPdfFileEnc(res.data.pdf_file_enc);
+          try {
+            const decFile = await decryptData(res.data.pdf_file_enc, encryptionKey);
+            setSavedPdfFile(decFile);
+          } catch (e) {
+            console.error("Failed to decrypt PDF file content:", e);
+          }
+        }
+        if (res.data.resume_data && Object.keys(res.data.resume_data).length > 0) {
+          const rd = res.data.resume_data;
+          setResumeData({
+            personal: {
+              name: rd.personal?.name || "",
+              email: rd.personal?.email || "",
+              phone: rd.personal?.phone || "",
+              location: rd.personal?.location || "",
+              title: rd.personal?.title || "",
+              github: rd.personal?.github || "",
+              linkedin: rd.personal?.linkedin || "",
+              website: rd.personal?.website || ""
+            },
+            summary: rd.summary || "",
+            education: rd.education || [],
+            experience: rd.experience || [],
+            projects: rd.projects || [],
+            skills: rd.skills || [],
+            certifications: rd.certifications || [],
+            languages: rd.languages || [],
+            awards: rd.awards || []
+          });
         }
       }
     } catch (err) {
@@ -209,6 +326,54 @@ export default function ProfilePage() {
         setHasSavedResume(true);
       }
 
+      // Convert & encrypt PDF file client-side
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const resultStr = event.target?.result as string;
+          const base64Content = resultStr.split(",")[1] || resultStr;
+          if (encryptionKey) {
+            const encFile = await encryptData(base64Content, encryptionKey);
+            const encFilename = await encryptData(file.name, encryptionKey);
+            setPdfFileEnc(encFile);
+            setPdfFilenameEnc(encFilename);
+            setSavedPdfFilename(file.name);
+            setSavedPdfFile(base64Content);
+          }
+        } catch (e) {
+          console.error("Failed to encrypt uploaded resume PDF:", e);
+        }
+      };
+      reader.readAsDataURL(file);
+
+      // Populate full resume structured data
+      if (data.resume_data) {
+        const rd = data.resume_data;
+        setResumeData({
+          personal: {
+            name: rd.personal?.name || data.full_name || "",
+            email: rd.personal?.email || user?.email || "",
+            phone: rd.personal?.phone || "",
+            location: rd.personal?.location || "",
+            title: rd.personal?.title || "",
+            github: rd.personal?.github || "",
+            linkedin: rd.personal?.linkedin || "",
+            website: rd.personal?.website || ""
+          },
+          summary: rd.summary || "",
+          education: rd.education || [],
+          experience: rd.experience || [],
+          projects: rd.projects || [],
+          skills: data.skills || rd.skills || [],
+          certifications: rd.certifications || [],
+          languages: rd.languages || [],
+          awards: rd.awards || []
+        });
+      }
+
+      // Auto expand resume editor so the user sees what was extracted
+      setShowResumeEditor(true);
+
     } catch (err: unknown) {
       const apiErr = err as ApiError;
       const errorMsg = apiErr.response?.data?.detail || "FAILED TO EXTRACT TEXT FROM RESUME.";
@@ -245,7 +410,7 @@ export default function ProfilePage() {
       // 1. Encrypt sensitive Neo ID locally
       const encNeoId = await encryptData(neoIdClean, encryptionKey);
 
-      // Parse skills
+      // Parse skills from text input
       const skillsArray = skillsStr
         .split(",")
         .map((s) => s.trim())
@@ -271,30 +436,31 @@ export default function ProfilePage() {
         has_arrears: hasArrears,
       });
 
-      // 4. Save structured resume and encrypted raw text to backend
-      const resume_data = {
+      // 4. Update the skills inside structured resumeData to keep in sync
+      const finalResumeData = {
+        ...resumeData,
         personal: {
+          ...resumeData.personal,
           name: fullName.trim(),
-          email: user?.email || "",
-          phone: "",
-          location: ""
+          email: user?.email || resumeData.personal.email || ""
         },
-        education: [
-          { degree: "Class X", score: tenthMarks, institution: "", year: "" },
-          { degree: "Class XII", score: twelfthMarks, institution: "", year: "" },
-          { degree: branch.trim().toUpperCase(), score: cgpa, institution: "", year: "" }
-        ],
         skills: skillsArray
       };
 
+      // Encrypt the entire structured resume json
+      const encResumeJson = await encryptData(JSON.stringify(finalResumeData), encryptionKey);
+
+      // Save structured resume to backend
       await api.put("/resumes/me", {
         template: "Classic",
-        resume_data,
-        raw_text_enc: encRawText || null
+        resume_data: finalResumeData,
+        raw_text_enc: encRawText || null,
+        pdf_file_enc: pdfFileEnc || existingPdfFileEnc || null,
+        pdf_filename_enc: pdfFilenameEnc || existingPdfFilenameEnc || null
       });
 
       setUser(userRes.data);
-      setSuccess("PROFILE & RESUME SAVED & ENCRYPTED SUCCESSFULLY.");
+      setSuccess("PROFILE & STRUCTURED RESUME SAVED & ENCRYPTED SUCCESSFULLY.");
       
       if (isProfileComplete(userRes.data)) {
         setTimeout(() => {
@@ -308,6 +474,113 @@ export default function ProfilePage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  // Helper actions to modify structured resume details
+  const updatePersonal = (field: keyof ResumeData["personal"], val: string) => {
+    setResumeData((prev) => ({
+      ...prev,
+      personal: { ...prev.personal, [field]: val }
+    }));
+  };
+
+  const addEducation = () => {
+    setResumeData((prev) => ({
+      ...prev,
+      education: [...prev.education, { degree: "", institution: "", year: "", score: "" }]
+    }));
+  };
+
+  const removeEducation = (index: number) => {
+    setResumeData((prev) => ({
+      ...prev,
+      education: prev.education.filter((_, i) => i !== index)
+    }));
+  };
+
+  const updateEducation = (index: number, field: keyof EducationEntry, val: string) => {
+    setResumeData((prev) => {
+      const list = [...prev.education];
+      list[index] = { ...list[index], [field]: val };
+      return { ...prev, education: list };
+    });
+  };
+
+  const addExperience = () => {
+    setResumeData((prev) => ({
+      ...prev,
+      experience: [...prev.experience, { role: "", company: "", period: "", description: "" }]
+    }));
+  };
+
+  const removeExperience = (index: number) => {
+    setResumeData((prev) => ({
+      ...prev,
+      experience: prev.experience.filter((_, i) => i !== index)
+    }));
+  };
+
+  const updateExperience = (index: number, field: keyof ExperienceEntry, val: string) => {
+    setResumeData((prev) => {
+      const list = [...prev.experience];
+      list[index] = { ...list[index], [field]: val };
+      return { ...prev, experience: list };
+    });
+  };
+
+  const addProject = () => {
+    setResumeData((prev) => ({
+      ...prev,
+      projects: [...prev.projects, { title: "", tech: "", description: "" }]
+    }));
+  };
+
+  const removeProject = (index: number) => {
+    setResumeData((prev) => ({
+      ...prev,
+      projects: prev.projects.filter((_, i) => i !== index)
+    }));
+  };
+
+  const updateProject = (index: number, field: keyof ProjectEntry, val: string) => {
+    setResumeData((prev) => {
+      const list = [...prev.projects];
+      list[index] = { ...list[index], [field]: val };
+      return { ...prev, projects: list };
+    });
+  };
+
+  const addCert = () => {
+    if (newCert.trim() && !resumeData.certifications?.includes(newCert.trim())) {
+      setResumeData((prev) => ({ ...prev, certifications: [...(prev.certifications || []), newCert.trim()] }));
+      setNewCert("");
+    }
+  };
+
+  const removeCert = (val: string) => {
+    setResumeData((prev) => ({ ...prev, certifications: (prev.certifications || []).filter((c) => c !== val) }));
+  };
+
+  const addLang = () => {
+    if (newLang.trim() && !resumeData.languages?.includes(newLang.trim())) {
+      setResumeData((prev) => ({ ...prev, languages: [...(prev.languages || []), newLang.trim()] }));
+      setNewLang("");
+    }
+  };
+
+  const removeLang = (val: string) => {
+    setResumeData((prev) => ({ ...prev, languages: (prev.languages || []).filter((l) => l !== val) }));
+  };
+
+  const addAward = () => {
+    if (newAward.trim() && !resumeData.awards?.includes(newAward.trim())) {
+      setResumeData((prev) => ({ ...prev, awards: [...(prev.awards || []), newAward.trim()] }));
+      setNewAward("");
+    }
+  };
+
+  const removeAward = (val: string) => {
+    setResumeData((prev) => ({ ...prev, awards: (prev.awards || []).filter((a) => a !== val) }));
   };
 
   // Calculate profile completeness
@@ -465,17 +738,73 @@ export default function ProfilePage() {
           </form>
 
           {/* Resume status badge */}
-          <div className="flex items-center gap-3 text-xs uppercase font-bold tracking-wider pt-2">
-            {hasSavedResume ? (
-              <span className="inline-flex items-center gap-1.5 text-accent">
-                <CheckCircle2 size={14} />
-                <span>Active Resume Secured (.PDF)</span>
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 text-amber-500">
-                <AlertCircle size={14} />
-                <span>No Resume Attached. Upload to unlock eligibility checks.</span>
-              </span>
+          <div className="flex flex-col gap-4 pt-2 border-t border-border mt-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs uppercase font-bold tracking-wider">
+              {hasSavedResume ? (
+                <div className="flex flex-col gap-1">
+                  <span className="inline-flex items-center gap-1.5 text-accent text-xs">
+                    <CheckCircle2 size={14} />
+                    <span>Active Resume Secured (.PDF)</span>
+                  </span>
+                  {savedPdfFilename && (
+                    <span className="text-[10px] text-zinc-500 font-mono truncate max-w-xs md:max-w-md normal-case">
+                      File: {savedPdfFilename}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-amber-500">
+                  <AlertCircle size={14} />
+                  <span>No Resume Attached. Upload to unlock eligibility checks.</span>
+                </span>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                {hasSavedResume && savedPdfFile && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const link = document.createElement("a");
+                        link.href = `data:application/pdf;base64,${savedPdfFile}`;
+                        link.download = savedPdfFilename || "resume.pdf";
+                        link.click();
+                      }}
+                      className="inline-flex items-center gap-1 text-[10px] bg-accent/10 border border-accent hover:bg-accent hover:text-black hover:border-accent px-2.5 py-1 text-accent font-bold uppercase transition-all"
+                    >
+                      Download PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowPdfViewer(!showPdfViewer)}
+                      className="inline-flex items-center gap-1 text-[10px] bg-muted border border-border hover:border-accent hover:text-accent px-2.5 py-1 font-bold uppercase transition-all"
+                    >
+                      {showPdfViewer ? "Hide PDF Viewer" : "View PDF"}
+                    </button>
+                  </>
+                )}
+                
+                {hasSavedResume && (
+                  <button
+                    type="button"
+                    onClick={() => setShowResumeEditor(!showResumeEditor)}
+                    className="flex items-center gap-1 text-[10px] bg-muted border border-border hover:border-accent hover:text-accent px-2.5 py-1 font-bold uppercase transition-all"
+                  >
+                    {showResumeEditor ? "Hide Structured Data" : "View/Edit Structured Data"}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Inline PDF Viewer */}
+            {showPdfViewer && savedPdfFile && (
+              <div className="border-2 border-border p-1 bg-black/20 h-[600px] w-full mt-2">
+                <iframe
+                  src={`data:application/pdf;base64,${savedPdfFile}#toolbar=0`}
+                  className="w-full h-full border-0 bg-background"
+                  title="Encrypted Resume Viewer"
+                />
+              </div>
             )}
           </div>
         </div>
@@ -491,6 +820,346 @@ export default function ProfilePage() {
           <div className="border-2 border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-600 uppercase tracking-wider flex items-center gap-2">
             <AlertCircle size={16} />
             <span>{error}</span>
+          </div>
+        )}
+
+        {/* Collapsible Resume Details Editor (Extracted from PDF) */}
+        {showResumeEditor && (
+          <div className="border-2 border-border p-6 bg-card space-y-8">
+            <div className="border-b border-border pb-4 flex justify-between items-center">
+              <h3 className="text-sm font-black tracking-widest text-accent uppercase flex items-center gap-2">
+                <FileText size={18} />
+                <span>📄 Parsed Resume Details (Encrypted in Vault)</span>
+              </h3>
+              <span className="text-[10px] text-zinc-500 uppercase">
+                Edits here will optimize matching and tailoring
+              </span>
+            </div>
+
+            {/* Resume Section 1: Contact Details */}
+            <div className="space-y-4">
+              <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                Personal Contact details
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-zinc-500">Title / Headline</label>
+                  <input
+                    type="text"
+                    value={resumeData.personal.title || ""}
+                    onChange={(e) => updatePersonal("title", e.target.value)}
+                    placeholder="E.g. Software Engineer"
+                    className="w-full h-10 border border-border bg-background text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-zinc-500">Phone</label>
+                  <input
+                    type="text"
+                    value={resumeData.personal.phone || ""}
+                    onChange={(e) => updatePersonal("phone", e.target.value)}
+                    placeholder="+91 98765 43210"
+                    className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-zinc-500">Location</label>
+                  <input
+                    type="text"
+                    value={resumeData.personal.location || ""}
+                    onChange={(e) => updatePersonal("location", e.target.value)}
+                    placeholder="Chennai, India"
+                    className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-zinc-500">GitHub Url</label>
+                  <input
+                    type="text"
+                    value={resumeData.personal.github || ""}
+                    onChange={(e) => updatePersonal("github", e.target.value)}
+                    placeholder="github.com/username"
+                    className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Resume Section 2: Summary */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Professional Summary</label>
+              <textarea
+                value={resumeData.summary || ""}
+                onChange={(e) => setResumeData((prev) => ({ ...prev, summary: e.target.value }))}
+                placeholder="Brief summary of your professional background..."
+                rows={3}
+                className="w-full border border-border bg-background text-xs p-3 focus:border-accent focus:outline-none uppercase font-bold"
+              />
+            </div>
+
+            {/* Resume Section 3: Education */}
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Education History</span>
+                <button
+                  type="button"
+                  onClick={addEducation}
+                  className="flex items-center gap-1 text-[10px] bg-muted border border-border hover:bg-accent hover:text-black hover:border-accent px-2 py-1 uppercase font-bold"
+                >
+                  <Plus size={12} />
+                  <span>Add Education</span>
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                {resumeData.education.map((edu, idx) => (
+                  <div key={idx} className="flex flex-col md:flex-row gap-3 border border-border p-3 bg-background relative">
+                    <input
+                      type="text"
+                      value={edu.degree}
+                      onChange={(e) => updateEducation(idx, "degree", e.target.value)}
+                      placeholder="Degree / Course"
+                      className="flex-2 border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                    />
+                    <input
+                      type="text"
+                      value={edu.institution}
+                      onChange={(e) => updateEducation(idx, "institution", e.target.value)}
+                      placeholder="School / University"
+                      className="flex-2 border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                    />
+                    <input
+                      type="text"
+                      value={edu.year}
+                      onChange={(e) => updateEducation(idx, "year", e.target.value)}
+                      placeholder="Year"
+                      className="flex-1 border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
+                    />
+                    <input
+                      type="text"
+                      value={edu.score}
+                      onChange={(e) => updateEducation(idx, "score", e.target.value)}
+                      placeholder="Score"
+                      className="flex-1 border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeEducation(idx)}
+                      className="border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white p-2 self-stretch flex items-center justify-center"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Resume Section 4: Work Experience */}
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Work Experience</span>
+                <button
+                  type="button"
+                  onClick={addExperience}
+                  className="flex items-center gap-1 text-[10px] bg-muted border border-border hover:bg-accent hover:text-black hover:border-accent px-2 py-1 uppercase font-bold"
+                >
+                  <Plus size={12} />
+                  <span>Add Experience</span>
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {resumeData.experience.map((exp, idx) => (
+                  <div key={idx} className="border border-border p-4 bg-background space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <input
+                        type="text"
+                        value={exp.role}
+                        onChange={(e) => updateExperience(idx, "role", e.target.value)}
+                        placeholder="Job Role / Title"
+                        className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                      />
+                      <input
+                        type="text"
+                        value={exp.company}
+                        onChange={(e) => updateExperience(idx, "company", e.target.value)}
+                        placeholder="Company Name"
+                        className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                      />
+                      <input
+                        type="text"
+                        value={exp.period}
+                        onChange={(e) => updateExperience(idx, "period", e.target.value)}
+                        placeholder="Period (e.g. Summer 2025)"
+                        className="border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
+                      />
+                    </div>
+                    <textarea
+                      value={exp.description}
+                      onChange={(e) => updateExperience(idx, "description", e.target.value)}
+                      placeholder="Role Description and achievements..."
+                      rows={3}
+                      className="w-full border border-border bg-background text-xs p-3 focus:outline-none focus:border-accent font-mono"
+                    />
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => removeExperience(idx)}
+                        className="flex items-center gap-1 text-[10px] border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-3 py-1 uppercase font-bold"
+                      >
+                        <Trash2 size={12} />
+                        <span>Remove Work Entry</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Resume Section 5: Projects */}
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Academic / Personal Projects</span>
+                <button
+                  type="button"
+                  onClick={addProject}
+                  className="flex items-center gap-1 text-[10px] bg-muted border border-border hover:bg-accent hover:text-black hover:border-accent px-2 py-1 uppercase font-bold"
+                >
+                  <Plus size={12} />
+                  <span>Add Project</span>
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {resumeData.projects.map((proj, idx) => (
+                  <div key={idx} className="border border-border p-4 bg-background space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <input
+                        type="text"
+                        value={proj.title}
+                        onChange={(e) => updateProject(idx, "title", e.target.value)}
+                        placeholder="Project Title"
+                        className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                      />
+                      <input
+                        type="text"
+                        value={proj.tech}
+                        onChange={(e) => updateProject(idx, "tech", e.target.value)}
+                        placeholder="Tech Stack Used (comma-separated)"
+                        className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                      />
+                    </div>
+                    <textarea
+                      value={proj.description}
+                      onChange={(e) => updateProject(idx, "description", e.target.value)}
+                      placeholder="Project details, what you built, achievements..."
+                      rows={3}
+                      className="w-full border border-border bg-background text-xs p-3 focus:outline-none focus:border-accent font-mono"
+                    />
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => removeProject(idx)}
+                        className="flex items-center gap-1 text-[10px] border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-3 py-1 uppercase font-bold"
+                      >
+                        <Trash2 size={12} />
+                        <span>Remove Project</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Resume Section 6: Additional details (Certifications, Languages, Awards) */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Certifications */}
+              <div className="space-y-3">
+                <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground block">Certifications</span>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newCert}
+                    onChange={(e) => setNewCert(e.target.value)}
+                    placeholder="E.g. AWS Practitioner"
+                    className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                  />
+                  <button
+                    type="button"
+                    onClick={addCert}
+                    className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black hover:border-accent text-xs font-bold uppercase"
+                  >
+                    Add
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(resumeData.certifications || []).map((val, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 bg-muted px-2 py-1 text-[10px] font-bold border border-border uppercase">
+                      <span>{val}</span>
+                      <button type="button" onClick={() => removeCert(val)} className="text-red-500 hover:text-white">×</button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Languages */}
+              <div className="space-y-3">
+                <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground block">Languages</span>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newLang}
+                    onChange={(e) => setNewLang(e.target.value)}
+                    placeholder="E.g. English"
+                    className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                  />
+                  <button
+                    type="button"
+                    onClick={addLang}
+                    className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black hover:border-accent text-xs font-bold uppercase"
+                  >
+                    Add
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(resumeData.languages || []).map((val, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 bg-muted px-2 py-1 text-[10px] font-bold border border-border uppercase">
+                      <span>{val}</span>
+                      <button type="button" onClick={() => removeLang(val)} className="text-red-500 hover:text-white">×</button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Awards */}
+              <div className="space-y-3">
+                <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground block">Awards & Honors</span>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newAward}
+                    onChange={(e) => setNewAward(e.target.value)}
+                    placeholder="E.g. Hackathon winner"
+                    className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                  />
+                  <button
+                    type="button"
+                    onClick={addAward}
+                    className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black hover:border-accent text-xs font-bold uppercase"
+                  >
+                    Add
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(resumeData.awards || []).map((val, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 bg-muted px-2 py-1 text-[10px] font-bold border border-border uppercase">
+                      <span>{val}</span>
+                      <button type="button" onClick={() => removeAward(val)} className="text-red-500 hover:text-white">×</button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 

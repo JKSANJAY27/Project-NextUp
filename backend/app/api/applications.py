@@ -48,6 +48,7 @@ def create_application(
         status=app_in.status,
         current_round=app_in.current_round,
         notes_enc=app_in.notes_enc,
+        tailored_resume_enc=app_in.tailored_resume_enc,
         match_score=0,
         user_decision=user_dec,
         recruitment_state=rec_state,

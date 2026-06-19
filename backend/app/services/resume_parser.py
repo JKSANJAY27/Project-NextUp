@@ -31,7 +31,7 @@ def clean_json_string(s: str) -> str:
 
 def get_resume_prompt(text: str) -> str:
     return f"""You are an expert resume parser for placement cell student profiles.
-Analyze the following resume text and extract all required academic credentials and profile info.
+Analyze the following resume text and extract all required academic credentials, profile metrics, and the entire structured contents (personal details, summary, education history, work experience, projects, skills, certifications, languages, awards).
 Output ONLY a valid raw JSON object — no markdown, no explanation, no code fences.
 
 Required JSON Output Format:
@@ -43,25 +43,66 @@ Required JSON Output Format:
   "tenth_marks": 95.0,
   "twelfth_marks": 92.4,
   "has_arrears": false,
-  "skills": ["Python", "React", "Docker"]
+  "skills": ["Python", "React", "Docker"],
+  "resume_data": {{
+    "personal": {{
+      "name": "Sanjay J K",
+      "email": "sanjay.jk2023@vitstudent.ac.in",
+      "phone": "+91 98765 43210",
+      "location": "Chennai, India",
+      "title": "Software Engineer",
+      "github": "github.com/sanjay",
+      "linkedin": "linkedin.com/in/sanjay",
+      "website": "sanjay.dev"
+    }},
+    "summary": "Highly motivated software engineering student with experience in web applications and cloud tools.",
+    "education": [
+      {{
+        "degree": "B.Tech Computer Science",
+        "institution": "Vellore Institute of Technology",
+        "year": "2023 - 2027",
+        "score": "9.34 CGPA"
+      }}
+    ],
+    "experience": [
+      {{
+        "role": "Software Engineering Intern",
+        "company": "Tech Solutions",
+        "period": "Summer 2025",
+        "description": "Collaborated on backend APIs and optimized database queries."
+      }}
+    ],
+    "projects": [
+      {{
+        "title": "NextUp.ai",
+        "tech": "React, FastAPI, Supabase",
+        "description": "Built a zero-knowledge placement drive tracker with automated parsing."
+      }}
+    ],
+    "skills": ["Python", "React", "Docker"],
+    "certifications": ["AWS Certified Cloud Practitioner"],
+    "languages": ["English", "Tamil"],
+    "awards": ["First Place in Hackathon"]
+  }}
 }}
 
 Guidelines:
-- full_name: The candidate's name. Look at the top of the resume.
-- branch: Choose from CSE, IT, ECE, EEE, MECH, CIVIL, SWE, MCA, MTECH, MBA, etc. Standardize as uppercase abbreviation.
-- batch_year: The graduation year (e.g. 2026, 2027). Look at the graduation date of the pursuing degree.
-- cgpa: Numeric value of CGPA on a 10-point scale (e.g. 9.12).
-- tenth_marks: Percentage score of 10th class (e.g. 95.0).
-- twelfth_marks: Percentage score of 12th class or equivalent diploma (e.g. 92.4).
-- has_arrears: Boolean. Set to true if the resume mentions standing/standing arrears or history of backlogs (very rare to find in resume, default to false unless explicitly stated).
-- skills: List of tech skills, programming languages, and frameworks.
+1. full_name: The candidate's name.
+2. branch: Choose from CSE, IT, ECE, EEE, MECH, CIVIL, SWE, MCA, MTECH, MBA, etc. Standardize as uppercase abbreviation.
+3. batch_year: The graduation year (e.g. 2026, 2027). Look at the graduation date of the pursuing degree.
+4. cgpa: Numeric value of CGPA on a 10-point scale (e.g. 9.12).
+5. tenth_marks: Percentage score of 10th class (e.g. 95.0).
+6. twelfth_marks: Percentage score of 12th class or equivalent diploma (e.g. 92.4).
+7. has_arrears: Boolean. Default to false unless explicitly stated.
+8. skills: List of tech skills, programming languages, and frameworks.
+9. resume_data: Extract all sections from the resume. For experience and projects, capture the full description and tech stacks. Do not omit details.
 
 Resume text:
 ---
 {text[:4500]}
 ---
 
-Return ONLY the raw JSON object. No markdown. No explanation.
+Return ONLY the raw JSON object matching the exact structure.
 """
 
 def ping_ollama(base_url: str, timeout: int = 5) -> bool:
@@ -72,10 +113,7 @@ def ping_ollama(base_url: str, timeout: int = 5) -> bool:
         return False
 
 def parse_resume_with_ollama(text: str) -> Dict[str, Any]:
-    """
-    Fallback parser using local Ollama model qwen2.5:1.5b or similar.
-    """
-    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    ollama_base_url = os.getenv("OLLAMA_MODEL_BASE_URL", os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")).rstrip("/")
     ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
     prompt = get_resume_prompt(text)
 
@@ -92,7 +130,7 @@ def parse_resume_with_ollama(text: str) -> Dict[str, Any]:
                 "stream": False,
                 "format": "json"
             },
-            timeout=30
+            timeout=40
         )
         if response.status_code == 200:
             res_text = response.json().get("response", "{}").strip()
@@ -103,9 +141,6 @@ def parse_resume_with_ollama(text: str) -> Dict[str, Any]:
     return {}
 
 def parse_resume_with_huggingface(text: str) -> Dict[str, Any]:
-    """
-    Escalates resume parsing to Hugging Face Inference API (OpenAI-compatible Messages format).
-    """
     hf_token = os.getenv("HF_API_TOKEN", "")
     if not hf_token:
         logger.warning("HF_API_TOKEN not set. Skipping HuggingFace escalation for resume.")
@@ -135,11 +170,11 @@ def parse_resume_with_huggingface(text: str) -> Dict[str, Any]:
                         "content": prompt
                     }
                 ],
-                "max_tokens": 1000,
+                "max_tokens": 1500,
                 "temperature": 0.1,
                 "response_format": {"type": "json_object"}
             },
-            timeout=30
+            timeout=40
         )
         if response.status_code == 200:
             res_json = response.json()
@@ -158,9 +193,6 @@ def parse_resume_with_huggingface(text: str) -> Dict[str, Any]:
     return {}
 
 def parse_resume_text_regex(text: str) -> Dict[str, Any]:
-    """
-    Parses resume text using regular expressions to extract metrics.
-    """
     data = {}
     lines = [line.strip() for line in text.split("\n") if line.strip()]
 
@@ -221,7 +253,6 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
             pass
 
     # 5. Batch Year Extraction
-    # Matches years e.g., "2026", "2027", "2023 - 2027"
     years = re.findall(r"\b(202[4-9]|2030)\b", text)
     if years:
         try:
@@ -243,16 +274,16 @@ def parse_resume_pdf(file_bytes: bytes) -> Dict[str, Any]:
     logger.info("Attempting resume parsing with Ollama...")
     parsed = parse_resume_with_ollama(text)
 
-    # 3. Escalate to HuggingFace if critical fields missing
-    if not parsed or not parsed.get("full_name") or not parsed.get("cgpa"):
+    # 3. Escalate to HuggingFace if critical fields missing or parse failed
+    if not parsed or not parsed.get("full_name") or not parsed.get("resume_data"):
         logger.info("Ollama failed or returned incomplete resume data. Escalating to HuggingFace...")
         parsed_hf = parse_resume_with_huggingface(text)
         if parsed_hf:
             parsed = parsed_hf
 
     # 4. Fallback to Regex and spaCy if LLM failed
-    if not parsed:
-        logger.info("LLM parsing failed. Using Regex/spaCy fallback for resume...")
+    if not parsed or not isinstance(parsed, dict):
+        logger.info("LLM parsing failed completely. Using Regex/spaCy fallback for resume...")
         parsed = parse_resume_text_regex(text)
         
         # spaCy name extraction fallback
@@ -263,9 +294,61 @@ def parse_resume_pdf(file_bytes: bytes) -> Dict[str, Any]:
                     parsed["full_name"] = ent.text.strip()
                     break
 
-    # 5. Extract skills from full text using skills dictionary
-    parsed["skills"] = extract_skills_from_text(text)
+    # Extract skills
+    skills_extracted = extract_skills_from_text(text)
+    parsed["skills"] = skills_extracted
     
+    # Ensure resume_data structure is present (with fallbacks)
+    if "resume_data" not in parsed or not isinstance(parsed["resume_data"], dict):
+        parsed["resume_data"] = {
+            "personal": {
+                "name": parsed.get("full_name", "Student Candidate"),
+                "email": "",
+                "phone": "",
+                "location": "",
+                "title": "",
+                "github": "",
+                "linkedin": "",
+                "website": ""
+            },
+            "summary": "",
+            "education": [],
+            "experience": [],
+            "projects": [],
+            "skills": skills_extracted,
+            "certifications": [],
+            "languages": [],
+            "awards": []
+        }
+    else:
+        # Guarantee sub-properties exist to prevent frontend crash
+        rd = parsed["resume_data"]
+        if "personal" not in rd or not isinstance(rd["personal"], dict):
+            rd["personal"] = {
+                "name": parsed.get("full_name", "Student Candidate"),
+                "email": "",
+                "phone": "",
+                "location": "",
+                "title": "",
+                "github": "",
+                "linkedin": "",
+                "website": ""
+            }
+        if "education" not in rd or not isinstance(rd["education"], list):
+            rd["education"] = []
+        if "experience" not in rd or not isinstance(rd["experience"], list):
+            rd["experience"] = []
+        if "projects" not in rd or not isinstance(rd["projects"], list):
+            rd["projects"] = []
+        if "skills" not in rd or not isinstance(rd["skills"], list):
+            rd["skills"] = skills_extracted
+        if "certifications" not in rd or not isinstance(rd["certifications"], list):
+            rd["certifications"] = []
+        if "languages" not in rd or not isinstance(rd["languages"], list):
+            rd["languages"] = []
+        if "awards" not in rd or not isinstance(rd["awards"], list):
+            rd["awards"] = []
+
     # Add raw text for encryption and client-side storage
     parsed["raw_text"] = text
 

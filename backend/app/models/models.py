@@ -44,6 +44,8 @@ class Resume(Base):
     latex_template = Column(String, default="Classic")
     resume_json_enc = Column(String, nullable=False)
     raw_text_enc = Column(String, nullable=True)  # Encrypted client-side raw text of the resume
+    pdf_file_enc = Column(String, nullable=True)  # Encrypted client-side base64 of the original PDF
+    pdf_filename_enc = Column(String, nullable=True)  # Encrypted client-side PDF filename
     skills = Column(ARRAY(String), default=list)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
@@ -116,6 +118,7 @@ class Application(Base):
     status = Column(String, default="Applied")
     current_round = Column(String, default="Applied")
     notes_enc = Column(String)
+    tailored_resume_enc = Column(String, nullable=True)  # Encrypted client-side tailored resume JSON
     match_score = Column(Integer, default=0)
     applied_at = Column(DateTime, default=datetime.utcnow)
     user_decision = Column(String, default="unseen")
