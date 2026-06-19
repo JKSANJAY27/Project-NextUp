@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS resumes (
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     latex_template VARCHAR(100) DEFAULT 'Classic',
     resume_json_enc TEXT NOT NULL, -- Encrypted client-side standard layout JSON
+    raw_text_enc TEXT, -- Encrypted client-side raw text of the resume
     skills TEXT[] DEFAULT '{}',
     uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

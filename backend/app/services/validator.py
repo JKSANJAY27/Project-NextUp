@@ -8,26 +8,39 @@ from app.models.models import Company
 logger = logging.getLogger(__name__)
 
 # Canonical Event Translation Map
+# Preserves specific result/extension types for richer timeline tracking
 CANONICAL_EVENT_MAP = {
+    # Registration
     "NEW_DRIVE": "REGISTRATION",
     "REGISTRATION": "REGISTRATION",
     "REGISTRATION_OPEN": "REGISTRATION",
+    # Deadline Extension (kept distinct for deadline tracking)
+    "DEADLINE_EXTENSION": "DEADLINE_EXTENSION",
+    # Shortlist
     "SHORTLIST": "SHORTLIST",
     "SHORTLIST_RELEASED": "SHORTLIST",
+    # Online Assessment
     "OA": "OA",
     "OA_SCHEDULED": "OA",
     "ONLINE_TEST": "OA",
     "ASSESSMENT": "OA",
     "ASSESSMENT_SCHEDULED": "OA",
+    # OA Result (distinct — triggers 'Awaiting OA Result' state)
+    "OA_RESULT": "OA_RESULT",
+    # Interview
     "INTERVIEW": "INTERVIEW",
     "INTERVIEW_SCHEDULED": "INTERVIEW",
     "INTERVIEW_ROUND": "INTERVIEW",
+    # Interview Result (distinct — triggers 'Awaiting Interview Result' state)
+    "INTERVIEW_RESULT": "INTERVIEW_RESULT",
+    # Offer
     "OFFER": "OFFER",
     "OFFER_RELEASED": "OFFER",
+    # Rejection
     "REJECTION": "REJECTION",
     "REJECTION_RELEASED": "REJECTION",
+    # General
     "GENERAL_UPDATE": "GENERAL_UPDATE",
-    "DEADLINE_EXTENSION": "GENERAL_UPDATE",
     "VENUE_CHANGE": "GENERAL_UPDATE"
 }
 
@@ -38,17 +51,35 @@ ROLE_NORMALIZATION_MAP = {
     "software developer": "Software Engineer",
     "software engineer": "Software Engineer",
     "software development engineer": "Software Engineer",
+    "get": "Graduate Engineer Trainee",
+    "graduate engineer trainee": "Graduate Engineer Trainee",
+    "pet": "Project Engineer Trainee",
     "data scientist": "Data Scientist",
     "data analyst": "Data Analyst",
+    "data engineer": "Data Engineer",
     "business analyst": "Business Analyst",
     "product manager": "Product Manager",
+    "program manager": "Program Manager",
     "qa engineer": "QA Engineer",
     "quality assurance engineer": "QA Engineer",
+    "quality engineer": "QA Engineer",
     "system engineer": "Systems Engineer",
     "systems engineer": "Systems Engineer",
     "devops engineer": "DevOps Engineer",
     "cloud engineer": "Cloud Engineer",
-    "consultant": "Consultant"
+    "consultant": "Consultant",
+    "management trainee": "Management Trainee",
+    "associate engineer": "Associate Engineer",
+    "associate software engineer": "Associate Software Engineer",
+    "ml engineer": "ML Engineer",
+    "machine learning engineer": "ML Engineer",
+    "ai engineer": "AI Engineer",
+    "network engineer": "Network Engineer",
+    "embedded engineer": "Embedded Engineer",
+    "vlsi engineer": "VLSI Engineer",
+    "full stack developer": "Full Stack Developer",
+    "frontend developer": "Frontend Developer",
+    "backend developer": "Backend Developer"
 }
 
 def normalize_company_name(name: str, db: Session) -> str:

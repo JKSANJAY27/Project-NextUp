@@ -5,8 +5,9 @@
 
 import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
+import { isProfileComplete } from "@/lib/profile-utils";
 import api from "@/lib/api";
 import {
   Sparkles,
@@ -72,10 +73,21 @@ interface InterviewPrep {
 
 function AIToolkitContent() {
   const searchParams = useSearchParams();
-  const { user } = useAppStore();
-  
+  const router = useRouter();
+  const { user, token } = useAppStore();
+
+  useEffect(() => {
+    if (!token) {
+      router.push("/login");
+      return;
+    }
+    if (user && !isProfileComplete(user)) {
+      router.push("/profile");
+    }
+  }, [user, token, router]);
+
   const queryCompanyId = searchParams.get("companyId");
-  
+
   const [companyId, setCompanyId] = useState<string>(queryCompanyId || "");
   const [companies, setCompanies] = useState<Company[]>([]);
   const [company, setCompany] = useState<Company | null>(null);
@@ -705,6 +717,10 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
         </div>
       </div>
     );
+  }
+
+  if (!token || (user && !isProfileComplete(user))) {
+    return null;
   }
 
   return (

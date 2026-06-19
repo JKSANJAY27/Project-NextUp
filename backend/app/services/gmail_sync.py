@@ -166,7 +166,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         
         email_timestamp = datetime.fromisoformat(email_timestamp_str.replace("Z", "+00:00")) if email_timestamp_str else datetime.utcnow()
         
-        # 3. Pre-extract PDF text from attachments to provide context to LLM
+        # 3. Pre-extract attachment text to provide full context to LLM
         attachment_texts = []
         for att in attachments:
             filename = att.get("filename", "")
@@ -174,15 +174,30 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             if not base64_data:
                 continue
             file_bytes = base64.b64decode(base64_data)
+
+            # PDF: full text extraction
             if filename.lower().endswith(".pdf"):
                 try:
-                    jd_info = parse_job_description(file_bytes)
-                    txt = jd_info.get("jd_text", "")
+                    from app.services.pdf_extractor import extract_text_from_pdf
+                    txt = extract_text_from_pdf(file_bytes)
                     if txt:
-                        attachment_texts.append(f"--- ATTACHMENT: {filename} ---\n{txt}")
+                        attachment_texts.append(f"--- ATTACHMENT (PDF): {filename} ---\n{txt[:3000]}")
                 except Exception as e:
-                    logger.warning(f"Failed to pre-extract text from PDF {filename}: {str(e)}")
-                    
+                    logger.warning(f"Failed to extract PDF text from {filename}: {str(e)}")
+
+            # Excel: extract first 20 rows as plain text context for LLM
+            elif filename.lower().endswith((".xls", ".xlsx")):
+                try:
+                    import io
+                    import pandas as pd
+                    df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl", nrows=20)
+                    excel_preview = f"--- ATTACHMENT (EXCEL PREVIEW): {filename} ---\n"
+                    excel_preview += f"Columns: {list(df.columns)}\n"
+                    excel_preview += df.to_string(index=False, max_rows=20)
+                    attachment_texts.append(excel_preview[:1500])
+                except Exception as e:
+                    logger.warning(f"Failed to extract Excel preview from {filename}: {str(e)}")
+
         attachment_text = "\n\n".join(attachment_texts)
 
         # 4. Parse Email Body with Escalating LLM chain
@@ -232,19 +247,25 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             min_cgpa = r_item.get("min_cgpa", {}).get("value")
             requires_no_arrears = r_item.get("requires_no_arrears", {}).get("value", False)
             
-            # Determine category from text using regex to match legacy fingerprints
-            cat_match = re.search(r"(Dream\s*Internship|Super\s*Dream|Mass\s*Recruiter|Dream\s*Offer|Dream|Regular)", subject + " " + body, re.I)
-            category = "Dream"
+            # Determine category from text — check internship FIRST to avoid misclassification
+            cat_match = re.search(
+                r"(Dream\s*Internship|Regular\s*Internship|Summer\s*Intern(?:ship)?|Super\s*Dream|Mass\s*Recruiter|Dream\s*Offer|Dream|Regular)",
+                subject + " " + body,
+                re.I
+            )
+            category = "Regular"
             if cat_match:
                 cat = cat_match.group(1).lower()
                 if "super" in cat:
                     category = "Super Dream"
                 elif "mass" in cat:
                     category = "Mass Recruiter"
-                elif "internship" in cat:
+                elif "internship" in cat or "intern" in cat:
                     category = "Internship"
-                else:
+                elif "dream" in cat:
                     category = "Dream"
+                else:
+                    category = "Regular"
                     
             fingerprint_input = f"{company_name.upper()}|{role.upper()}|{category.upper()}|{batch_year}|{recruitment_cycle.upper()}"
             fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
@@ -598,14 +619,37 @@ def process_notification_jobs(db: Session):
                     # Silenced state
                     continue
                     
-                # Create the notification message
+                # Create the notification message based on event type
                 if event.event_type == 'REGISTRATION':
-                    msg = f"📢 New drive registered: {company.name} is hiring for {company.role} ({company.category}). Deadline: {company.registration_deadline.strftime('%b %d, %I:%M %p') if company.registration_deadline else 'N/A'}."
+                    deadline_str = company.registration_deadline.strftime('%b %d, %I:%M %p') if company.registration_deadline else 'N/A'
+                    msg = f"📢 New drive: {company.name} is hiring for {company.role} ({company.category}). Deadline: {deadline_str}."
                     notif_type = 'company_update'
+                elif event.event_type == 'DEADLINE_EXTENSION':
+                    deadline_str = company.registration_deadline.strftime('%b %d, %I:%M %p') if company.registration_deadline else 'N/A'
+                    msg = f"⏰ Deadline extended! {company.name} ({company.role}) new deadline: {deadline_str}."
+                    notif_type = 'deadline'
                 elif event.event_type == 'SHORTLIST':
-                    # Shortlisted students are already notified individually during shortlist extraction,
-                    # but we can notify others they were NOT selected (or keep it silent). Let's keep it silent.
+                    # Shortlisted students notified individually. Skip broadcast.
                     continue
+                elif event.event_type == 'OA':
+                    msg = f"📝 Online Assessment scheduled for {company.name} ({company.role}). Check email for details."
+                    notif_type = 'company_update'
+                elif event.event_type == 'OA_RESULT':
+                    msg = f"📊 OA results announced for {company.name} ({company.role}). Check your application status."
+                    notif_type = 'company_update'
+                elif event.event_type == 'INTERVIEW':
+                    msg = f"🎤 Interview scheduled for {company.name} ({company.role}). Check email for slot details."
+                    notif_type = 'company_update'
+                elif event.event_type == 'INTERVIEW_RESULT':
+                    msg = f"📋 Interview results announced for {company.name} ({company.role}). Check your application status."
+                    notif_type = 'company_update'
+                elif event.event_type == 'OFFER':
+                    msg = f"🎉 Offers released by {company.name} for {company.role}! Check your application status."
+                    notif_type = 'offer'
+                elif event.event_type == 'REJECTION':
+                    # Rejection notifications — can be noisy, send as system update
+                    msg = f"📬 Update from {company.name} ({company.role}): {event.subject}."
+                    notif_type = 'company_update'
                 else:
                     msg = f"📅 Update from {company.name}: {event.subject}."
                     notif_type = 'company_update'
@@ -637,19 +681,23 @@ def process_notification_jobs(db: Session):
 def update_recruitment_states(db: Session, company: Company, event_type: str, event_timestamp: datetime, email_body: str):
     """
     Updates recruitment_state for all student applications linked to the company
-    based on the type of incoming event.
+    based on the canonical event type of the incoming event.
     """
     apps = db.query(Application).filter(Application.company_id == company.id).all()
-    
+
     for app in apps:
         old_state = app.recruitment_state
-        
+
         if event_type == 'REGISTRATION':
             if app.recruitment_state is None or app.recruitment_state == 'Registration':
                 app.recruitment_state = 'Registration'
-                
+
+        elif event_type == 'DEADLINE_EXTENSION':
+            # Deadline extended — no state change, but update the company deadline
+            # (company.registration_deadline already updated by caller)
+            pass
+
         elif event_type == 'OA':
-            # Check if event is in the past, or email says it is done
             is_past = event_timestamp < datetime.utcnow()
             if is_past or any(k in email_body.lower() for k in ["completed", "results", "conducted", "held"]):
                 app.recruitment_state = 'Awaiting OA Result'
@@ -658,7 +706,12 @@ def update_recruitment_states(db: Session, company: Company, event_type: str, ev
                     app.recruitment_state = 'OA'
                     if app.status in ('Applied', 'Shortlisted'):
                         app.status = 'OA'
-                        
+
+        elif event_type == 'OA_RESULT':
+            # OA results announced — move waiting students forward
+            if app.recruitment_state in ('OA', 'Awaiting OA Result'):
+                app.recruitment_state = 'Awaiting OA Result'
+
         elif event_type == 'INTERVIEW':
             is_past = event_timestamp < datetime.utcnow()
             if is_past or any(k in email_body.lower() for k in ["completed", "results", "conducted", "held", "feedback"]):
@@ -668,26 +721,32 @@ def update_recruitment_states(db: Session, company: Company, event_type: str, ev
                     app.recruitment_state = 'Interview'
                     if app.status in ('Applied', 'Shortlisted', 'OA'):
                         app.status = 'Interview'
-                        
+
+        elif event_type == 'INTERVIEW_RESULT':
+            # Interview results announced — move waiting students to 'Awaiting Result'
+            if app.recruitment_state in ('Interview', 'Awaiting Interview Result'):
+                app.recruitment_state = 'Awaiting Interview Result'
+
         elif event_type == 'OFFER':
             if app.recruitment_state in (None, 'Registration', 'Shortlisted', 'OA', 'Interview', 'Awaiting Interview Result'):
                 app.recruitment_state = 'Offer'
                 if app.status not in ('Rejected', 'Declined', 'Ignored'):
                     app.status = 'Offer'
-                    
+
         elif event_type == 'REJECTION':
             app.recruitment_state = 'Rejected'
             app.status = 'Rejected'
-            
+
         elif event_type == 'SHORTLIST':
             if app.recruitment_state in (None, 'Registration', 'Awaiting Shortlist'):
                 app.recruitment_state = 'Shortlisted'
                 if app.status == 'Applied':
                     app.status = 'Shortlisted'
-                    
-        # Update last user activity if changed
+
+        # Update last activity timestamp if state changed
         if app.recruitment_state != old_state:
             app.last_user_activity_at = datetime.utcnow()
             logger.info(f"Updated Application {app.id} recruitment_state: {old_state} -> {app.recruitment_state}")
-    
+
     db.commit()
+

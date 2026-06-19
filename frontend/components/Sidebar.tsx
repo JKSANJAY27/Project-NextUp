@@ -14,10 +14,12 @@ import {
   Sun,
   Moon,
   Menu,
-  X
+  X,
+  Lock
 } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { useSearchParams } from "next/navigation";
+import { isProfileComplete } from "@/lib/profile-utils";
 
 import { supabase } from "@/lib/supabase";
 
@@ -117,6 +119,27 @@ export default function Sidebar() {
               itemPath !== "/dashboard" || activeTab === itemTab
             );
             const Icon = item.icon;
+            
+            // Check if profile is incomplete and item is not Profile
+            const isComplete = isProfileComplete(user);
+            const isItemRestricted = !isComplete && item.name !== "PROFILE";
+
+            if (isItemRestricted) {
+              return (
+                <div
+                  key={item.name}
+                  className="flex items-center justify-between gap-4 px-8 py-4 text-sm font-bold tracking-tighter transition-all uppercase text-zinc-600 cursor-not-allowed select-none opacity-40"
+                  title="Please complete your student profile to unlock."
+                >
+                  <div className="flex items-center gap-4">
+                    <Icon size={18} />
+                    <span>{item.name}</span>
+                  </div>
+                  <Lock size={14} className="text-zinc-600" />
+                </div>
+              );
+            }
+
             return (
               <Link
                 key={item.name}

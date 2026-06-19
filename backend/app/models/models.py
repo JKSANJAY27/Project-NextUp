@@ -43,6 +43,7 @@ class Resume(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     latex_template = Column(String, default="Classic")
     resume_json_enc = Column(String, nullable=False)
+    raw_text_enc = Column(String, nullable=True)  # Encrypted client-side raw text of the resume
     skills = Column(ARRAY(String), default=list)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
