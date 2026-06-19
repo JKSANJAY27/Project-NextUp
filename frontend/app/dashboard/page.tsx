@@ -14,6 +14,8 @@ import {
   HelpCircle,
   ExternalLink,
   ChevronDown,
+  ChevronUp,
+  Globe,
   AlertCircle,
   X,
   Link2,
@@ -120,6 +122,18 @@ interface NotificationBundle {
   category: string;
   unread_count: number;
   notifications: NotificationDetail[];
+}
+
+interface CompanyEvent {
+  id: string;
+  company_id: string;
+  event_type: string;
+  subject: string | null;
+  sender: string | null;
+  body: string | null;
+  timestamp: string | null;
+  confidence_scores: Record<string, number>;
+  user_notification_msg: string | null;
 }
 
 const KANBAN_COLUMNS = [
@@ -238,6 +252,8 @@ function DashboardPageContent() {
   const [tempNoteText, setTempNoteText] = useState("");
   const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
   const [decryptedNotes, setDecryptedNotes] = useState<Record<string, string>>({});
+  const [companyEvents, setCompanyEvents] = useState<CompanyEvent[]>([]);
+  const [isPrepPanelExpanded, setIsPrepPanelExpanded] = useState(false);
 
   // Manual Company Form State
   const [compName, setCompName] = useState("");
@@ -404,6 +420,24 @@ function DashboardPageContent() {
     };
     decryptNotesObj();
   }, [selectedCompany, applications, encryptionKey]);
+
+  // Fetch company events whenever selectedCompany changes
+  useEffect(() => {
+    const fetchCompanyEvents = async () => {
+      if (!selectedCompany) {
+        setCompanyEvents([]);
+        return;
+      }
+      try {
+        const res = await api.get(`/companies/${selectedCompany.id}/events`);
+        setCompanyEvents(res.data || []);
+      } catch (err) {
+        console.error("Failed to fetch company events:", err);
+        setCompanyEvents([]);
+      }
+    };
+    fetchCompanyEvents();
+  }, [selectedCompany]);
 
   // Handle manual company creation
   const handleAddCompany = async (e: React.FormEvent) => {
@@ -775,20 +809,19 @@ function DashboardPageContent() {
   const getTimelineEvents = () => {
     if (!selectedCompany) return [];
     
-    const bundle = notificationBundles.find(b => b.company_id === selectedCompany.id);
     const events: TimelineEvent[] = [];
     
-    if (bundle && bundle.notifications.length > 0) {
-      bundle.notifications.forEach(n => {
+    if (companyEvents && companyEvents.length > 0) {
+      companyEvents.forEach(e => {
         events.push({
-          id: n.id,
-          type: n.notification_type,
-          title: n.notification_type.toUpperCase(),
-          message: n.message,
-          body: n.body || n.message,
-          sender: n.sender || "CDC Mail",
-          timestamp: n.timestamp ? new Date(n.timestamp) : new Date(n.created_at),
-          confidence_scores: n.confidence_scores || {}
+          id: e.id,
+          type: e.event_type.toLowerCase(),
+          title: e.event_type.toUpperCase(),
+          message: e.user_notification_msg || e.subject || "Company Update",
+          body: e.body || e.subject || "No details available.",
+          sender: e.sender || "CDC Mail",
+          timestamp: e.timestamp ? new Date(e.timestamp) : new Date(),
+          confidence_scores: e.confidence_scores || {}
         });
       });
     } else {
@@ -840,31 +873,7 @@ function DashboardPageContent() {
     return Math.min(100, score);
   };
 
-  // Get Last Verified Update transparency parameters
-  const getLastVerifiedUpdate = (bundle: NotificationBundle | undefined, comp: Company) => {
-    if (!bundle || bundle.notifications.length === 0) {
-      return {
-        source: "Manual Ingestion",
-        received: comp.registration_deadline ? new Date(comp.registration_deadline).toLocaleString("en-IN") : "Unknown",
-        confidence: 100
-      };
-    }
-    
-    const latestNotif = bundle.notifications[0];
-    let avgConfidence = 95;
-    if (latestNotif.confidence_scores) {
-      const scores = Object.values(latestNotif.confidence_scores);
-      if (scores.length > 0) {
-        avgConfidence = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 100);
-      }
-    }
-    
-    return {
-      source: latestNotif.sender || "CDC Mail",
-      received: new Date(latestNotif.created_at).toLocaleString("en-IN"),
-      confidence: avgConfidence
-    };
-  };
+
 
   // Filter lists based on tab selection
   const filteredCompanies = companies.filter((c) => {
@@ -938,7 +947,6 @@ function DashboardPageContent() {
   const workspaceEvents = getTimelineEvents();
   const selectedApp = selectedCompany ? applications[selectedCompany.id] : undefined;
   const healthVal = getHealthScore(selectedApp);
-  const selectedMeta = selectedCompany ? getLastVerifiedUpdate(notificationBundles.find(b => b.company_id === selectedCompany.id), selectedCompany) : null;
   const selectedNextAction = selectedCompany && selectedApp ? getNextActionMessage(selectedApp, selectedCompany) : "Track this workspace to begin preparation.";
 
   // circular progress SVG values
@@ -2400,74 +2408,147 @@ function DashboardPageContent() {
                       </span>
                     </div>
 
-                    {/* Next Action & Health Indicator */}
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-stretch">
-                      {/* Strictly Singular Next Action */}
-                      <div className="md:col-span-8 border-2 border-border p-5 bg-gradient-to-r from-accent/5 to-transparent relative overflow-hidden flex flex-col justify-between">
-                        <div className="absolute -right-12 -top-12 w-32 h-32 bg-accent/10 rounded-full blur-2xl" />
-                        <span className="text-[9px] font-black tracking-widest text-accent uppercase block">⚡ NEXT RECOMMENDATION</span>
-                        <p className="text-sm font-bold text-foreground uppercase leading-relaxed mt-2 relative z-10">
-                          👉 {selectedNextAction}
-                        </p>
+                    {/* Specifications Grid */}
+                    <div className="border-2 border-border p-5 bg-muted/5 space-y-4">
+                      <h4 className="text-xs font-black tracking-widest text-accent uppercase">
+                        📋 Placement Specifications
+                      </h4>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                        <div className="space-y-1">
+                          <span className="text-[9px] font-black text-muted-foreground uppercase block">CTC / Package</span>
+                          <span className="text-sm font-bold text-foreground block">{selectedCompany.ctc || "Will be announced later"}</span>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[9px] font-black text-muted-foreground uppercase block">Stipend</span>
+                          <span className="text-sm font-bold text-foreground block">{selectedCompany.stipend || "Will be announced later"}</span>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[9px] font-black text-muted-foreground uppercase block">Registration Deadline</span>
+                          <span className="text-sm font-bold text-foreground block">
+                            {selectedCompany.registration_deadline 
+                              ? new Date(selectedCompany.registration_deadline).toLocaleString("en-IN", { 
+                                  day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true 
+                                }) 
+                              : "Will be announced later"}
+                          </span>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[9px] font-black text-muted-foreground uppercase block">Date of Visit</span>
+                          <span className="text-sm font-bold text-foreground block">
+                            {selectedCompany.eligibility_rules?.date_of_visit || "Will be announced later"}
+                          </span>
+                        </div>
+                        <div className="space-y-1 md:col-span-2">
+                          <span className="text-[9px] font-black text-muted-foreground uppercase block">Eligible Branches</span>
+                          <span className="text-sm font-bold text-foreground block">
+                            {selectedCompany.eligible_branches && selectedCompany.eligible_branches.length > 0 
+                              ? selectedCompany.eligible_branches.join(", ") 
+                              : "All Branches"}
+                          </span>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[9px] font-black text-muted-foreground uppercase block">Min CGPA</span>
+                          <span className="text-sm font-bold text-foreground block">
+                            {selectedCompany.eligibility_rules?.min_cgpa ? `>= ${selectedCompany.eligibility_rules.min_cgpa}` : "N/A"}
+                          </span>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[9px] font-black text-muted-foreground uppercase block">History of Arrears</span>
+                          <span className="text-sm font-bold text-foreground block">
+                            {selectedCompany.eligibility_rules?.requires_no_arrears ? "No Active Backlogs" : "Backlogs Allowed"}
+                          </span>
+                        </div>
                       </div>
 
-                      {/* Application Health Score */}
-                      <div className="md:col-span-4 border-2 border-border p-5 bg-muted/5 flex items-center justify-between">
-                        <div>
-                          <span className="text-[9px] font-black tracking-widest text-muted-foreground uppercase block">HEALTH SCORE</span>
-                          <span className="text-xs font-bold text-muted-foreground uppercase block mt-1">Application readiness</span>
-                        </div>
-                        {selectedApp ? (
-                          <div className="relative flex items-center justify-center h-16 w-16">
-                            <svg className="w-full h-full transform -rotate-90">
-                              <circle
-                                cx="32"
-                                cy="32"
-                                r={radius}
-                                className="stroke-muted"
-                                strokeWidth="5"
-                                fill="transparent"
-                              />
-                              <circle
-                                cx="32"
-                                cy="32"
-                                r={radius}
-                                className="stroke-accent transition-all duration-500"
-                                strokeWidth="5"
-                                fill="transparent"
-                                strokeDasharray={circumference}
-                                strokeDashoffset={strokeDashoffset}
-                              />
-                            </svg>
-                            <span className="absolute text-xs font-black">{healthVal}%</span>
-                          </div>
-                        ) : (
-                          <span className="text-xs font-bold text-muted-foreground uppercase">NOT TRACKED</span>
+                      {/* Website and Application Links */}
+                      <div className="flex flex-wrap gap-3 pt-3 border-t border-border/50">
+                        {selectedCompany.registration_link && (
+                          <a
+                            href={selectedCompany.registration_link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 h-9 px-4 border-2 border-accent bg-accent text-black font-black text-[10px] uppercase tracking-wider hover:bg-accent/80 transition-all"
+                          >
+                            <ExternalLink size={12} />
+                            Apply via CDC Portal
+                          </a>
+                        )}
+                        {selectedCompany.website && (
+                          <a
+                            href={selectedCompany.website}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 h-9 px-4 border border-border bg-transparent text-foreground font-black text-[10px] uppercase tracking-wider hover:bg-muted transition-all"
+                          >
+                            <Globe size={12} />
+                            Visit Company Website
+                          </a>
                         )}
                       </div>
                     </div>
 
-                    {/* Last Verified Update Widget */}
-                    {selectedMeta && (
-                      <div className="border border-border p-4 bg-muted/5 space-y-2">
-                        <h4 className="text-[10px] font-black tracking-widest text-muted-foreground uppercase">
-                          ✓ LAST VERIFIED UPDATE
-                        </h4>
-                        <div className="grid grid-cols-3 gap-4 text-center">
-                          <div className="border-r border-border/50">
-                            <span className="text-[8px] font-bold text-muted-foreground uppercase block">SOURCE</span>
-                            <span className="text-xs font-black uppercase text-foreground truncate block max-w-full">{selectedMeta.source}</span>
+                    {/* Collapsible Action & Health Accordion */}
+                    <div className="border-2 border-border overflow-hidden">
+                      <button
+                        onClick={() => setIsPrepPanelExpanded(!isPrepPanelExpanded)}
+                        className="w-full flex items-center justify-between p-4 bg-muted/10 hover:bg-muted/20 transition-all text-left"
+                      >
+                        <span className="text-xs font-black tracking-widest text-foreground uppercase flex items-center gap-2">
+                          ⚡ PREPARATION TOOLKIT & HEALTH STATUS
+                        </span>
+                        <span className="text-muted-foreground">
+                          {isPrepPanelExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </span>
+                      </button>
+                      
+                      {isPrepPanelExpanded && (
+                        <div className="p-5 border-t border-border bg-background grid grid-cols-1 md:grid-cols-12 gap-6 items-stretch animate-in slide-in-from-top-1 duration-200">
+                          {/* Next Action */}
+                          <div className="md:col-span-8 border border-border p-4 bg-gradient-to-r from-accent/5 to-transparent relative overflow-hidden flex flex-col justify-between">
+                            <div className="absolute -right-12 -top-12 w-32 h-32 bg-accent/10 rounded-full blur-2xl" />
+                            <span className="text-[9px] font-black tracking-widest text-accent uppercase block">⚡ NEXT RECOMMENDATION</span>
+                            <p className="text-sm font-bold text-foreground uppercase leading-relaxed mt-2 relative z-10">
+                              👉 {selectedNextAction}
+                            </p>
                           </div>
-                          <div className="border-r border-border/50">
-                            <span className="text-xs font-mono font-bold text-foreground block">{selectedMeta.received.split(",")[0]}</span>
-                          </div>
-                          <div>
-                            <span className="text-[8px] font-bold text-muted-foreground uppercase block">PARSER CONFIDENCE</span>
-                            <span className="text-xs font-black text-accent block">{selectedMeta.confidence}%</span>
+
+                          {/* Application Health Score */}
+                          <div className="md:col-span-4 border border-border p-4 bg-muted/5 flex items-center justify-between">
+                            <div>
+                              <span className="text-[9px] font-black tracking-widest text-muted-foreground uppercase block">HEALTH SCORE</span>
+                              <span className="text-xs font-bold text-muted-foreground uppercase block mt-1">Application readiness</span>
+                            </div>
+                            {selectedApp ? (
+                              <div className="relative flex items-center justify-center h-16 w-16">
+                                <svg className="w-full h-full transform -rotate-90">
+                                  <circle
+                                    cx="32"
+                                    cy="32"
+                                    r={radius}
+                                    className="stroke-muted"
+                                    strokeWidth="5"
+                                    fill="transparent"
+                                  />
+                                  <circle
+                                    cx="32"
+                                    cy="32"
+                                    r={radius}
+                                    className="stroke-accent transition-all duration-500"
+                                    strokeWidth="5"
+                                    fill="transparent"
+                                    strokeDasharray={circumference}
+                                    strokeDashoffset={strokeDashoffset}
+                                  />
+                                </svg>
+                                <span className="absolute text-xs font-black">{healthVal}%</span>
+                              </div>
+                            ) : (
+                              <span className="text-xs font-bold text-muted-foreground uppercase">NOT TRACKED</span>
+                            )}
                           </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
 
                     {/* Timeline & Notes list */}
                     <div className="space-y-4">

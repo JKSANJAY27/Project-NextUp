@@ -146,8 +146,8 @@ def parse_resume_with_huggingface(text: str) -> Dict[str, Any]:
         logger.warning("HF_API_TOKEN not set. Skipping HuggingFace escalation for resume.")
         return {}
 
-    model_id = "Qwen/Qwen2.5-72B-Instruct"
-    api_url = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+    model_id = "meta-llama/Llama-3.3-70B-Instruct"
+    api_url = "https://router.huggingface.co/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {hf_token}",
         "Content-Type": "application/json"

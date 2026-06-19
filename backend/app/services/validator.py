@@ -222,7 +222,6 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session)
         "value": loc_obj.get("value").strip() if loc_obj.get("value") else None,
         "confidence": loc_obj.get("confidence", 0.50)
     }
-    
     # 5. Registration Link
     link_obj = ext.get("registration_link", {})
     if not isinstance(link_obj, dict):
@@ -231,7 +230,16 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session)
         "value": link_obj.get("value").strip() if link_obj.get("value") else None,
         "confidence": link_obj.get("confidence", 0.50)
     }
-    
+
+    # 5.5 Date of Visit
+    visit_obj = ext.get("date_of_visit", {})
+    if not isinstance(visit_obj, dict):
+        visit_obj = {"value": str(visit_obj) if visit_obj else "Will be announced later", "confidence": 0.50}
+    ext["date_of_visit"] = {
+        "value": visit_obj.get("value").strip() if visit_obj.get("value") else "Will be announced later",
+        "confidence": visit_obj.get("confidence", 0.50)
+    }
+
     # 6. Roles Array Processing
     roles_list = ext.get("roles", [])
     if not isinstance(roles_list, list) or len(roles_list) == 0:

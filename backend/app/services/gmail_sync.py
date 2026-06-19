@@ -279,9 +279,11 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 best_match = None
                 best_score = -1
                 for c in candidate_companies:
-                    # Only match if the role is the same (normalized)
-                    if normalize_role_name(c.role) != normalize_role_name(role):
-                        continue
+                    role_score = 0
+                    if normalize_role_name(c.role) == normalize_role_name(role):
+                        role_score = 20
+                    elif len(c.role) >= 3 and (c.role.lower() in role.lower() or role.lower() in c.role.lower()):
+                        role_score = 10
                         
                     db_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', c.name, flags=re.I).strip().lower()
                     ext_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', company_name, flags=re.I).strip().lower()
@@ -289,7 +291,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     db_name_clean = re.sub(r'\s+', ' ', db_name_clean)
                     ext_name_clean = re.sub(r'\s+', ' ', ext_name_clean)
                     
-                    score = 0
+                    score = role_score
                     if db_name_clean == ext_name_clean:
                         score += 60
                     elif (len(db_name_clean) >= 3 and db_name_clean in ext_name_clean) or (len(ext_name_clean) >= 3 and ext_name_clean in db_name_clean):
@@ -321,7 +323,8 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 "min_cgpa": min_cgpa,
                 "min_tenth_marks": None,
                 "min_twelfth_marks": None,
-                "requires_no_arrears": requires_no_arrears
+                "requires_no_arrears": requires_no_arrears,
+                "date_of_visit": ext_data.get("date_of_visit", {}).get("value") or "Will be announced later"
             }
             
             if not company:

@@ -6,8 +6,9 @@ import io
 
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.models import User, StudentProfile, Company, Application
+from app.models.models import User, StudentProfile, Company, Application, CompanyEvent, Notification, IngestionAuditLog
 from app.schemas.schemas import CompanyCreate, CompanyOut, CompanyWithEligibilityOut
+from collections import defaultdict
 from app.services.eligibility import check_eligibility
 from app.services.email_parser import parse_placement_email
 from app.services.pdf_extractor import parse_job_description
@@ -211,3 +212,49 @@ def get_company(
     company_data["eligibility_status"] = status_elig
     company_data["eligibility_reason"] = reason_elig
     return company_data
+
+
+@router.get("/{id}/events")
+def get_company_events(
+    id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    events = (
+        db.query(CompanyEvent)
+        .filter(CompanyEvent.company_id == id)
+        .order_by(CompanyEvent.timestamp.desc())
+        .all()
+    )
+    
+    event_ids = [e.id for e in events]
+    audit_map = defaultdict(dict)
+    if event_ids:
+        audit_logs = db.query(IngestionAuditLog).filter(IngestionAuditLog.company_event_id.in_(event_ids)).all()
+        for log in audit_logs:
+            audit_map[log.company_event_id][log.field_name] = float(log.confidence_score) if log.confidence_score else 0.0
+            
+    notif_map = {}
+    if event_ids:
+        notifications = db.query(Notification).filter(
+            Notification.company_event_id.in_(event_ids),
+            Notification.user_id == current_user.id
+        ).all()
+        for n in notifications:
+            notif_map[n.company_event_id] = n.message
+            
+    results = []
+    for e in events:
+        results.append({
+            "id": str(e.id),
+            "company_id": str(e.company_id),
+            "event_type": e.event_type,
+            "subject": e.subject,
+            "sender": e.sender,
+            "body": e.body,
+            "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+            "confidence_scores": audit_map[e.id],
+            "user_notification_msg": notif_map.get(e.id)
+        })
+        
+    return results

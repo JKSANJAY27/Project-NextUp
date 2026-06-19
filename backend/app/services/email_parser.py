@@ -76,6 +76,10 @@ Required JSON Output Format:
       "value": "https://forms.gle/xyz",
       "confidence": 0.99
     }},
+    "date_of_visit": {{
+      "value": "Will be announced later",
+      "confidence": 0.85
+    }},
     "roles": [
       {{
         "role": {{ "value": "Software Engineer", "confidence": 0.98 }},
@@ -200,9 +204,9 @@ def parse_with_huggingface(context_text: str) -> Dict[str, Any]:
         logger.warning("HF_API_TOKEN not set. Skipping HuggingFace escalation.")
         return {}
 
-    model_id = "Qwen/Qwen2.5-72B-Instruct"
+    model_id = "meta-llama/Llama-3.3-70B-Instruct"
     # Use OpenAI-compatible Messages API (correct format for instruction models)
-    api_url = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+    api_url = "https://router.huggingface.co/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {hf_token}",
         "Content-Type": "application/json"
@@ -293,7 +297,37 @@ def is_high_confidence(parsed: Dict[str, Any]) -> bool:
     return True
 
 
-def extract_placements_regex(email_body: str) -> Dict[str, Any]:
+def extract_company_from_subject(subject: str) -> str:
+    if not subject:
+        return "Unknown Company"
+    s = subject.replace('\u200b', '').strip()
+    prev_s = None
+    while s != prev_s:
+        prev_s = s
+        s = re.sub(
+            r'^(?:congratulations|congrats|kind\s+attn|kind\s+attention|summer\s+sem|updated|update|re|fwd|urgnt|urgent|notice|report\s+immediately)\b[:\s!]*',
+            '',
+            s,
+            flags=re.I
+        ).strip()
+        s = re.sub(r'^[:\s!]+', '', s)
+    parts = re.split(r'[-–—|:(]', s)
+    first_part = parts[0].strip()
+    clean = re.sub(
+        r'\b(?:next\s+round|tech\s+talk|super\s+dream|dream|regular|mass|recruiter|internship|placement|hiring|registration|selection|shortlist|online\s+test|oa|interview|offers?|applied|announcement|results?|list|batch|\d{4})\b.*$',
+        '',
+        first_part,
+        flags=re.I
+    ).strip()
+    clean = re.sub(r'[*_#]', '', clean).strip()
+    if len(clean) >= 2:
+        return clean
+    if len(first_part) >= 2:
+        return first_part
+    return "Unknown Company"
+
+
+def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, Any]:
     """
     Rule-based extraction using regular expressions as a last-resort fallback.
     """
@@ -308,9 +342,13 @@ def extract_placements_regex(email_body: str) -> Dict[str, Any]:
     if comp_match:
         data["company"] = comp_match.group(1).strip()
     else:
-        lines = [line.strip() for line in email_body.split("\n") if line.strip()]
-        if lines:
-            data["company"] = lines[0].replace("**", "").strip()
+        sub_company = extract_company_from_subject(subject)
+        if sub_company and sub_company != "Unknown Company":
+            data["company"] = sub_company
+        else:
+            lines = [line.strip() for line in email_body.split("\n") if line.strip()]
+            if lines:
+                data["company"] = lines[0].replace("**", "").strip()
 
     # 2. Category — check internship FIRST before dream/regular
     cat_match = re.search(
@@ -456,15 +494,26 @@ def extract_placements_regex(email_body: str) -> Dict[str, Any]:
                 data["registration_link"] = url
                 break
 
+    # 12. Date of Visit
+    visit_match = re.search(
+        r"(?:Date of Visit|Visit Date|Date of recruitment|Recruitment Date):\s*([^\n\r]+)",
+        email_body,
+        re.IGNORECASE
+    )
+    if visit_match:
+        data["date_of_visit"] = visit_match.group(1).strip()
+    else:
+        data["date_of_visit"] = "Will be announced later"
+
     return data
 
 
-def build_regex_fallback_response(email_body: str) -> Dict[str, Any]:
+def build_regex_fallback_response(email_body: str, subject: str = "") -> Dict[str, Any]:
     """
     Builds a mock LLM-structure response from regex+spaCy extraction.
     Used as last resort when both Ollama and HuggingFace fail.
     """
-    parsed = extract_placements_regex(email_body)
+    parsed = extract_placements_regex(email_body, subject)
 
     # spaCy NER as fallback for missing fields
     if nlp and ("deadline_iso" not in parsed or "job_location" not in parsed or "company" not in parsed):
@@ -505,25 +554,26 @@ def build_regex_fallback_response(email_body: str) -> Dict[str, Any]:
     deadline_iso = parsed.get("deadline_iso")
     job_location = parsed.get("job_location")
     registration_link = parsed.get("registration_link")
+    date_of_visit = parsed.get("date_of_visit", "Will be announced later")
 
-    # Determine event type from body heuristics
+    # Determine event type from body and subject heuristics
     event_type = "NEW_DRIVE"
-    body_lower = email_body.lower()
-    if "deadline extended" in body_lower or "extension" in body_lower:
+    text_to_check = (subject + " " + email_body).lower()
+    if "deadline extended" in text_to_check or "extension" in text_to_check:
         event_type = "DEADLINE_EXTENSION"
-    elif "shortlist" in body_lower:
+    elif "shortlist" in text_to_check or "short-listed" in text_to_check:
         event_type = "SHORTLIST_RELEASED"
-    elif "online test" in body_lower or "assessment" in body_lower or " oa " in (" " + body_lower + " "):
-        event_type = "OA_SCHEDULED"
-    elif "oa result" in body_lower or "online test result" in body_lower:
+    elif "oa result" in text_to_check or "online test result" in text_to_check or "assessment result" in text_to_check:
         event_type = "OA_RESULT"
-    elif "interview result" in body_lower:
+    elif "online test" in text_to_check or "assessment" in text_to_check or " oa " in (" " + text_to_check + " ") or "online assessment" in text_to_check:
+        event_type = "OA_SCHEDULED"
+    elif "interview result" in text_to_check or "interview select" in text_to_check:
         event_type = "INTERVIEW_RESULT"
-    elif "interview" in body_lower:
+    elif "interview" in text_to_check:
         event_type = "INTERVIEW_SCHEDULED"
-    elif "offer" in body_lower or "congratulations" in body_lower:
+    elif "offer" in text_to_check or "congratulations" in text_to_check or "selection list" in text_to_check or "selected candidates" in text_to_check:
         event_type = "OFFER_RELEASED"
-    elif "regret" in body_lower or "not selected" in body_lower or "rejection" in body_lower:
+    elif "regret" in text_to_check or "not selected" in text_to_check or "rejection" in text_to_check:
         event_type = "REJECTION_RELEASED"
 
     return {
@@ -538,6 +588,7 @@ def build_regex_fallback_response(email_body: str) -> Dict[str, Any]:
             "job_location": {"value": job_location, "confidence": 0.45},
             "deadline_iso": {"value": deadline_iso, "confidence": 0.45},
             "registration_link": {"value": registration_link, "confidence": 0.45},
+            "date_of_visit": {"value": date_of_visit, "confidence": 0.45},
             "roles": [
                 {
                     "role": {"value": role, "confidence": 0.45},
@@ -586,4 +637,4 @@ def parse_placement_email(
         return parsed_hf
 
     logger.warning("Both LLM attempts failed. Falling back to Regex parser.")
-    return build_regex_fallback_response(email_body)
+    return build_regex_fallback_response(email_body, subject)
