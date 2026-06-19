@@ -17,15 +17,12 @@ import {
   AlertCircle,
   Loader2,
   ArrowLeft,
-  Copy,
   Download,
   Play,
   Target,
   FileText,
   Plus,
-  Trash2,
-  ChevronDown,
-  ChevronUp
+  Trash2
 } from "lucide-react";
 import {
   generateInBrowser,
@@ -109,7 +106,6 @@ function AIToolkitContent() {
   const [masterResume, setMasterResume] = useState<any>(null);
   const [activeApplication, setActiveApplication] = useState<any>(null);
   const [tailoredResumeData, setTailoredResumeData] = useState<any>(null);
-  const [hasTailoredResume, setHasTailoredResume] = useState(false);
   
   // Helper inputs for additions inside tailored resume editor
   const [newCert, setNewCert] = useState("");
@@ -207,13 +203,11 @@ function AIToolkitContent() {
           const decResume = await decryptData(activeApp.tailored_resume_enc, encryptionKey);
           const trData = JSON.parse(decResume);
           setTailoredResumeData(trData);
-          setHasTailoredResume(true);
         } catch (e) {
           console.error("Failed to decrypt tailored resume:", e);
           if (masterData) {
             setTailoredResumeData(JSON.parse(JSON.stringify(masterData)));
           }
-          setHasTailoredResume(false);
         }
       } else {
         if (masterData) {
@@ -228,7 +222,6 @@ function AIToolkitContent() {
             skills: user?.skills || []
           });
         }
-        setHasTailoredResume(false);
       }
     } catch (err) {
       console.error("Failed to load application and resume details:", err);
@@ -570,11 +563,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
     }
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    showSuccess("Copied to clipboard!");
-  };
-
   // 1. Extract Keywords from JD
   const jdKeywords = React.useMemo(() => {
     if (!company) return new Set<string>();
@@ -714,7 +702,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
         setActiveApplication(res.data);
       }
       
-      setHasTailoredResume(true);
       showSuccess("Tailored resume saved securely for this application!");
     } catch (err: any) {
       console.error("Failed to save tailored resume:", err);

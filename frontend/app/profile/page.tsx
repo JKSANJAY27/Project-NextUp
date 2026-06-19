@@ -16,12 +16,7 @@ import {
   CheckCircle2, 
   Lock,
   Plus,
-  Trash2,
-  Globe,
-  Phone,
-  MapPin,
-  ChevronDown,
-  ChevronUp
+  Trash2
 } from "lucide-react";
 
 interface ApiError {
@@ -447,8 +442,6 @@ export default function ProfilePage() {
         skills: skillsArray
       };
 
-      // Encrypt the entire structured resume json
-      const encResumeJson = await encryptData(JSON.stringify(finalResumeData), encryptionKey);
 
       // Save structured resume to backend
       await api.put("/resumes/me", {
