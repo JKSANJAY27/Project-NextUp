@@ -18,11 +18,14 @@ import {
   Loader2,
   ArrowLeft,
   Download,
-  Play,
   Target,
   FileText,
   Plus,
-  Trash2
+  Trash2,
+  Printer,
+  Eye,
+  Edit,
+  Highlighter
 } from "lucide-react";
 import {
   generateInBrowser,
@@ -47,13 +50,11 @@ interface Company {
   jd_required_skills: string[] | null;
   jd_preferred_skills: string[] | null;
   jd_ats_keywords: string[] | null;
-  interview_topics: string[] | null;
 }
 
 interface ATSResult {
   ats_score: number;
   missing_keywords: string[];
-  improvements: string[];
   tailored_resume: {
     optimized_skills: string[];
     optimized_projects: Array<{ title: string; description: string }>;
@@ -61,16 +62,580 @@ interface ATSResult {
   };
 }
 
-interface DocumentVersion {
-  version: number;
-  content: string;
-  created_at: string;
+/**
+ * Robust JSON extraction and fallback regex parsing to handle malformed LLM outputs.
+ */
+function parseRobustLLMJSON(rawText: string): ATSResult {
+  let cleanText = rawText.trim();
+  
+  // Step 1: Strip markdown block wrappers
+  if (cleanText.includes("```")) {
+    const parts = cleanText.split("```");
+    for (let i = 1; i < parts.length; i += 2) {
+      let candidate = parts[i].trim();
+      if (candidate.startsWith("json")) {
+        candidate = candidate.substring(4).trim();
+      }
+      if (candidate.includes("{") && candidate.includes("}")) {
+        cleanText = candidate;
+        break;
+      }
+    }
+  }
+
+  // Step 2: Extract block between first '{' and last '}'
+  const firstBrace = cleanText.indexOf("{");
+  const lastBrace = cleanText.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    cleanText = cleanText.substring(firstBrace, lastBrace + 1);
+  }
+
+  // Step 3: Try standard JSON.parse after basic comma cleaning
+  try {
+    const cleanedCommas = cleanText.replace(/,\s*([}\]])/g, "$1");
+    return JSON.parse(cleanedCommas);
+  } catch (err) {
+    console.warn("Standard JSON parse failed, attempting regex extraction fallback:", err);
+  }
+
+  // Step 4: Regex-based fallback parser
+  try {
+    const fallbackObj: ATSResult = {
+      ats_score: 85,
+      missing_keywords: [],
+      tailored_resume: {
+        optimized_skills: [],
+        optimized_projects: [],
+        optimized_summary: ""
+      }
+    };
+
+    // Extract ats_score
+    const scoreMatch = cleanText.match(/"ats_score"\s*:\s*(\d+)/i);
+    if (scoreMatch) {
+      fallbackObj.ats_score = parseInt(scoreMatch[1]);
+    }
+
+    // Extract missing_keywords array
+    const missingMatch = cleanText.match(/"missing_keywords"\s*:\s*\[([\s\S]*?)\]/i);
+    if (missingMatch) {
+      const items = missingMatch[1].match(/"([^"]+)"|'([^']+)'/g);
+      if (items) {
+        fallbackObj.missing_keywords = items.map(item => item.replace(/^["']|["']$/g, ""));
+      }
+    }
+
+    // Extract optimized_skills array
+    const skillsMatch = cleanText.match(/"optimized_skills"\s*:\s*\[([\s\S]*?)\]/i);
+    if (skillsMatch) {
+      const items = skillsMatch[1].match(/"([^"]+)"|'([^']+)'/g);
+      if (items) {
+        fallbackObj.tailored_resume.optimized_skills = items.map(item => item.replace(/^["']|["']$/g, ""));
+      }
+    }
+
+    // Extract optimized_summary
+    const summaryMatch = cleanText.match(/"optimized_summary"\s*:\s*"([\s\S]*?)"(?=\s*,|\s*})/i);
+    if (summaryMatch) {
+      fallbackObj.tailored_resume.optimized_summary = summaryMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+    }
+
+    // Extract optimized_projects array of objects
+    const projectsMatch = cleanText.match(/"optimized_projects"\s*:\s*\[([\s\S]*?)\]/i);
+    if (projectsMatch) {
+      const projArrayText = projectsMatch[1];
+      const projObjects = projArrayText.match(/\{([\s\S]*?)\}/g);
+      if (projObjects) {
+        fallbackObj.tailored_resume.optimized_projects = projObjects.map((projText: string) => {
+          const titleMatch = projText.match(/"title"\s*:\s*"([^"]*)"/i);
+          const descMatch = projText.match(/"description"\s*:\s*"([^"]*)"/i);
+          return {
+            title: titleMatch ? titleMatch[1] : "Project",
+            description: descMatch ? descMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"') : ""
+          };
+        });
+      }
+    }
+
+    // Validation
+    if (fallbackObj.tailored_resume.optimized_summary || fallbackObj.tailored_resume.optimized_skills.length > 0) {
+      return fallbackObj;
+    }
+  } catch (regexErr) {
+    console.error("Regex fallback parser failed:", regexErr);
+  }
+
+  throw new Error("Local model returned an unparseable response. Please try again.");
 }
 
-interface InterviewPrep {
-  technical: string[];
-  hr: string[];
-  company_specific: string[];
+function ResumeTemplatePreview({ data, template }: { data: any; template: string }) {
+  if (!data) return null;
+  const personal = data.personal || {};
+  const education = data.education || [];
+  const experience = data.experience || [];
+  const projects = data.projects || [];
+  const skills = data.skills || [];
+  const certifications = data.certifications || [];
+  const languages = data.languages || [];
+  const awards = data.awards || [];
+
+  const renderClassic = () => (
+    <div className="font-serif text-zinc-900 bg-white p-8 shadow-lg max-w-[800px] mx-auto text-sm print-area leading-relaxed border border-zinc-200 text-left">
+      <div className="text-center space-y-2 border-b pb-4 mb-4">
+        <h1 className="text-3xl font-bold tracking-wide uppercase">{personal.name || "Candidate Name"}</h1>
+        <div className="text-xs text-zinc-600 flex flex-wrap justify-center gap-x-4 gap-y-1">
+          {personal.email && <span>{personal.email}</span>}
+          {personal.phone && <span>{personal.phone}</span>}
+          {personal.location && <span>{personal.location}</span>}
+          {personal.linkedin && <span>LinkedIn: {personal.linkedin}</span>}
+          {personal.github && <span>GitHub: {personal.github}</span>}
+        </div>
+      </div>
+
+      {data.summary && (
+        <div className="space-y-1.5 mb-5">
+          <h2 className="text-xs font-bold tracking-widest text-zinc-800 uppercase border-b border-zinc-300 pb-0.5">Professional Summary</h2>
+          <p className="text-xs text-zinc-700 text-justify">{data.summary}</p>
+        </div>
+      )}
+
+      {experience.length > 0 && (
+        <div className="space-y-3 mb-5">
+          <h2 className="text-xs font-bold tracking-widest text-zinc-800 uppercase border-b border-zinc-300 pb-0.5">Professional Experience</h2>
+          <div className="space-y-3">
+            {experience.map((exp: any, idx: number) => (
+              <div key={idx} className="space-y-1">
+                <div className="flex justify-between items-baseline font-bold text-xs">
+                  <span>{exp.role || "Role"} — <span className="font-normal text-zinc-600">{exp.company || "Company"}</span></span>
+                  <span className="text-zinc-500 font-medium text-[11px]">{exp.period}</span>
+                </div>
+                <p className="text-xs text-zinc-700 text-justify whitespace-pre-wrap">{exp.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {projects.length > 0 && (
+        <div className="space-y-3 mb-5">
+          <h2 className="text-xs font-bold tracking-widest text-zinc-800 uppercase border-b border-zinc-300 pb-0.5">Projects</h2>
+          <div className="space-y-3">
+            {projects.map((proj: any, idx: number) => (
+              <div key={idx} className="space-y-1">
+                <div className="flex justify-between items-baseline font-bold text-xs">
+                  <span>{proj.title || "Project"}</span>
+                  {proj.tech && <span className="text-zinc-500 font-normal text-[11px]">{proj.tech}</span>}
+                </div>
+                <p className="text-xs text-zinc-700 text-justify whitespace-pre-wrap">{proj.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {education.length > 0 && (
+        <div className="space-y-3 mb-5">
+          <h2 className="text-xs font-bold tracking-widest text-zinc-800 uppercase border-b border-zinc-300 pb-0.5">Education</h2>
+          <div className="space-y-2">
+            {education.map((edu: any, idx: number) => (
+              <div key={idx} className="flex justify-between items-center text-xs">
+                <span className="font-bold">{edu.degree} <span className="font-normal text-zinc-600">at {edu.institution}</span></span>
+                <span className="text-zinc-500 text-[11px] font-medium">{edu.year} | {edu.score}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {skills.length > 0 && (
+        <div className="space-y-1.5 mb-5">
+          <h2 className="text-xs font-bold tracking-widest text-zinc-800 uppercase border-b border-zinc-300 pb-0.5">Skills & Tech Stack</h2>
+          <p className="text-xs text-zinc-700">{skills.join(", ")}</p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 gap-4 text-xs">
+        {certifications.length > 0 && (
+          <div>
+            <h3 className="font-bold text-zinc-800 border-b pb-0.5 mb-1.5 uppercase tracking-wide text-[10px]">Certifications</h3>
+            <ul className="list-disc pl-4 space-y-0.5 text-zinc-700 text-[11px]">
+              {certifications.map((c: string, idx: number) => <li key={idx}>{c}</li>)}
+            </ul>
+          </div>
+        )}
+        {languages.length > 0 && (
+          <div>
+            <h3 className="font-bold text-zinc-800 border-b pb-0.5 mb-1.5 uppercase tracking-wide text-[10px]">Languages</h3>
+            <ul className="list-disc pl-4 space-y-0.5 text-zinc-700 text-[11px]">
+              {languages.map((l: string, idx: number) => <li key={idx}>{l}</li>)}
+            </ul>
+          </div>
+        )}
+        {awards.length > 0 && (
+          <div>
+            <h3 className="font-bold text-zinc-800 border-b pb-0.5 mb-1.5 uppercase tracking-wide text-[10px]">Awards & Honors</h3>
+            <ul className="list-disc pl-4 space-y-0.5 text-zinc-700 text-[11px]">
+              {awards.map((a: string, idx: number) => <li key={idx}>{a}</li>)}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderModern = () => (
+    <div className="font-sans text-slate-900 bg-white p-8 shadow-lg max-w-[800px] mx-auto text-sm print-area leading-relaxed border border-zinc-200 text-left">
+      <div className="border-l-8 border-yellow-500 pl-4 mb-6 py-2">
+        <h1 className="text-3xl font-black tracking-tight text-slate-800 uppercase">{personal.name || "Candidate Name"}</h1>
+        {personal.title && <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">{personal.title}</p>}
+        <div className="text-xs text-slate-600 flex flex-wrap gap-x-4 gap-y-1 mt-2">
+          {personal.email && <span>{personal.email}</span>}
+          {personal.phone && <span>{personal.phone}</span>}
+          {personal.location && <span>{personal.location}</span>}
+          {personal.linkedin && <span className="normal-case">LinkedIn: {personal.linkedin}</span>}
+          {personal.github && <span className="normal-case">GitHub: {personal.github}</span>}
+        </div>
+      </div>
+
+      {data.summary && (
+        <div className="space-y-1.5 mb-6">
+          <h2 className="text-xs font-black tracking-wider text-yellow-600 uppercase border-b-2 border-slate-100 pb-1">Profile Summary</h2>
+          <p className="text-xs text-slate-700 text-justify leading-relaxed">{data.summary}</p>
+        </div>
+      )}
+
+      {experience.length > 0 && (
+        <div className="space-y-3 mb-6">
+          <h2 className="text-xs font-black tracking-wider text-yellow-600 uppercase border-b-2 border-slate-100 pb-1">Work History</h2>
+          <div className="space-y-4">
+            {experience.map((exp: any, idx: number) => (
+              <div key={idx} className="space-y-1">
+                <div className="flex justify-between items-baseline font-bold text-xs">
+                  <span className="text-slate-800">{exp.role || "Role"}</span>
+                  <span className="text-slate-500 text-[11px] font-medium">{exp.period}</span>
+                </div>
+                <div className="text-xs font-bold text-yellow-600/90 uppercase tracking-wide">{exp.company}</div>
+                <p className="text-xs text-slate-700 text-justify whitespace-pre-wrap">{exp.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {projects.length > 0 && (
+        <div className="space-y-3 mb-6">
+          <h2 className="text-xs font-black tracking-wider text-yellow-600 uppercase border-b-2 border-slate-100 pb-1">Key Projects</h2>
+          <div className="space-y-4">
+            {projects.map((proj: any, idx: number) => (
+              <div key={idx} className="space-y-1">
+                <div className="flex justify-between items-baseline font-bold text-xs">
+                  <span className="text-slate-800">{proj.title || "Project"}</span>
+                  {proj.tech && <span className="text-yellow-600/90 text-[10px] font-bold uppercase tracking-wider">{proj.tech}</span>}
+                </div>
+                <p className="text-xs text-slate-700 text-justify whitespace-pre-wrap">{proj.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {education.length > 0 && (
+        <div className="space-y-3 mb-6">
+          <h2 className="text-xs font-black tracking-wider text-yellow-600 uppercase border-b-2 border-slate-100 pb-1">Academic Background</h2>
+          <div className="space-y-3">
+            {education.map((edu: any, idx: number) => (
+              <div key={idx} className="flex justify-between items-center text-xs">
+                <span><span className="font-bold text-slate-800">{edu.degree}</span> — <span className="text-slate-600">{edu.institution}</span></span>
+                <span className="text-slate-500 text-[11px] font-medium">{edu.year} | {edu.score}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {skills.length > 0 && (
+        <div className="space-y-2 mb-6">
+          <h2 className="text-xs font-black tracking-wider text-yellow-600 uppercase border-b-2 border-slate-100 pb-1">Core Competencies</h2>
+          <div className="flex flex-wrap gap-1.5">
+            {skills.map((s: string, idx: number) => (
+              <span key={idx} className="bg-slate-100 border border-slate-200 text-slate-700 font-bold px-2 py-0.5 text-[10px] uppercase">
+                {s}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(certifications.length > 0 || languages.length > 0 || awards.length > 0) && (
+        <div className="grid grid-cols-3 gap-6 pt-4 border-t border-slate-100 text-xs">
+          {certifications.length > 0 && (
+            <div className="space-y-1.5">
+              <h3 className="font-black text-slate-800 uppercase tracking-widest text-[9px]">Certifications</h3>
+              <ul className="space-y-1 text-slate-600 text-[11px]">
+                {certifications.map((c: string, idx: number) => <li key={idx} className="flex gap-1 items-start"><span className="text-yellow-500">▪</span>{c}</li>)}
+              </ul>
+            </div>
+          )}
+          {languages.length > 0 && (
+            <div className="space-y-1.5">
+              <h3 className="font-black text-slate-800 uppercase tracking-widest text-[9px]">Languages</h3>
+              <ul className="space-y-1 text-slate-600 text-[11px]">
+                {languages.map((l: string, idx: number) => <li key={idx} className="flex gap-1 items-start"><span className="text-yellow-500">▪</span>{l}</li>)}
+              </ul>
+            </div>
+          )}
+          {awards.length > 0 && (
+            <div className="space-y-1.5">
+              <h3 className="font-black text-slate-800 uppercase tracking-widest text-[9px]">Awards</h3>
+              <ul className="space-y-1 text-slate-600 text-[11px]">
+                {awards.map((a: string, idx: number) => <li key={idx} className="flex gap-1 items-start"><span className="text-yellow-500">▪</span>{a}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderMinimalist = () => (
+    <div className="font-sans text-neutral-800 bg-white p-6 shadow-lg max-w-[800px] mx-auto text-xs print-area leading-tight border border-zinc-200 text-left">
+      <div className="flex justify-between items-start border-b border-neutral-300 pb-3 mb-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-neutral-900 uppercase">{personal.name || "Candidate Name"}</h1>
+          {personal.title && <p className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider">{personal.title}</p>}
+        </div>
+        <div className="text-[10px] text-neutral-500 text-right space-y-0.5">
+          {personal.email && <div>{personal.email}</div>}
+          {personal.phone && <div>{personal.phone}</div>}
+          {personal.location && <div>{personal.location}</div>}
+          {personal.linkedin && <div className="normal-case">LinkedIn: {personal.linkedin}</div>}
+          {personal.github && <div className="normal-case">GitHub: {personal.github}</div>}
+        </div>
+      </div>
+
+      {data.summary && (
+        <div className="mb-4">
+          <p className="text-neutral-600 text-justify leading-relaxed">{data.summary}</p>
+        </div>
+      )}
+
+      {experience.length > 0 && (
+        <div className="space-y-2 mb-4">
+          <h2 className="text-[10px] font-bold tracking-wider text-neutral-900 uppercase border-b border-neutral-200 pb-0.5">Experience</h2>
+          <div className="space-y-3">
+            {experience.map((exp: any, idx: number) => (
+              <div key={idx} className="space-y-0.5">
+                <div className="flex justify-between items-baseline font-bold text-neutral-900">
+                  <span>{exp.role || "Role"} — <span className="font-normal text-neutral-500">{exp.company || "Company"}</span></span>
+                  <span className="text-neutral-500 font-medium text-[10px]">{exp.period}</span>
+                </div>
+                <p className="text-neutral-600 text-justify whitespace-pre-wrap">{exp.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {projects.length > 0 && (
+        <div className="space-y-2 mb-4">
+          <h2 className="text-[10px] font-bold tracking-wider text-neutral-900 uppercase border-b border-neutral-200 pb-0.5">Projects</h2>
+          <div className="space-y-3">
+            {projects.map((proj: any, idx: number) => (
+              <div key={idx} className="space-y-0.5">
+                <div className="flex justify-between items-baseline font-bold text-neutral-900">
+                  <span>{proj.title || "Project"}</span>
+                  {proj.tech && <span className="text-neutral-500 font-normal text-[10px]">{proj.tech}</span>}
+                </div>
+                <p className="text-neutral-600 text-justify whitespace-pre-wrap">{proj.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {education.length > 0 && (
+        <div className="space-y-2 mb-4">
+          <h2 className="text-[10px] font-bold tracking-wider text-neutral-900 uppercase border-b border-neutral-200 pb-0.5">Education</h2>
+          <div className="space-y-1.5">
+            {education.map((edu: any, idx: number) => (
+              <div key={idx} className="flex justify-between items-center">
+                <span><span className="font-bold text-neutral-900">{edu.degree}</span> <span className="text-neutral-600">at {edu.institution}</span></span>
+                <span className="text-neutral-500 text-[10px] font-medium">{edu.year} | {edu.score}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {skills.length > 0 && (
+        <div className="space-y-1 mb-4">
+          <h2 className="text-[10px] font-bold tracking-wider text-neutral-900 uppercase border-b border-neutral-200 pb-0.5">Skills</h2>
+          <p className="text-neutral-600">{skills.join(", ")}</p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 gap-4 border-t border-neutral-200 pt-3">
+        {certifications.length > 0 && (
+          <div>
+            <h3 className="font-bold text-neutral-900 uppercase text-[9px] mb-1">Certifications</h3>
+            <ul className="list-disc pl-4 space-y-0.5 text-neutral-600 text-[10px]">
+              {certifications.map((c: string, idx: number) => <li key={idx}>{c}</li>)}
+            </ul>
+          </div>
+        )}
+        {languages.length > 0 && (
+          <div>
+            <h3 className="font-bold text-neutral-900 uppercase text-[9px] mb-1">Languages</h3>
+            <ul className="list-disc pl-4 space-y-0.5 text-neutral-600 text-[10px]">
+              {languages.map((l: string, idx: number) => <li key={idx}>{l}</li>)}
+            </ul>
+          </div>
+        )}
+        {awards.length > 0 && (
+          <div>
+            <h3 className="font-bold text-neutral-900 uppercase text-[9px] mb-1">Awards</h3>
+            <ul className="list-disc pl-4 space-y-0.5 text-neutral-600 text-[10px]">
+              {awards.map((a: string, idx: number) => <li key={idx}>{a}</li>)}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderCreative = () => (
+    <div className="font-sans text-slate-800 bg-white shadow-lg max-w-[800px] mx-auto text-sm print-area leading-relaxed border border-zinc-200 flex flex-col md:flex-row min-h-[842px] text-left">
+      <div className="w-full md:w-[32%] bg-slate-900 text-white p-6 flex flex-col gap-6 print:w-[32%] print:bg-slate-900">
+        <div className="space-y-1.5 border-b border-slate-700 pb-4">
+          <h1 className="text-xl font-black tracking-tight uppercase leading-none">{personal.name || "Candidate"}</h1>
+          {personal.title && <p className="text-[10px] font-bold text-yellow-500 uppercase tracking-widest">{personal.title}</p>}
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Contact Info</h3>
+          <div className="text-[10px] space-y-1.5 text-slate-300 font-mono break-all leading-normal">
+            {personal.email && <div className="flex gap-1.5"><span>✉</span><span>{personal.email}</span></div>}
+            {personal.phone && <div className="flex gap-1.5"><span>☎</span><span>{personal.phone}</span></div>}
+            {personal.location && <div className="flex gap-1.5"><span>📍</span><span>{personal.location}</span></div>}
+            {personal.linkedin && <div className="flex gap-1.5"><span>in</span><span className="normal-case truncate">{personal.linkedin}</span></div>}
+            {personal.github && <div className="flex gap-1.5"><span>git</span><span className="normal-case truncate">{personal.github}</span></div>}
+          </div>
+        </div>
+
+        {skills.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Expertise</h3>
+            <div className="flex flex-wrap gap-1">
+              {skills.map((s: string, idx: number) => (
+                <span key={idx} className="bg-slate-800 border border-slate-700 text-yellow-500/90 font-bold px-2 py-0.5 text-[9px] uppercase tracking-wider">
+                  {s}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {certifications.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Certifications</h3>
+            <ul className="text-[10px] space-y-1 text-slate-300 list-none pl-0">
+              {certifications.map((c: string, idx: number) => <li key={idx} className="flex gap-1.5 items-start"><span className="text-yellow-500">▪</span>{c}</li>)}
+            </ul>
+          </div>
+        )}
+
+        {languages.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Languages</h3>
+            <ul className="text-[10px] space-y-1 text-slate-300 list-none pl-0">
+              {languages.map((l: string, idx: number) => <li key={idx} className="flex gap-1.5 items-start"><span className="text-yellow-500">▪</span>{l}</li>)}
+            </ul>
+          </div>
+        )}
+
+        {awards.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Awards</h3>
+            <ul className="text-[10px] space-y-1 text-slate-300 list-none pl-0">
+              {awards.map((a: string, idx: number) => <li key={idx} className="flex gap-1.5 items-start"><span className="text-yellow-500">▪</span>{a}</li>)}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      <div className="w-full md:w-[68%] p-6 flex flex-col gap-6 print:w-[68%]">
+        {data.summary && (
+          <div className="space-y-1">
+            <h2 className="text-xs font-black tracking-wider text-slate-900 uppercase border-b border-slate-200 pb-1">Professional Summary</h2>
+            <p className="text-xs text-slate-600 text-justify leading-relaxed">{data.summary}</p>
+          </div>
+        )}
+
+        {experience.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="text-xs font-black tracking-wider text-slate-900 uppercase border-b border-slate-200 pb-1">Experience</h2>
+            <div className="space-y-4">
+              {experience.map((exp: any, idx: number) => (
+                <div key={idx} className="space-y-1 border-l border-slate-200 pl-3 relative ml-1">
+                  <div className="absolute w-2 h-2 rounded-full bg-slate-900 left-[-4.5px] top-[4px]" />
+                  <div className="flex justify-between items-baseline font-bold text-xs">
+                    <span className="text-slate-800">{exp.role || "Role"}</span>
+                    <span className="text-slate-500 text-[10px] font-medium">{exp.period}</span>
+                  </div>
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{exp.company}</div>
+                  <p className="text-xs text-slate-600 text-justify whitespace-pre-wrap leading-relaxed">{exp.description}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {projects.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="text-xs font-black tracking-wider text-slate-900 uppercase border-b border-slate-200 pb-1">Academic Projects</h2>
+            <div className="space-y-4">
+              {projects.map((proj: any, idx: number) => (
+                <div key={idx} className="space-y-1 border-l border-slate-200 pl-3 relative ml-1">
+                  <div className="absolute w-2 h-2 rounded-full bg-slate-900 left-[-4.5px] top-[4px]" />
+                  <div className="flex justify-between items-baseline font-bold text-xs">
+                    <span className="text-slate-800">{proj.title || "Project"}</span>
+                    {proj.tech && <span className="text-slate-500 text-[9px] font-bold uppercase tracking-wider">{proj.tech}</span>}
+                  </div>
+                  <p className="text-xs text-slate-600 text-justify whitespace-pre-wrap leading-relaxed">{proj.description}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {education.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="text-xs font-black tracking-wider text-slate-900 uppercase border-b border-slate-200 pb-1">Education Background</h2>
+            <div className="space-y-3">
+              {education.map((edu: any, idx: number) => (
+                <div key={idx} className="space-y-1">
+                  <div className="flex justify-between items-center text-xs font-bold text-slate-800">
+                    <span>{edu.degree}</span>
+                    <span className="text-slate-500 text-[10px] font-medium">{edu.year}</span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 uppercase">{edu.institution} — SCORE: {edu.score}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  switch (template) {
+    case "Modern": return renderModern();
+    case "Minimalist": return renderMinimalist();
+    case "Creative": return renderCreative();
+    case "Classic":
+    default:
+      return renderClassic();
+  }
 }
 
 function AIToolkitContent() {
@@ -94,76 +659,49 @@ function AIToolkitContent() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [company, setCompany] = useState<Company | null>(null);
   
-  const [activeTab, setActiveTab] = useState<"ats" | "sop" | "cl" | "prep">("ats");
   const [loading, setLoading] = useState(true);
   
-  // ATS Matrix State
+  // Optimizer States
   const [atsResult, setAtsResult] = useState<ATSResult | null>(null);
   const [calculatingATS, setCalculatingATS] = useState(false);
-  const [atsSource, setAtsSource] = useState<"browser" | "cloud">("browser");
   const [atsModel, setAtsModel] = useState<BrowserModelType>("qwen-0.5b");
-  const [optimizerSubView, setOptimizerSubView] = useState<"tailored" | "highlight">("tailored");
+  const [optimizerSubView, setOptimizerSubView] = useState<"tailored" | "highlight" | "preview">("tailored");
   const [masterResume, setMasterResume] = useState<any>(null);
   const [activeApplication, setActiveApplication] = useState<any>(null);
   const [tailoredResumeData, setTailoredResumeData] = useState<any>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<string>("Classic");
   
-  // Helper inputs for additions inside tailored resume editor
+  // Helpers inside editor
   const [newCert, setNewCert] = useState("");
   const [newLang, setNewLang] = useState("");
   const [newAward, setNewAward] = useState("");
 
-  // SOP State
-  const [sopContent, setSopContent] = useState("");
-  const [sopSource, setSopSource] = useState<"browser" | "cloud">("browser");
-  const [sopModel, setSopModel] = useState<BrowserModelType>("qwen-0.5b");
-  const [sopPrompt, setSopPrompt] = useState("");
-  const [generatingSOP, setGeneratingSOP] = useState(false);
-  const [sopVersions, setSopVersions] = useState<DocumentVersion[]>([]);
-  
-  // Cover Letter State
-  const [clContent, setClContent] = useState("");
-  const [clSource, setClSource] = useState<"browser" | "cloud">("browser");
-  const [clModel, setClModel] = useState<BrowserModelType>("qwen-0.5b");
-  const [clPrompt, setClPrompt] = useState("");
-  const [generatingCL, setGeneratingCL] = useState(false);
-  const [clVersions, setClVersions] = useState<DocumentVersion[]>([]);
-  
-  // Interview Prep State
-  const [generatingPrep, setGeneratingPrep] = useState(false);
-  const [prepData, setPrepData] = useState<InterviewPrep | null>(null);
-  
-  // Common loading / error states
   const [savingDoc, setSavingDoc] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
   
-  // Browser AI capability state
+  // Local AI State
   const [geminiAvailable, setGeminiAvailable] = useState(false);
   const [localDownloadProgress, setLocalDownloadProgress] = useState<number | null>(null);
   const [localStatusMessage, setLocalStatusMessage] = useState("");
 
-  // Load companies & initial details
+  // Initial Load
   useEffect(() => {
     async function initPage() {
       try {
         setLoading(true);
-        // Check local Gemini Nano availability
         const nano = await isGeminiNanoAvailable();
         setGeminiAvailable(nano);
         if (nano) {
-          setSopModel("gemini-nano");
-          setClModel("gemini-nano");
           setAtsModel("gemini-nano");
         }
 
-        // Fetch list of companies
         const res = await api.get("/companies");
         setCompanies(res.data);
 
         if (companyId) {
           await loadCompanyData(companyId);
         } else if (res.data.length > 0) {
-          // Default to first company if none specified
           setCompanyId(res.data[0].id);
           await loadCompanyData(res.data[0].id);
         } else {
@@ -178,7 +716,7 @@ function AIToolkitContent() {
     initPage();
   }, []);
 
-  // Handle manual selection change
+  // Sync on Company Change
   useEffect(() => {
     if (companyId && companies.length > 0) {
       loadCompanyData(companyId);
@@ -235,24 +773,13 @@ function AIToolkitContent() {
       const compRes = await api.get(`/companies/${id}`);
       setCompany(compRes.data);
       
-      // Reset generated data when changing company
       setAtsResult(null);
-      setSopContent("");
-      setClContent("");
-      setPrepData(null);
       
-      // Load current document drafts for the company and master resume
       await Promise.all([
-        fetchLatestDraft(id, "sop"),
-        fetchLatestDraft(id, "cover_letter"),
-        fetchDocumentVersions(id, "sop"),
-        fetchDocumentVersions(id, "cover_letter"),
         fetchApplicationAndResume(id)
       ]);
       
-      // Run deterministic ATS Match and fetch Interview Prep deterministically first
       await runDeterministicATS(compRes.data);
-      await fetchDeterministicPrep(compRes.data);
       
       setLoading(false);
     } catch (err: any) {
@@ -262,56 +789,21 @@ function AIToolkitContent() {
     }
   };
 
-  const fetchLatestDraft = async (compId: string, type: "sop" | "cover_letter") => {
-    try {
-      const res = await api.get(`/ai/documents/latest?company_id=${compId}&doc_type=${type}`);
-      if (res.data && res.data.content) {
-        if (type === "sop") setSopContent(res.data.content);
-        else setClContent(res.data.content);
-      }
-    } catch {
-      console.warn(`No active draft for ${type}`);
-    }
-  };
-
-  const fetchDocumentVersions = async (compId: string, type: "sop" | "cover_letter") => {
-    try {
-      const res = await api.get(`/ai/documents?company_id=${compId}&doc_type=${type}`);
-      if (type === "sop") setSopVersions(res.data || []);
-      else setClVersions(res.data || []);
-    } catch {
-      console.warn(`Failed to fetch versions for ${type}`);
-    }
-  };
-
   const runDeterministicATS = async (activeCompany: Company) => {
     try {
       setCalculatingATS(true);
       const res = await api.post("/ai/tailor", {
         company_id: activeCompany.id,
-        request_source: "browser" // triggers fast deterministic return
+        request_source: "browser"
       });
-      setAtsResult(res.data);
+      
+      const cleaned = {
+        ...res.data,
+        improvements: [] // Strip improvements
+      };
+      setAtsResult(cleaned);
     } catch (err) {
       console.error("ATS optimization check failed", err);
-    } finally {
-      setCalculatingATS(false);
-    }
-  };
-
-  const runCloudATS = async () => {
-    if (!company) return;
-    try {
-      setCalculatingATS(true);
-      setErrorMsg("");
-      const res = await api.post("/ai/tailor", {
-        company_id: company.id,
-        request_source: "cloud"
-      });
-      setAtsResult(res.data);
-      showSuccess("Cloud ATS optimization generated successfully.");
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.detail || "Cloud AI generation failed. Verify Hugging Face API keys.");
     } finally {
       setCalculatingATS(false);
     }
@@ -325,15 +817,13 @@ function AIToolkitContent() {
     setLocalStatusMessage("");
 
     try {
-      // 1. Fetch user's decrypted resume from backend
       const resMe = await api.get("/resumes/me");
       if (!resMe.data || !resMe.data.resume_data || Object.keys(resMe.data.resume_data).length === 0) {
-        throw new Error("No master resume found. Please upload or save your resume details in the Resume Engine tab first.");
+        throw new Error("No master resume found. Please upload or save your resume details in the Student Profile page first.");
       }
       
       const resumeData = resMe.data.resume_data;
 
-      // 2. Prepare the prompt
       const prompt = `You are a professional ATS optimizer. Analyze the student's Resume JSON and the Job Description text.
 Generate a JSON output tailoring the resume to fit the JD perfectly.
 
@@ -357,7 +847,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
 {
   "ats_score": 85,
   "missing_keywords": ["Kubernetes", "Redis"],
-  "improvements": ["Highlight cloud project", "Move Python to core skills"],
   "tailored_resume": {
     "optimized_skills": ["Python", "React", "Docker"],
     "optimized_projects": [
@@ -370,44 +859,31 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
   }
 }`;
 
-      // 3. Call local generation
-      setLocalStatusMessage(`Loading local model ${atsModel}...`);
+      // Check cache status
+      const isDownloaded = typeof window !== "undefined" && localStorage.getItem(`model_downloaded_${atsModel}`) === "true";
+      if (isDownloaded) {
+        setLocalStatusMessage(`Waking up cached model ${atsModel}...`);
+      } else {
+        setLocalStatusMessage(`Downloading model weights for ${atsModel} (first time only)...`);
+      }
+
       const result = await generateInBrowser({
         modelType: atsModel,
         prompt: prompt,
-        maxTokens: 1024,
+        maxTokens: 2048,
         onProgress: (p) => {
           setLocalDownloadProgress(Math.round(p * 100));
-          setLocalStatusMessage(`Downloading model weights: ${Math.round(p * 100)}%`);
-        },
-        onToken: () => {
-          // Streaming parsing is hard for complete JSON, but we can log or just wait for complete text
+          setLocalStatusMessage(`Loading model weights: ${Math.round(p * 100)}%`);
         }
       });
 
-      // 4. Parse JSON result
-      let cleanText = result.trim();
-      if (cleanText.startsWith("```")) {
-        cleanText = cleanText.split("```")[1];
-        if (cleanText.startsWith("json")) {
-          cleanText = cleanText.substring(4);
-        }
-      }
-      
-      // Attempt to find the first '{' and last '}' to strip extra wrapper text
-      const firstBrace = cleanText.indexOf("{");
-      const lastBrace = cleanText.lastIndexOf("}");
-      if (firstBrace !== -1 && lastBrace !== -1) {
-        cleanText = cleanText.substring(firstBrace, lastBrace + 1);
-      }
-
       try {
-        const parsed = JSON.parse(cleanText);
+        const parsed = parseRobustLLMJSON(result);
         setAtsResult(parsed);
-        showSuccess("Local Browser ATS optimization generated successfully.");
+        showSuccess("Local Browser AI tailoring completed successfully.");
       } catch (parseErr) {
-        console.error("Local LLM JSON parse error:", parseErr, "Raw text:", result);
-        throw new Error("Local model returned invalid JSON. Please try again or switch to Server Cloud AI.");
+        console.error("Local LLM JSON parse/regex error:", parseErr, "Raw output:", result);
+        throw new Error("Local model returned invalid JSON structure. Please try generating again.");
       }
     } catch (err: any) {
       console.error("Local ATS tailoring failed:", err);
@@ -419,151 +895,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
     }
   };
 
-  const fetchDeterministicPrep = async (activeCompany: Company) => {
-    try {
-      const res = await api.post("/ai/interview-prep", {
-        company_id: activeCompany.id,
-        request_source: "browser"
-      });
-      setPrepData(res.data);
-    } catch (err) {
-      console.error("Prep questions failed", err);
-    }
-  };
-
-  const runCloudPrep = async () => {
-    if (!company) return;
-    try {
-      setGeneratingPrep(true);
-      setErrorMsg("");
-      const res = await api.post("/ai/interview-prep", {
-        company_id: company.id,
-        request_source: "cloud"
-      });
-      setPrepData(res.data);
-      showSuccess("Cloud interview prep topics generated.");
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.detail || "Cloud prep generation failed.");
-    } finally {
-      setGeneratingPrep(false);
-    }
-  };
-
-  const generateSOP = async () => {
-    if (!company) return;
-    setGeneratingSOP(true);
-    setErrorMsg("");
-    setLocalDownloadProgress(null);
-    setLocalStatusMessage("");
-
-    const basePrompt = `Generate aStatement of Purpose for ${company.name} applying for the ${company.role} role. ${
-      sopPrompt ? `Include these details: ${sopPrompt}` : ""
-    }`;
-
-    try {
-      if (sopSource === "cloud") {
-        const res = await api.post("/ai/sop", {
-          company_id: company.id,
-          request_source: "cloud",
-          custom_prompt: sopPrompt || undefined
-        });
-        setSopContent(res.data.sop);
-        showSuccess("Cloud Statement of Purpose draft generated.");
-      } else {
-        // Local Browser Generation
-        setLocalStatusMessage(`Loading local model ${sopModel}...`);
-        const result = await generateInBrowser({
-          modelType: sopModel,
-          prompt: basePrompt,
-          onProgress: (p) => {
-            setLocalDownloadProgress(Math.round(p * 100));
-            setLocalStatusMessage(`Downloading model weights: ${Math.round(p * 100)}%`);
-          },
-          onToken: (text) => {
-            setSopContent(text);
-          }
-        });
-        setSopContent(result);
-        showSuccess("Browser-side local LLM SOP generated.");
-      }
-    } catch (err: any) {
-      console.error(err);
-      setErrorMsg(err.response?.data?.detail || err.message || "Local generation failed. Ensure WebAssembly is supported.");
-    } finally {
-      setGeneratingSOP(false);
-      setLocalDownloadProgress(null);
-      setLocalStatusMessage("");
-    }
-  };
-
-  const generateCoverLetter = async () => {
-    if (!company) return;
-    setGeneratingCL(true);
-    setErrorMsg("");
-    setLocalDownloadProgress(null);
-    setLocalStatusMessage("");
-
-    const basePrompt = `Write a cover letter for ${company.name} for the role of ${company.role}. ${
-      clPrompt ? `Additional guidelines: ${clPrompt}` : ""
-    }`;
-
-    try {
-      if (clSource === "cloud") {
-        const res = await api.post("/ai/cover-letter", {
-          company_id: company.id,
-          request_source: "cloud",
-          custom_prompt: clPrompt || undefined
-        });
-        setClContent(res.data.cover_letter);
-        showSuccess("Cloud Cover Letter draft generated.");
-      } else {
-        // Local Browser Generation
-        setLocalStatusMessage(`Loading local model ${clModel}...`);
-        const result = await generateInBrowser({
-          modelType: clModel,
-          prompt: basePrompt,
-          onProgress: (p) => {
-            setLocalDownloadProgress(Math.round(p * 100));
-            setLocalStatusMessage(`Downloading model weights: ${Math.round(p * 100)}%`);
-          },
-          onToken: (text) => {
-            setClContent(text);
-          }
-        });
-        setClContent(result);
-        showSuccess("Browser-side local LLM Cover Letter generated.");
-      }
-    } catch (err: any) {
-      console.error(err);
-      setErrorMsg(err.response?.data?.detail || err.message || "Local Cover Letter generation failed.");
-    } finally {
-      setGeneratingCL(false);
-      setLocalDownloadProgress(null);
-      setLocalStatusMessage("");
-    }
-  };
-
-  const saveDocument = async (type: "sop" | "cover_letter", content: string) => {
-    if (!company || !content) return;
-    setSavingDoc(true);
-    setErrorMsg("");
-    setSuccessMsg("");
-    try {
-      const res = await api.post("/ai/documents/save", {
-        company_id: company.id,
-        doc_type: type,
-        content: content
-      });
-      showSuccess(res.data.message || "Draft version saved securely.");
-      await fetchDocumentVersions(company.id, type);
-    } catch {
-      setErrorMsg("Failed to save draft version to database.");
-    } finally {
-      setSavingDoc(false);
-    }
-  };
-
-  // 1. Extract Keywords from JD
   const jdKeywords = React.useMemo(() => {
     if (!company) return new Set<string>();
     if (company.jd_ats_keywords && company.jd_ats_keywords.length > 0) {
@@ -572,7 +903,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
     return extractKeywords(company.jd_text || "");
   }, [company]);
 
-  // 2. Real-time ATS match stats of active resume
   const matchStats = React.useMemo(() => {
     if (!masterResume || jdKeywords.size === 0) {
       return { matchedKeywords: new Set<string>(), matchCount: 0, totalKeywords: jdKeywords.size, matchPercentage: 0 };
@@ -613,7 +943,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
     return calculateMatchStats(parts.join(" "), jdKeywords);
   }, [masterResume, jdKeywords]);
 
-  // 3. HighlightedText Component
   const HighlightedText = ({ text, keywords }: { text: string; keywords: Set<string> }) => {
     const segments = React.useMemo(() => segmentTextByKeywords(text, keywords), [text, keywords]);
     return (
@@ -631,8 +960,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
     );
   };
 
-  // 4. Apply optimized sections to Master Resume
-  // 4. Apply optimized sections to Tailored Resume (not master!)
   const applySuggestionsToTailored = () => {
     if (!atsResult || !atsResult.tailored_resume || !tailoredResumeData) return;
     
@@ -668,10 +995,9 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
     }
     
     setTailoredResumeData(updatedData);
-    showSuccess("AI suggestions applied to Tailored Resume! Save to persist.");
+    showSuccess("AI optimizations applied! Click Save to lock it in.");
   };
 
-  // 5. Save tailored resume securely to applications table
   const handleSaveTailoredResume = async () => {
     if (!company || !encryptionKey || !tailoredResumeData) {
       setErrorMsg("Decryption Key or Resume Data missing. Ensure Vault is unlocked.");
@@ -686,13 +1012,11 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
       const encResume = await encryptData(JSON.stringify(tailoredResumeData), encryptionKey);
       
       if (activeApplication) {
-        // Update existing tracker
         const res = await api.patch(`/applications/${activeApplication.id}`, {
           tailored_resume_enc: encResume
         });
         setActiveApplication(res.data);
       } else {
-        // Create tracker automatically
         const res = await api.post("/applications", {
           company_id: company.id,
           status: "Applied",
@@ -711,7 +1035,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
     }
   };
 
-  // 6. Reset tailored resume to master resume values
   const resetTailoredToMaster = () => {
     if (!masterResume) {
       setErrorMsg("No master resume found to reset to.");
@@ -721,7 +1044,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
     showSuccess("Tailored resume reset to Master Resume values!");
   };
 
-  // 7. Download tailored resume as text file
   const downloadTailoredResumeText = () => {
     if (!tailoredResumeData) return;
     let text = `=== TAILORED RESUME: ${tailoredResumeData.personal?.name || ""} ===\n`;
@@ -903,7 +1225,7 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
     document.body.appendChild(element);
     element.click();
     document.body.removeChild(element);
-    showSuccess("Draft downloaded successfully.");
+    showSuccess("Text file downloaded successfully.");
   };
 
   const showSuccess = (msg: string) => {
@@ -916,13 +1238,10 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
     const userSkills = user?.skills || [];
     const normalizedUserSkills = userSkills.map(s => s.trim().toLowerCase());
     
-    // Check match or normalization matches
     const hasExact = normalizedUserSkills.includes(normalizedSkill);
     if (hasExact) return "bg-green-500/10 border-green-500 text-green-500";
     
-    // Check if it is a normalized skill mapping match (e.g. react js -> react)
     const normUser = normalizedUserSkills.map(s => {
-      // Very basic normalization mapping equivalent to backend dictionary
       if (s === "reactjs" || s === "react.js" || s === "react js") return "react";
       if (s === "nodejs" || s === "node.js" || s === "node js") return "node";
       if (s === "javascript") return "js";
@@ -960,9 +1279,40 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col font-sans">
-      
+      <style jsx global>{`
+        @media print {
+          /* Print Stylesheet overrides to isolate preview */
+          body {
+            background: white !important;
+            color: black !important;
+          }
+          header, select, button, .no-print, aside, nav {
+            display: none !important;
+          }
+          .print-area {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            box-shadow: none !important;
+            background: white !important;
+            color: black !important;
+          }
+          body * {
+            visibility: hidden;
+          }
+          .print-area, .print-area * {
+            visibility: visible;
+          }
+        }
+      `}</style>
+
       {/* Top Header Bar */}
-      <header className="flex h-20 items-center justify-between border-b-2 border-border px-8 bg-background z-10 shrink-0">
+      <header className="flex h-20 items-center justify-between border-b-2 border-border px-8 bg-background z-10 shrink-0 no-print">
         <div className="flex items-center gap-4">
           <Link
             href="/dashboard"
@@ -971,11 +1321,11 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
             <ArrowLeft size={16} />
           </Link>
           <span className="text-base font-extrabold tracking-tighter uppercase leading-none">
-            AI PLACEMENT TOOLKIT <span className="text-accent">.</span>
+            AI RESUME OPTIMIZER <span className="text-accent">.</span>
           </span>
         </div>
         
-        {/* Company Dropdown Selection */}
+        {/* Company Selector */}
         {companies.length > 0 && (
           <div className="flex items-center border-2 border-border px-3 bg-background h-10">
             <span className="text-[9px] font-black text-muted-foreground uppercase mr-2">DRIVE</span>
@@ -994,14 +1344,13 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
         )}
       </header>
 
-      {/* Main Container */}
+      {/* Main Grid */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-0">
         
-        {/* Left Column: Company specs & ATS Checker */}
-        <div className="lg:col-span-4 border-r-2 border-border p-6 md:p-8 space-y-8 overflow-y-auto max-h-[calc(100vh-80px)]">
+        {/* Left Column: Specs & Local model driver */}
+        <div className="lg:col-span-4 border-r-2 border-border p-6 md:p-8 space-y-8 overflow-y-auto max-h-[calc(100vh-80px)] no-print">
           {company ? (
             <>
-              {/* Company Header */}
               <div className="border-b-2 border-border pb-6 space-y-3">
                 <div className="flex gap-2">
                   <span className="bg-accent px-2 py-0.5 text-[9px] font-extrabold tracking-widest text-black border border-accent uppercase">
@@ -1019,7 +1368,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
                 </p>
               </div>
 
-              {/* Specs Grid */}
               <div className="grid grid-cols-2 gap-4 text-xs font-bold border-b border-border pb-6">
                 <div>
                   <span className="text-[9px] text-muted-foreground uppercase block mb-1">CTC</span>
@@ -1031,7 +1379,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
                 </div>
               </div>
 
-              {/* Notification Banner for Success/Error */}
               {errorMsg && (
                 <div className="border-2 border-red-500 bg-red-500/10 p-4 flex gap-3 text-red-500 text-xs font-bold uppercase items-start leading-snug">
                   <AlertCircle size={18} className="shrink-0" />
@@ -1045,7 +1392,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
                 </div>
               )}
 
-              {/* ATS SCORE CARD */}
               {atsResult && (
                 <div className="border-2 border-black bg-muted/20 p-6 space-y-6">
                   <div className="flex justify-between items-center">
@@ -1055,7 +1401,6 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
                     </span>
                   </div>
 
-                  {/* Radial/Bar Indicator */}
                   <div className="w-full bg-muted border border-border h-4 relative overflow-hidden">
                     <div 
                       className="bg-accent h-full transition-all duration-500" 
@@ -1063,16 +1408,16 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
                     />
                   </div>
 
-                  {/* Skills side by side matrix */}
+                  {/* Skills Grid */}
                   <div className="space-y-3">
                     <span className="text-[9px] font-black text-muted-foreground uppercase tracking-widest block">
                       JD SKILL MATCH MATRIX
                     </span>
                     
-                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                       {company.jd_required_skills && company.jd_required_skills.length > 0 ? (
                         company.jd_required_skills.map((skill, index) => (
-                          <div key={index} className="flex justify-between items-center text-[10px] font-bold uppercase border-b border-border pb-1.5">
+                          <div key={index} className="flex justify-between items-center text-[10px] font-bold uppercase border-b border-border pb-1.5 font-mono">
                             <span className="text-foreground">{skill}</span>
                             <span className={`border px-1.5 py-0.5 text-[8px] font-extrabold ${getSkillBadgeColor(skill)}`}>
                               {getSkillBadgeColor(skill).includes("green") ? "PRESENT" : 
@@ -1081,71 +1426,28 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
                           </div>
                         ))
                       ) : (
-                        <p className="text-[10px] text-muted-foreground uppercase">No specific required skills listed in JD.</p>
+                        <p className="text-[10px] text-muted-foreground uppercase font-mono">No required skills listed in Job Description.</p>
                       )}
                     </div>
                   </div>
 
-                  {/* Actionable Gap Improvements */}
-                  {atsResult.improvements && atsResult.improvements.length > 0 && (
-                    <div className="space-y-2">
-                      <span className="text-[9px] font-black text-muted-foreground uppercase tracking-widest block">
-                        ATS GAP SUGGESTIONS
-                      </span>
-                      <ul className="space-y-1.5 text-[10px] text-foreground font-medium uppercase list-none">
-                        {atsResult.improvements.map((imp, i) => (
-                          <li key={i} className="flex gap-2 items-start leading-snug">
-                            <span className="text-accent shrink-0">✦</span>
-                            <span>{imp}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  
-                  {/* AI Core Engine Selector & Actions */}
+                  {/* Local Model controls */}
                   <div className="pt-4 border-t border-border space-y-4">
                     <div className="space-y-1">
-                      <span className="text-[8px] font-black text-muted-foreground uppercase block">AI CORE ENGINE</span>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <button
-                          onClick={() => setAtsSource("browser")}
-                          className={`h-8 border text-[10px] font-bold uppercase transition-all ${
-                            atsSource === "browser" ? "border-accent bg-accent/10 text-accent" : "border-border bg-background text-muted-foreground"
-                          }`}
-                        >
-                          💻 LOCAL BROWSER
-                        </button>
-                        <button
-                          onClick={() => setAtsSource("cloud")}
-                          className={`h-8 border text-[10px] font-bold uppercase transition-all ${
-                            atsSource === "cloud" ? "border-accent bg-accent/10 text-accent" : "border-border bg-background text-muted-foreground"
-                          }`}
-                        >
-                          ☁️ SERVER CLOUD
-                        </button>
-                      </div>
+                      <span className="text-[8px] font-black text-muted-foreground uppercase block">LOCAL MODEL SIZE (WASM)</span>
+                      <select
+                        value={atsModel}
+                        onChange={(e) => setAtsModel(e.target.value as BrowserModelType)}
+                        className="w-full bg-background border border-border p-2 text-[10px] font-bold uppercase outline-none text-foreground font-mono"
+                      >
+                        {geminiAvailable && <option value="gemini-nano">GEMINI NANO (CHROME NATIVE)</option>}
+                        <option value="qwen-0.5b">QWEN 1.5 0.5B CHAT (350MB - FAST)</option>
+                        <option value="llama-1b">LLAMA 3.2 1B INSTRUCT (600MB - SMART)</option>
+                      </select>
                     </div>
 
-                    {/* Local Model dropdown */}
-                    {atsSource === "browser" && (
-                      <div className="space-y-1">
-                        <span className="text-[8px] font-black text-muted-foreground uppercase block">LOCAL MODEL (WASM)</span>
-                        <select
-                          value={atsModel}
-                          onChange={(e) => setAtsModel(e.target.value as BrowserModelType)}
-                          className="w-full bg-background border border-border p-1 text-[10px] font-bold uppercase outline-none text-foreground"
-                        >
-                          {geminiAvailable && <option value="gemini-nano">GEMINI NANO (CHROME NATIVE)</option>}
-                          <option value="qwen-0.5b">QWEN 1.5 0.5B CHAT (350MB - FAST)</option>
-                          <option value="llama-1b">LLAMA 3.2 1B INSTRUCT (600MB - SMART)</option>
-                        </select>
-                      </div>
-                    )}
-
-                    {/* Loader status message */}
                     {calculatingATS && localStatusMessage && (
-                      <div className="space-y-1">
+                      <div className="space-y-1.5">
                         <div className="flex justify-between text-[9px] font-bold uppercase">
                           <span className="text-accent animate-pulse">{localStatusMessage}</span>
                         </div>
@@ -1160,1049 +1462,685 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
                       </div>
                     )}
 
-                    {/* Main Trigger Button */}
                     <button
-                      onClick={atsSource === "browser" ? runLocalATS : runCloudATS}
+                      onClick={runLocalATS}
                       disabled={calculatingATS}
                       className="w-full h-10 border-2 border-border bg-background hover:bg-muted font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50"
                     >
                       {calculatingATS ? (
                         <>
                           <Loader2 className="animate-spin h-3.5 w-3.5" />
-                          <span>GENERATING TAILORING...</span>
+                          <span>TAILORING RESUME...</span>
                         </>
                       ) : (
                         <>
                           <Sparkles size={12} className="text-accent" />
-                          <span>TAILOR RESUME WITH {atsSource === "browser" ? "LOCAL AI" : "CLOUD AI"}</span>
+                          <span>TAILOR WITH BROWSER AI</span>
                         </>
                       )}
                     </button>
-                    <span className="text-[8px] text-muted-foreground uppercase text-center block mt-1">
-                      {atsSource === "browser" 
-                        ? "Runs completely client-side. Zero server cost or data sharing." 
-                        : "Cloud completes comprehensive projects / summary rewrites (5 completions limit/day)"
-                      }
+                    <span className="text-[8px] text-muted-foreground uppercase text-center block leading-normal font-mono">
+                      GENERATION RUNS ENTIRELY ON CLIENT COMPUTE. COMPILES TAILORED SKILLS, SUMMARY, AND PROJECTS TO MATCH THE ANNOUNCEMENT.
                     </span>
-                  </div>  </div>
+                  </div>
+                </div>
               )}
             </>
           ) : (
             <div className="text-center py-20 text-xs font-bold text-muted-foreground uppercase">
-              Select or import a company drive announcement to begin.
+              Select or import a company announcement to begin.
             </div>
           )}
         </div>
 
-        {/* Right Column: Generative workspace & Interview Prep */}
+        {/* Right Column: Editor and Preview */}
         <div className="lg:col-span-8 flex flex-col max-h-[calc(100vh-80px)] overflow-hidden">
           
-          {/* Tabs Navigation */}
-          <div className="flex border-b-2 border-border bg-muted/10 shrink-0">
-            <button
-              onClick={() => setActiveTab("ats")}
-              className={`flex-1 py-4 text-xs font-black tracking-wider uppercase border-r border-border transition-all ${
-                activeTab === "ats" ? "bg-background border-b-2 border-b-accent text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/5"
-              }`}
-            >
-              RESUME OPTIMIZER
-            </button>
-            <button
-              onClick={() => setActiveTab("sop")}
-              className={`flex-1 py-4 text-xs font-black tracking-wider uppercase border-r border-border transition-all ${
-                activeTab === "sop" ? "bg-background border-b-2 border-b-accent text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/5"
-              }`}
-            >
-              STATEMENT OF PURPOSE
-            </button>
-            <button
-              onClick={() => setActiveTab("cl")}
-              className={`flex-1 py-4 text-xs font-black tracking-wider uppercase border-r border-border transition-all ${
-                activeTab === "cl" ? "bg-background border-b-2 border-b-accent text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/5"
-              }`}
-            >
-              COVER LETTER
-            </button>
-            <button
-              onClick={() => setActiveTab("prep")}
-              className={`flex-1 py-4 text-xs font-black tracking-wider uppercase transition-all ${
-                activeTab === "prep" ? "bg-background border-b-2 border-b-accent text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/5"
-              }`}
-            >
-              INTERVIEW PREPARATION
-            </button>
+          {/* Main Controls Panel */}
+          <div className="flex flex-col sm:flex-row justify-between items-stretch border-b border-border bg-muted/10 shrink-0 no-print sm:items-center">
+            
+            {/* View Subtabs */}
+            <div className="flex border-r border-border h-14">
+              <button
+                onClick={() => setOptimizerSubView("tailored")}
+                className={`px-5 text-[10px] font-black tracking-wider uppercase flex items-center gap-1.5 border-r border-border transition-all ${
+                  optimizerSubView === "tailored" ? "bg-background border-b-2 border-b-accent text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/5"
+                }`}
+              >
+                <Edit size={12} />
+                <span>Tailored Workspace</span>
+              </button>
+              <button
+                onClick={() => setOptimizerSubView("highlight")}
+                className={`px-5 text-[10px] font-black tracking-wider uppercase flex items-center gap-1.5 border-r border-border transition-all ${
+                  optimizerSubView === "highlight" ? "bg-background border-b-2 border-b-accent text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/5"
+                }`}
+              >
+                <Highlighter size={12} />
+                <span>Keyword Highlights</span>
+              </button>
+              <button
+                onClick={() => setOptimizerSubView("preview")}
+                className={`px-5 text-[10px] font-black tracking-wider uppercase flex items-center gap-1.5 transition-all ${
+                  optimizerSubView === "preview" ? "bg-background border-b-2 border-b-accent text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/5"
+                }`}
+              >
+                <Eye size={12} />
+                <span>Live Resume Preview</span>
+              </button>
+            </div>
+
+            {/* Template Selector Row */}
+            {optimizerSubView === "preview" && (
+              <div className="flex items-center gap-1.5 px-4 py-2 bg-muted/20 border-t sm:border-t-0 border-border">
+                <span className="text-[9px] font-black text-muted-foreground uppercase tracking-widest">TEMPLATE:</span>
+                {["Classic", "Modern", "Minimalist", "Creative"].map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setSelectedTemplate(t)}
+                    className={`px-2.5 py-1 border text-[9px] font-extrabold uppercase transition-all ${
+                      selectedTemplate === t ? "border-accent bg-accent text-black" : "border-border bg-background text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Workspace Area */}
+          {/* Core Content Area */}
           <div className="flex-1 overflow-y-auto p-6 md:p-8">
             {company ? (
               <>
-                {activeTab === "ats" && (
-                  <div className="space-y-8">
-                    {/* Sub-View Navigation and Actions */}
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b-2 border-border pb-4 gap-4">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setOptimizerSubView("tailored")}
-                          className={`h-9 px-4 border-2 text-[10px] font-black uppercase tracking-wider transition-all ${
-                            optimizerSubView === "tailored"
-                              ? "border-accent bg-accent/10 text-accent font-black"
-                              : "border-border hover:bg-muted text-muted-foreground"
-                          }`}
-                        >
-                          📝 Tailored Workspace
-                        </button>
-                        <button
-                          onClick={() => setOptimizerSubView("highlight")}
-                          className={`h-9 px-4 border-2 text-[10px] font-black uppercase tracking-wider transition-all ${
-                            optimizerSubView === "highlight"
-                              ? "border-accent bg-accent/10 text-accent font-black"
-                              : "border-border hover:bg-muted text-muted-foreground"
-                          }`}
-                        >
-                          🔍 ATS Keyword Highlighting
-                        </button>
-                      </div>
+                {/* 1. Editor Form View */}
+                {optimizerSubView === "tailored" && (
+                  <div className="space-y-6">
+                    <div className="border-2 border-border p-6 space-y-3 bg-card">
+                      <h3 className="text-lg font-black uppercase tracking-tighter">TAILORED APPLICATION WORKSPACE</h3>
+                      <p className="text-xs text-muted-foreground uppercase leading-relaxed">
+                        Customize your resume details below specifically for {company.name}. Manual edits made in this workspace are encrypted and saved to your application record, leaving your Master Resume completely untouched.
+                      </p>
                     </div>
 
-                    {optimizerSubView === "tailored" ? (
-                      <>
-                        <div className="border-2 border-border p-6 space-y-4">
-                          <h3 className="text-lg font-black uppercase tracking-tighter">TAILORED APPLICATION RESUME</h3>
-                          <p className="text-xs text-muted-foreground uppercase leading-relaxed">
-                            Personalize your resume details below specifically for {company.name}. Manual changes here are saved securely to your application record, keeping your Master Resume untouched.
-                          </p>
+                    {tailoredResumeData ? (
+                      <div className="space-y-6">
+                        {/* Action Bar */}
+                        <div className="flex flex-wrap gap-3 items-center justify-between border-2 border-border p-4 bg-muted/20">
+                          <div className="flex items-center gap-2 text-xs font-black uppercase text-accent">
+                            <Target size={14} />
+                            <span>Structured Editor Form</span>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            {atsResult?.tailored_resume && (
+                              <button
+                                onClick={applySuggestionsToTailored}
+                                className="h-9 px-3 border border-accent bg-accent/10 hover:bg-accent hover:text-black text-accent text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
+                              >
+                                <Sparkles size={11} />
+                                <span>Apply AI suggestions</span>
+                              </button>
+                            )}
+                            <button
+                              onClick={handleSaveTailoredResume}
+                              disabled={savingDoc}
+                              className="h-9 px-3 bg-foreground text-background hover:bg-accent hover:text-black border border-border text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
+                            >
+                              <Save size={11} />
+                              <span>{savingDoc ? "Saving..." : "Save Tailored Resume"}</span>
+                            </button>
+                            <button
+                              onClick={downloadTailoredResumeText}
+                              className="h-9 px-3 bg-muted border border-border hover:border-accent hover:text-accent text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
+                            >
+                              <Download size={11} />
+                              <span>Export as Text</span>
+                            </button>
+                            <button
+                              onClick={resetTailoredToMaster}
+                              className="h-9 px-3 border border-red-500/50 hover:bg-red-500 hover:text-white text-red-500 text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
+                            >
+                              Reset to Master
+                            </button>
+                          </div>
                         </div>
 
-                        {tailoredResumeData ? (
-                          <div className="space-y-6">
-                            {/* Premium Actions Bar */}
-                            <div className="flex flex-wrap gap-3 items-center justify-between border-2 border-border p-4 bg-muted/20">
-                              <div className="flex items-center gap-2 text-xs font-black uppercase text-accent">
-                                <Target size={14} />
-                                <span>Customized Resume Workspace</span>
-                              </div>
-
-                              <div className="flex flex-wrap gap-2">
-                                {atsResult?.tailored_resume && (
-                                  <button
-                                    onClick={applySuggestionsToTailored}
-                                    className="h-9 px-3 border border-accent bg-accent/10 hover:bg-accent hover:text-black text-accent text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
-                                  >
-                                    <Sparkles size={11} />
-                                    <span>Apply AI suggestions</span>
-                                  </button>
-                                )}
-                                <button
-                                  onClick={handleSaveTailoredResume}
-                                  disabled={savingDoc}
-                                  className="h-9 px-3 bg-foreground text-background hover:bg-accent hover:text-black border border-border text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
-                                >
-                                  <Save size={11} />
-                                  <span>{savingDoc ? "Saving..." : "Save Custom Resume"}</span>
-                                </button>
-                                <button
-                                  onClick={downloadTailoredResumeText}
-                                  className="h-9 px-3 bg-muted border border-border hover:border-accent hover:text-accent text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
-                                >
-                                  <Download size={11} />
-                                  <span>Export as Text</span>
-                                </button>
-                                <button
-                                  onClick={resetTailoredToMaster}
-                                  className="h-9 px-3 border border-red-500/50 hover:bg-red-500 hover:text-white text-red-500 text-[10px] font-black uppercase flex items-center gap-1.5 transition-all"
-                                >
-                                  Reset to Master
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* The Interactive Form Fields */}
-                            <div className="border-2 border-border p-6 bg-card space-y-8">
-                              
-                              {/* 1. Contact / Personal */}
-                              <div className="space-y-4">
-                                <h4 className="text-xs font-black uppercase tracking-widest text-accent">Personal Details</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                                  <div className="space-y-1">
-                                    <label className="text-[9px] font-black uppercase text-zinc-500">Full Name</label>
-                                    <input
-                                      type="text"
-                                      value={tailoredResumeData.personal?.name || ""}
-                                      onChange={(e) => updateTailoredPersonal("name", e.target.value)}
-                                      className="w-full h-10 border border-border bg-background text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none"
-                                    />
-                                  </div>
-                                  <div className="space-y-1">
-                                    <label className="text-[9px] font-black uppercase text-zinc-500">Email</label>
-                                    <input
-                                      type="text"
-                                      value={tailoredResumeData.personal?.email || ""}
-                                      onChange={(e) => updateTailoredPersonal("email", e.target.value)}
-                                      className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
-                                    />
-                                  </div>
-                                  <div className="space-y-1">
-                                    <label className="text-[9px] font-black uppercase text-zinc-500">Phone</label>
-                                    <input
-                                      type="text"
-                                      value={tailoredResumeData.personal?.phone || ""}
-                                      onChange={(e) => updateTailoredPersonal("phone", e.target.value)}
-                                      className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
-                                    />
-                                  </div>
-                                  <div className="space-y-1">
-                                    <label className="text-[9px] font-black uppercase text-zinc-500">Location</label>
-                                    <input
-                                      type="text"
-                                      value={tailoredResumeData.personal?.location || ""}
-                                      onChange={(e) => updateTailoredPersonal("location", e.target.value)}
-                                      className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-
-                              {/* 2. Professional Summary */}
-                              <div className="space-y-2">
-                                <label className="text-xs font-black uppercase tracking-widest text-accent">Professional Summary</label>
-                                <textarea
-                                  value={tailoredResumeData.summary || ""}
-                                  onChange={(e) => setTailoredResumeData((prev: any) => ({ ...prev, summary: e.target.value }))}
-                                  rows={3}
-                                  className="w-full border border-border bg-background text-xs p-3 focus:border-accent focus:outline-none uppercase font-bold"
-                                />
-                              </div>
-
-                              {/* 3. Skills */}
-                              <div className="space-y-2">
-                                <label className="text-xs font-black uppercase tracking-widest text-accent">Skills Tags (Comma-separated)</label>
+                        {/* Interactive Form */}
+                        <div className="border-2 border-border p-6 bg-card space-y-8">
+                          
+                          {/* Personal info */}
+                          <div className="space-y-4">
+                            <h4 className="text-xs font-black uppercase tracking-widest text-accent">Personal Information</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-black uppercase text-zinc-500">Full Name</label>
                                 <input
                                   type="text"
-                                  value={tailoredResumeData.skills ? tailoredResumeData.skills.join(", ") : ""}
-                                  onChange={(e) => {
-                                    const arr = e.target.value.split(",").map(s => s.trim());
-                                    setTailoredResumeData((prev: any) => ({ ...prev, skills: arr }));
-                                  }}
+                                  value={tailoredResumeData.personal?.name || ""}
+                                  onChange={(e) => updateTailoredPersonal("name", e.target.value)}
                                   className="w-full h-10 border border-border bg-background text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none"
                                 />
                               </div>
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-black uppercase text-zinc-500">Email Address</label>
+                                <input
+                                  type="text"
+                                  value={tailoredResumeData.personal?.email || ""}
+                                  onChange={(e) => updateTailoredPersonal("email", e.target.value)}
+                                  className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-black uppercase text-zinc-500">Phone Number</label>
+                                <input
+                                  type="text"
+                                  value={tailoredResumeData.personal?.phone || ""}
+                                  onChange={(e) => updateTailoredPersonal("phone", e.target.value)}
+                                  className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-black uppercase text-zinc-500">Location</label>
+                                <input
+                                  type="text"
+                                  value={tailoredResumeData.personal?.location || ""}
+                                  onChange={(e) => updateTailoredPersonal("location", e.target.value)}
+                                  className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                                />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-black uppercase text-zinc-500">Headline/Title</label>
+                                <input
+                                  type="text"
+                                  value={tailoredResumeData.personal?.title || ""}
+                                  onChange={(e) => updateTailoredPersonal("title", e.target.value)}
+                                  placeholder="e.g. SOFTWARE ENGINEER INTERN"
+                                  className="w-full h-10 border border-border bg-background text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-black uppercase text-zinc-500">LinkedIn Username</label>
+                                <input
+                                  type="text"
+                                  value={tailoredResumeData.personal?.linkedin || ""}
+                                  onChange={(e) => updateTailoredPersonal("linkedin", e.target.value)}
+                                  placeholder="linkedin.com/in/..."
+                                  className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-black uppercase text-zinc-500">GitHub Username</label>
+                                <input
+                                  type="text"
+                                  value={tailoredResumeData.personal?.github || ""}
+                                  onChange={(e) => updateTailoredPersonal("github", e.target.value)}
+                                  placeholder="github.com/..."
+                                  className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                                />
+                              </div>
+                            </div>
+                          </div>
 
-                              {/* 4. Education History */}
-                              <div className="space-y-4 pt-4 border-t border-border">
-                                <div className="flex justify-between items-center">
-                                  <span className="text-xs font-black uppercase tracking-widest text-accent">Education History</span>
+                          {/* Summary */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-black uppercase tracking-widest text-accent">Professional Summary</label>
+                            <textarea
+                              value={tailoredResumeData.summary || ""}
+                              onChange={(e) => setTailoredResumeData((prev: any) => ({ ...prev, summary: e.target.value }))}
+                              rows={3}
+                              className="w-full border border-border bg-background text-xs p-3 focus:border-accent focus:outline-none uppercase font-bold"
+                            />
+                          </div>
+
+                          {/* Skills */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-black uppercase tracking-widest text-accent">Core Skills (Comma-separated)</label>
+                            <input
+                              type="text"
+                              value={tailoredResumeData.skills ? tailoredResumeData.skills.join(", ") : ""}
+                              onChange={(e) => {
+                                const arr = e.target.value.split(",").map(s => s.trim());
+                                setTailoredResumeData((prev: any) => ({ ...prev, skills: arr }));
+                              }}
+                              className="w-full h-10 border border-border bg-background text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none"
+                            />
+                          </div>
+
+                          {/* Education */}
+                          <div className="space-y-4 pt-4 border-t border-border">
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-black uppercase tracking-widest text-accent">Education Background</span>
+                              <button
+                                type="button"
+                                onClick={addTailoredEducation}
+                                className="flex items-center gap-1 text-[9px] bg-muted border border-border hover:bg-accent hover:text-black px-2 py-1 uppercase font-bold"
+                              >
+                                <Plus size={11} />
+                                <span>Add School/College</span>
+                              </button>
+                            </div>
+                            <div className="space-y-3">
+                              {(tailoredResumeData.education || []).map((edu: any, idx: number) => (
+                                <div key={idx} className="flex flex-col md:flex-row gap-3 border border-border p-3 bg-background">
+                                  <input
+                                    type="text"
+                                    value={edu.degree}
+                                    onChange={(e) => updateTailoredEducation(idx, "degree", e.target.value)}
+                                    placeholder="Degree / Course"
+                                    className="flex-2 border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={edu.institution}
+                                    onChange={(e) => updateTailoredEducation(idx, "institution", e.target.value)}
+                                    placeholder="School / University"
+                                    className="flex-2 border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={edu.year}
+                                    onChange={(e) => updateTailoredEducation(idx, "year", e.target.value)}
+                                    placeholder="Year (e.g. 2024)"
+                                    className="flex-1 border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={edu.score}
+                                    onChange={(e) => updateTailoredEducation(idx, "score", e.target.value)}
+                                    placeholder="Score / GPA"
+                                    className="flex-1 border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
+                                  />
                                   <button
                                     type="button"
-                                    onClick={addTailoredEducation}
-                                    className="flex items-center gap-1 text-[9px] bg-muted border border-border hover:bg-accent hover:text-black px-2 py-1 uppercase font-bold"
+                                    onClick={() => removeTailoredEducation(idx)}
+                                    className="border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-3 h-10 flex items-center justify-center transition-all"
                                   >
-                                    <Plus size={11} />
-                                    <span>Add Education</span>
+                                    <Trash2 size={13} />
                                   </button>
                                 </div>
-                                <div className="space-y-3">
-                                  {(tailoredResumeData.education || []).map((edu: any, idx: number) => (
-                                    <div key={idx} className="flex flex-col md:flex-row gap-3 border border-border p-3 bg-background">
-                                      <input
-                                        type="text"
-                                        value={edu.degree}
-                                        onChange={(e) => updateTailoredEducation(idx, "degree", e.target.value)}
-                                        placeholder="Degree / Course"
-                                        className="flex-2 border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
-                                      />
-                                      <input
-                                        type="text"
-                                        value={edu.institution}
-                                        onChange={(e) => updateTailoredEducation(idx, "institution", e.target.value)}
-                                        placeholder="School / University"
-                                        className="flex-2 border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
-                                      />
-                                      <input
-                                        type="text"
-                                        value={edu.year}
-                                        onChange={(e) => updateTailoredEducation(idx, "year", e.target.value)}
-                                        placeholder="Year"
-                                        className="flex-1 border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
-                                      />
-                                      <input
-                                        type="text"
-                                        value={edu.score}
-                                        onChange={(e) => updateTailoredEducation(idx, "score", e.target.value)}
-                                        placeholder="Score"
-                                        className="flex-1 border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
-                                      />
-                                      <button
-                                        type="button"
-                                        onClick={() => removeTailoredEducation(idx)}
-                                        className="border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-3 h-10 flex items-center justify-center"
-                                      >
-                                        <Trash2 size={13} />
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
+                              ))}
+                            </div>
+                          </div>
 
-                              {/* 5. Work Experience */}
-                              <div className="space-y-4 pt-4 border-t border-border">
-                                <div className="flex justify-between items-center">
-                                  <span className="text-xs font-black uppercase tracking-widest text-accent">Work Experience</span>
-                                  <button
-                                    type="button"
-                                    onClick={addTailoredExperience}
-                                    className="flex items-center gap-1 text-[9px] bg-muted border border-border hover:bg-accent hover:text-black px-2 py-1 uppercase font-bold"
-                                  >
-                                    <Plus size={11} />
-                                    <span>Add Experience</span>
-                                  </button>
-                                </div>
-                                <div className="space-y-4">
-                                  {(tailoredResumeData.experience || []).map((exp: any, idx: number) => (
-                                    <div key={idx} className="border border-border p-4 bg-background space-y-3">
-                                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                        <input
-                                          type="text"
-                                          value={exp.role}
-                                          onChange={(e) => updateTailoredExperience(idx, "role", e.target.value)}
-                                          placeholder="Job Role / Title"
-                                          className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
-                                        />
-                                        <input
-                                          type="text"
-                                          value={exp.company}
-                                          onChange={(e) => updateTailoredExperience(idx, "company", e.target.value)}
-                                          placeholder="Company Name"
-                                          className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
-                                        />
-                                        <input
-                                          type="text"
-                                          value={exp.period}
-                                          onChange={(e) => updateTailoredExperience(idx, "period", e.target.value)}
-                                          placeholder="Period"
-                                          className="border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
-                                        />
-                                      </div>
-                                      <textarea
-                                        value={exp.description}
-                                        onChange={(e) => updateTailoredExperience(idx, "description", e.target.value)}
-                                        placeholder="Description..."
-                                        rows={3}
-                                        className="w-full border border-border bg-background text-xs p-3 focus:outline-none focus:border-accent font-mono uppercase"
-                                      />
-                                      <div className="flex justify-end">
-                                        <button
-                                          type="button"
-                                          onClick={() => removeTailoredExperience(idx)}
-                                          className="flex items-center gap-1 text-[9px] border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-3 py-1 uppercase font-bold"
-                                        >
-                                          <Trash2 size={11} />
-                                          <span>Remove Experience</span>
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-
-                              {/* 6. Projects */}
-                              <div className="space-y-4 pt-4 border-t border-border">
-                                <div className="flex justify-between items-center">
-                                  <span className="text-xs font-black uppercase tracking-widest text-accent">Academic / Personal Projects</span>
-                                  <button
-                                    type="button"
-                                    onClick={addTailoredProject}
-                                    className="flex items-center gap-1 text-[9px] bg-muted border border-border hover:bg-accent hover:text-black px-2 py-1 uppercase font-bold"
-                                  >
-                                    <Plus size={11} />
-                                    <span>Add Project</span>
-                                  </button>
-                                </div>
-                                <div className="space-y-4">
-                                  {(tailoredResumeData.projects || []).map((proj: any, idx: number) => (
-                                    <div key={idx} className="border border-border p-4 bg-background space-y-3">
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                        <input
-                                          type="text"
-                                          value={proj.title}
-                                          onChange={(e) => updateTailoredProject(idx, "title", e.target.value)}
-                                          placeholder="Project Title"
-                                          className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
-                                        />
-                                        <input
-                                          type="text"
-                                          value={proj.tech}
-                                          onChange={(e) => updateTailoredProject(idx, "tech", e.target.value)}
-                                          placeholder="Tech Stack Used"
-                                          className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
-                                        />
-                                      </div>
-                                      <textarea
-                                        value={proj.description}
-                                        onChange={(e) => updateTailoredProject(idx, "description", e.target.value)}
-                                        placeholder="Description..."
-                                        rows={3}
-                                        className="w-full border border-border bg-background text-xs p-3 focus:outline-none focus:border-accent font-mono uppercase"
-                                      />
-                                      <div className="flex justify-end">
-                                        <button
-                                          type="button"
-                                          onClick={() => removeTailoredProject(idx)}
-                                          className="flex items-center gap-1 text-[9px] border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-3 py-1 uppercase font-bold"
-                                        >
-                                          <Trash2 size={11} />
-                                          <span>Remove Project</span>
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-
-                              {/* 7. Certifications, Languages, Awards */}
-                              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t border-border">
-                                {/* Certifications */}
-                                <div className="space-y-3">
-                                  <span className="text-xs font-black uppercase tracking-widest text-accent block">Certifications</span>
-                                  <div className="flex gap-2">
+                          {/* Work Experience */}
+                          <div className="space-y-4 pt-4 border-t border-border">
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-black uppercase tracking-widest text-accent">Professional Experience</span>
+                              <button
+                                type="button"
+                                onClick={addTailoredExperience}
+                                className="flex items-center gap-1 text-[9px] bg-muted border border-border hover:bg-accent hover:text-black px-2 py-1 uppercase font-bold"
+                              >
+                                <Plus size={11} />
+                                <span>Add Experience</span>
+                              </button>
+                            </div>
+                            <div className="space-y-4">
+                              {(tailoredResumeData.experience || []).map((exp: any, idx: number) => (
+                                <div key={idx} className="border border-border p-4 bg-background space-y-3">
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                     <input
                                       type="text"
-                                      value={newCert}
-                                      onChange={(e) => setNewCert(e.target.value)}
-                                      placeholder="AWS, GCP, GCP-ML..."
-                                      className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                                      value={exp.role}
+                                      onChange={(e) => updateTailoredExperience(idx, "role", e.target.value)}
+                                      placeholder="Job Title"
+                                      className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
                                     />
-                                    <button
-                                      type="button"
-                                      onClick={addTailoredCert}
-                                      className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black text-xs font-bold uppercase"
-                                    >
-                                      Add
-                                    </button>
-                                  </div>
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {(tailoredResumeData.certifications || []).map((val: string, i: number) => (
-                                      <span key={i} className="inline-flex items-center gap-1 bg-muted px-2 py-1 text-[9px] font-bold border border-border uppercase">
-                                        <span>{val}</span>
-                                        <button type="button" onClick={() => removeTailoredCert(val)} className="text-red-500 hover:text-white">×</button>
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-
-                                {/* Languages */}
-                                <div className="space-y-3">
-                                  <span className="text-xs font-black uppercase tracking-widest text-accent block">Languages</span>
-                                  <div className="flex gap-2">
                                     <input
                                       type="text"
-                                      value={newLang}
-                                      onChange={(e) => setNewLang(e.target.value)}
-                                      placeholder="English, French..."
-                                      className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                                      value={exp.company}
+                                      onChange={(e) => updateTailoredExperience(idx, "company", e.target.value)}
+                                      placeholder="Company Name"
+                                      className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
                                     />
-                                    <button
-                                      type="button"
-                                      onClick={addTailoredLang}
-                                      className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black text-xs font-bold uppercase"
-                                    >
-                                      Add
-                                    </button>
-                                  </div>
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {(tailoredResumeData.languages || []).map((val: string, i: number) => (
-                                      <span key={i} className="inline-flex items-center gap-1 bg-muted px-2 py-1 text-[9px] font-bold border border-border uppercase">
-                                        <span>{val}</span>
-                                        <button type="button" onClick={() => removeTailoredLang(val)} className="text-red-500 hover:text-white">×</button>
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-
-                                {/* Awards */}
-                                <div className="space-y-3">
-                                  <span className="text-xs font-black uppercase tracking-widest text-accent block">Awards & Honors</span>
-                                  <div className="flex gap-2">
                                     <input
                                       type="text"
-                                      value={newAward}
-                                      onChange={(e) => setNewAward(e.target.value)}
-                                      placeholder="Hackathon 1st..."
-                                      className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                                      value={exp.period}
+                                      onChange={(e) => updateTailoredExperience(idx, "period", e.target.value)}
+                                      placeholder="Period (e.g. June 2023 - Present)"
+                                      className="border border-border bg-background text-xs font-bold px-3 h-10 focus:outline-none focus:border-accent"
                                     />
+                                  </div>
+                                  <textarea
+                                    value={exp.description}
+                                    onChange={(e) => updateTailoredExperience(idx, "description", e.target.value)}
+                                    placeholder="Responsibilities and accomplishments..."
+                                    rows={3}
+                                    className="w-full border border-border bg-background text-xs p-3 focus:outline-none focus:border-accent font-mono uppercase"
+                                  />
+                                  <div className="flex justify-end">
                                     <button
                                       type="button"
-                                      onClick={addTailoredAward}
-                                      className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black text-xs font-bold uppercase"
+                                      onClick={() => removeTailoredExperience(idx)}
+                                      className="flex items-center gap-1 text-[9px] border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-3 py-1 uppercase font-bold"
                                     >
-                                      Add
+                                      <Trash2 size={11} />
+                                      <span>Remove Experience</span>
                                     </button>
                                   </div>
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {(tailoredResumeData.awards || []).map((val: string, i: number) => (
-                                      <span key={i} className="inline-flex items-center gap-1 bg-muted px-2 py-1 text-[9px] font-bold border border-border uppercase">
-                                        <span>{val}</span>
-                                        <button type="button" onClick={() => removeTailoredAward(val)} className="text-red-500 hover:text-white">×</button>
-                                      </span>
-                                    ))}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Projects */}
+                          <div className="space-y-4 pt-4 border-t border-border">
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-black uppercase tracking-widest text-accent">Projects</span>
+                              <button
+                                type="button"
+                                onClick={addTailoredProject}
+                                className="flex items-center gap-1 text-[9px] bg-muted border border-border hover:bg-accent hover:text-black px-2 py-1 uppercase font-bold"
+                              >
+                                <Plus size={11} />
+                                <span>Add Project</span>
+                              </button>
+                            </div>
+                            <div className="space-y-4">
+                              {(tailoredResumeData.projects || []).map((proj: any, idx: number) => (
+                                <div key={idx} className="border border-border p-4 bg-background space-y-3">
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <input
+                                      type="text"
+                                      value={proj.title}
+                                      onChange={(e) => updateTailoredProject(idx, "title", e.target.value)}
+                                      placeholder="Project Title"
+                                      className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                                    />
+                                    <input
+                                      type="text"
+                                      value={proj.tech}
+                                      onChange={(e) => updateTailoredProject(idx, "tech", e.target.value)}
+                                      placeholder="Technologies (e.g. Next.js, Python)"
+                                      className="border border-border bg-background text-xs font-bold uppercase px-3 h-10 focus:outline-none focus:border-accent"
+                                    />
+                                  </div>
+                                  <textarea
+                                    value={proj.description}
+                                    onChange={(e) => updateTailoredProject(idx, "description", e.target.value)}
+                                    placeholder="Project description and results..."
+                                    rows={3}
+                                    className="w-full border border-border bg-background text-xs p-3 focus:outline-none focus:border-accent font-mono uppercase"
+                                  />
+                                  <div className="flex justify-end">
+                                    <button
+                                      type="button"
+                                      onClick={() => removeTailoredProject(idx)}
+                                      className="flex items-center gap-1 text-[9px] border border-red-600 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white px-3 py-1 uppercase font-bold"
+                                    >
+                                      <Trash2 size={11} />
+                                      <span>Remove Project</span>
+                                    </button>
                                   </div>
                                 </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Certifications, Languages, Awards */}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t border-border">
+                            {/* Certs */}
+                            <div className="space-y-3">
+                              <span className="text-xs font-black uppercase tracking-widest text-accent block">Certifications</span>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  value={newCert}
+                                  onChange={(e) => setNewCert(e.target.value)}
+                                  placeholder="e.g. AWS Developer"
+                                  className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={addTailoredCert}
+                                  className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black text-xs font-bold uppercase"
+                                >
+                                  Add
+                                </button>
                               </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {(tailoredResumeData.certifications || []).map((val: string, i: number) => (
+                                  <span key={i} className="inline-flex items-center gap-1.5 bg-muted px-2 py-1 text-[9px] font-bold border border-border uppercase">
+                                    <span>{val}</span>
+                                    <button type="button" onClick={() => removeTailoredCert(val)} className="text-red-500 hover:text-red-300 font-extrabold">×</button>
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
 
+                            {/* Languages */}
+                            <div className="space-y-3">
+                              <span className="text-xs font-black uppercase tracking-widest text-accent block">Languages</span>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  value={newLang}
+                                  onChange={(e) => setNewLang(e.target.value)}
+                                  placeholder="e.g. English"
+                                  className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={addTailoredLang}
+                                  className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black text-xs font-bold uppercase"
+                                >
+                                  Add
+                                </button>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {(tailoredResumeData.languages || []).map((val: string, i: number) => (
+                                  <span key={i} className="inline-flex items-center gap-1.5 bg-muted px-2 py-1 text-[9px] font-bold border border-border uppercase">
+                                    <span>{val}</span>
+                                    <button type="button" onClick={() => removeTailoredLang(val)} className="text-red-500 hover:text-red-300 font-extrabold">×</button>
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Awards */}
+                            <div className="space-y-3">
+                              <span className="text-xs font-black uppercase tracking-widest text-accent block">Awards & Honors</span>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  value={newAward}
+                                  onChange={(e) => setNewAward(e.target.value)}
+                                  placeholder="e.g. Dean's List"
+                                  className="flex-1 h-10 border border-border bg-background text-xs px-3 focus:outline-none focus:border-accent"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={addTailoredAward}
+                                  className="h-10 px-3 bg-muted border border-border hover:bg-accent hover:text-black text-xs font-bold uppercase"
+                                >
+                                  Add
+                                </button>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {(tailoredResumeData.awards || []).map((val: string, i: number) => (
+                                  <span key={i} className="inline-flex items-center gap-1.5 bg-muted px-2 py-1 text-[9px] font-bold border border-border uppercase">
+                                    <span>{val}</span>
+                                    <button type="button" onClick={() => removeTailoredAward(val)} className="text-red-500 hover:text-red-300 font-extrabold">×</button>
+                                  </span>
+                                ))}
+                              </div>
                             </div>
                           </div>
-                        ) : (
-                          <div className="text-center py-20 border border-dashed border-border text-xs font-bold text-muted-foreground uppercase">
-                            Loading your tailored workspace...
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
-                        {/* Left: Job Description */}
-                        <div className="xl:col-span-5 border-2 border-border p-6 bg-card space-y-6 max-h-[650px] overflow-y-auto">
-                          <div className="flex items-center gap-2 border-b border-border pb-3">
-                            <FileText className="w-4 h-4 text-accent" />
-                            <h3 className="text-sm font-black uppercase tracking-widest text-foreground">JOB DESCRIPTION</h3>
-                          </div>
-                          
-                          <div className="space-y-4 text-xs leading-relaxed uppercase tracking-wider font-mono text-muted-foreground whitespace-pre-wrap select-text">
-                            {company.jd_text ? (
-                              <HighlightedText text={company.jd_text} keywords={jdKeywords} />
-                            ) : (
-                              "No job description details available."
-                            )}
-                          </div>
+
                         </div>
-
-                        {/* Right: Master Resume with Highlights */}
-                        <div className="xl:col-span-7 border-2 border-border p-6 bg-card space-y-6 max-h-[650px] overflow-y-auto">
-                          <div className="flex items-center justify-between border-b border-border pb-3">
-                            <div className="flex items-center gap-2">
-                              <Target className="w-4 h-4 text-accent" />
-                              <h3 className="text-sm font-black uppercase tracking-widest text-foreground">YOUR MASTER RESUME MATCH</h3>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="bg-black text-accent border border-accent px-2 py-1 text-[10px] font-black uppercase tracking-widest">
-                                {matchStats.matchPercentage}% REAL MATCH
-                              </span>
-                            </div>
-                          </div>
-
-                          {masterResume ? (
-                            <div className="space-y-6">
-                              {/* Summary Section */}
-                              {masterResume.summary && (
-                                <div className="space-y-2">
-                                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">SUMMARY</span>
-                                  <p className="text-xs bg-muted/20 border border-border p-3 leading-relaxed uppercase tracking-wider font-mono">
-                                    <HighlightedText text={masterResume.summary} keywords={jdKeywords} />
-                                  </p>
-                                </div>
-                              )}
-
-                              {/* Skills Section */}
-                              {masterResume.skills && masterResume.skills.length > 0 && (
-                                <div className="space-y-2">
-                                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">SKILLS & TECH STACK</span>
-                                  <div className="flex flex-wrap gap-1.5 bg-muted/20 border border-border p-3">
-                                    {masterResume.skills.map((skill: string, i: number) => {
-                                      const isMatch = jdKeywords.has(skill.toLowerCase().trim());
-                                      return (
-                                        <span 
-                                          key={i} 
-                                          className={`text-[9px] font-bold px-2 py-0.5 border uppercase transition-colors ${
-                                            isMatch ? "bg-yellow-500/20 border-yellow-500 text-yellow-500 font-black" : "bg-background border-border text-muted-foreground"
-                                          }`}
-                                        >
-                                          {skill}
-                                        </span>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Experience Section */}
-                              {masterResume.experience && masterResume.experience.length > 0 && (
-                                <div className="space-y-3">
-                                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">EXPERIENCE</span>
-                                  <div className="space-y-3">
-                                    {masterResume.experience.map((exp: any, i: number) => (
-                                      <div key={i} className="border border-border p-3.5 space-y-2 bg-muted/5">
-                                        <div className="flex justify-between items-baseline text-[10px] font-bold uppercase">
-                                          <span>
-                                            <span className="text-foreground">{exp.company}</span>
-                                            <span className="mx-1.5 text-muted-foreground">|</span>
-                                            <span className="text-muted-foreground font-medium">{exp.role}</span>
-                                          </span>
-                                          <span className="text-[8px] text-muted-foreground">{exp.period}</span>
-                                        </div>
-                                        <p className="text-xs text-muted-foreground font-mono leading-relaxed whitespace-pre-wrap select-text uppercase tracking-wider">
-                                          <HighlightedText text={exp.description} keywords={jdKeywords} />
-                                        </p>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Projects Section */}
-                              {masterResume.projects && masterResume.projects.length > 0 && (
-                                <div className="space-y-3">
-                                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">PROJECTS</span>
-                                  <div className="space-y-3">
-                                    {masterResume.projects.map((proj: any, i: number) => (
-                                      <div key={i} className="border border-border p-3.5 space-y-2 bg-muted/5">
-                                        <div className="flex justify-between items-baseline text-[10px] font-bold uppercase">
-                                          <span className="text-foreground">{proj.title}</span>
-                                          {proj.tech && <span className="text-[8px] border border-border px-1.5 text-muted-foreground">{proj.tech}</span>}
-                                        </div>
-                                        <p className="text-xs text-muted-foreground font-mono leading-relaxed whitespace-pre-wrap select-text uppercase tracking-wider">
-                                          <HighlightedText text={proj.description} keywords={jdKeywords} />
-                                        </p>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Education Section */}
-                              {masterResume.education && masterResume.education.length > 0 && (
-                                <div className="space-y-3">
-                                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">EDUCATION</span>
-                                  <div className="space-y-2 bg-muted/20 border border-border p-3.5">
-                                    {masterResume.education.map((edu: any, i: number) => (
-                                      <div key={i} className="flex justify-between items-center text-[10px] font-bold uppercase border-b border-border last:border-0 pb-1.5 last:pb-0">
-                                        <span className="text-foreground">{edu.degree} — {edu.institution}</span>
-                                        <span className="text-muted-foreground text-[8px]">{edu.year} | {edu.score}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="text-center py-20 text-xs font-bold text-muted-foreground uppercase border border-dashed border-border">
-                              No master resume available. Please create one in Resume Engine first.
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* 2. STATEMENT OF PURPOSE TAB */}
-                {activeTab === "sop" && (
-                  <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
-                    
-                    {/* SOP Generator controls */}
-                    <div className="xl:col-span-5 border-2 border-border p-6 bg-muted/10 space-y-6">
-                      <h3 className="text-sm font-black uppercase tracking-widest border-b border-border pb-3">SOP DRAFTER</h3>
-                      
-                      {/* Generation Mode */}
-                      <div className="space-y-2">
-                        <span className="text-[9px] font-black text-muted-foreground uppercase block">AI CORE ENGINE</span>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            onClick={() => setSopSource("browser")}
-                            className={`h-10 border-2 text-xs font-bold uppercase transition-all ${
-                              sopSource === "browser" ? "border-accent bg-accent/10 text-accent font-black" : "border-border bg-background text-muted-foreground"
-                            }`}
-                          >
-                            💻 LOCAL BROWSER
-                          </button>
-                          <button
-                            onClick={() => setSopSource("cloud")}
-                            className={`h-10 border-2 text-xs font-bold uppercase transition-all ${
-                              sopSource === "cloud" ? "border-accent bg-accent/10 text-accent font-black" : "border-border bg-background text-muted-foreground"
-                            }`}
-                          >
-                            ☁️ SERVER CLOUD
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Local Model dropdown */}
-                      {sopSource === "browser" && (
-                        <div className="space-y-2 border-t border-border pt-4">
-                          <span className="text-[9px] font-black text-muted-foreground uppercase block">LOCAL MODEL SIZE (WASM)</span>
-                          <select
-                            value={sopModel}
-                            onChange={(e) => setSopModel(e.target.value as BrowserModelType)}
-                            className="w-full bg-background border-2 border-border p-2 text-xs font-bold uppercase outline-none text-foreground"
-                          >
-                            {geminiAvailable && <option value="gemini-nano">GEMINI NANO (CHROME NATIVE)</option>}
-                            <option value="qwen-0.5b">QWEN 1.5 0.5B CHAT (350MB - FASTEST)</option>
-                            <option value="llama-1b">LLAMA 3.2 1B INSTRUCT (600MB - SMART)</option>
-                          </select>
-                        </div>
-                      )}
-
-                      {/* Guidelines input */}
-                      <div className="space-y-2 border-t border-border pt-4">
-                        <span className="text-[9px] font-black text-muted-foreground uppercase block">CUSTOM DIRECTIVES / PROJECTS (OPTIONAL)</span>
-                        <textarea
-                          placeholder="E.G. HIGHLIGHT MY BLOCKCHAIN PROJECT OR RECENT MOCKATHON EXPERIENCE..."
-                          value={sopPrompt}
-                          onChange={(e) => setSopPrompt(e.target.value)}
-                          className="w-full min-h-[80px] bg-background border-2 border-border p-3 text-xs font-mono placeholder:text-muted-foreground uppercase tracking-wider outline-none text-foreground"
-                        />
-                      </div>
-
-                      {/* Trigger generate button */}
-                      <button
-                        onClick={generateSOP}
-                        disabled={generatingSOP}
-                        className="w-full h-12 border-2 border-accent bg-accent text-black font-extrabold text-xs tracking-widest uppercase flex items-center justify-center gap-2 hover:bg-black hover:text-accent hover:border-black active:scale-[0.98] transition-all disabled:opacity-50"
-                      >
-                        {generatingSOP ? (
-                          <>
-                            <Loader2 className="animate-spin h-4 w-4" />
-                            <span>COMPILING DRAFT...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Play size={12} fill="currentColor" />
-                            <span>COMPILE STATEMENT OF PURPOSE</span>
-                          </>
-                        )}
-                      </button>
-
-                      {/* Download status */}
-                      {localStatusMessage && (
-                        <div className="space-y-1.5 pt-2">
-                          <p className="text-[9px] font-bold text-accent uppercase">{localStatusMessage}</p>
-                          {localDownloadProgress !== null && (
-                            <div className="w-full bg-muted border border-border h-2 relative overflow-hidden">
-                              <div className="bg-accent h-full transition-all" style={{ width: `${localDownloadProgress}%` }} />
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Version history list */}
-                      {sopVersions.length > 0 && (
-                        <div className="border-t border-border pt-4 space-y-2">
-                          <span className="text-[9px] font-black text-muted-foreground uppercase tracking-widest block">
-                            VERSION DRAFT ARCHIVE
-                          </span>
-                          <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                            {sopVersions.map((v) => (
-                              <button
-                                key={v.version}
-                                onClick={() => setSopContent(v.content)}
-                                className="w-full flex justify-between items-center text-[10px] font-bold bg-background border border-border p-2 hover:border-accent hover:text-accent transition-colors"
-                              >
-                                <span>VERSION {v.version}</span>
-                                <span className="text-[8px] text-muted-foreground">
-                                  {new Date(v.created_at).toLocaleString("en-IN", { hour: "numeric", minute: "2-digit" })}
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                    </div>
-
-                    {/* SOP Editor Workspace */}
-                    <div className="xl:col-span-7 space-y-4">
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-black tracking-widest uppercase">WORKSPACE WORKPAD</span>
-                        <div className="flex gap-2">
-                          {sopContent && (
-                            <>
-                              <button
-                                onClick={() => saveDocument("sop", sopContent)}
-                                disabled={savingDoc}
-                                className="h-9 px-3 border-2 border-border hover:border-accent hover:text-accent bg-background text-xs font-bold uppercase flex items-center gap-1.5 active:scale-95 transition-all"
-                                title="Commit Draft Version"
-                              >
-                                <Save size={12} />
-                                <span>SAVE DRAFT</span>
-                              </button>
-                              <button
-                                onClick={() => downloadAsTextFile(`${company.name}_SOP.txt`, sopContent)}
-                                className="h-9 w-9 border-2 border-border hover:border-accent hover:text-accent bg-background flex items-center justify-center active:scale-95 transition-all"
-                                title="Download as Text"
-                              >
-                                <Download size={14} />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      
-                      <textarea
-                        value={sopContent}
-                        onChange={(e) => setSopContent(e.target.value)}
-                        placeholder="Statement of Purpose content will generate here... You can freely edit this content once loaded."
-                        className="w-full min-h-[480px] bg-background border-2 border-border p-6 font-mono text-xs leading-relaxed outline-none text-foreground select-text"
-                      />
-                    </div>
-
-                  </div>
-                )}
-
-                {/* 3. COVER LETTER TAB */}
-                {activeTab === "cl" && (
-                  <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
-                    
-                    {/* Cover Letter controls */}
-                    <div className="xl:col-span-5 border-2 border-border p-6 bg-muted/10 space-y-6">
-                      <h3 className="text-sm font-black uppercase tracking-widest border-b border-border pb-3">COVER LETTER DRAFTER</h3>
-                      
-                      {/* Generation Mode */}
-                      <div className="space-y-2">
-                        <span className="text-[9px] font-black text-muted-foreground uppercase block">AI CORE ENGINE</span>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            onClick={() => setClSource("browser")}
-                            className={`h-10 border-2 text-xs font-bold uppercase transition-all ${
-                              clSource === "browser" ? "border-accent bg-accent/10 text-accent font-black" : "border-border bg-background text-muted-foreground"
-                            }`}
-                          >
-                            💻 LOCAL BROWSER
-                          </button>
-                          <button
-                            onClick={() => setClSource("cloud")}
-                            className={`h-10 border-2 text-xs font-bold uppercase transition-all ${
-                              clSource === "cloud" ? "border-accent bg-accent/10 text-accent font-black" : "border-border bg-background text-muted-foreground"
-                            }`}
-                          >
-                            ☁️ SERVER CLOUD
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Local Model dropdown */}
-                      {clSource === "browser" && (
-                        <div className="space-y-2 border-t border-border pt-4">
-                          <span className="text-[9px] font-black text-muted-foreground uppercase block">LOCAL MODEL SIZE (WASM)</span>
-                          <select
-                            value={clModel}
-                            onChange={(e) => setClModel(e.target.value as BrowserModelType)}
-                            className="w-full bg-background border-2 border-border p-2 text-xs font-bold uppercase outline-none text-foreground"
-                          >
-                            {geminiAvailable && <option value="gemini-nano">GEMINI NANO (CHROME NATIVE)</option>}
-                            <option value="qwen-0.5b">QWEN 1.5 0.5B CHAT (350MB - FASTEST)</option>
-                            <option value="llama-1b">LLAMA 3.2 1B INSTRUCT (600MB - SMART)</option>
-                          </select>
-                        </div>
-                      )}
-
-                      {/* Guidelines input */}
-                      <div className="space-y-2 border-t border-border pt-4">
-                        <span className="text-[9px] font-black text-muted-foreground uppercase block">CUSTOM DIRECTIVES / PROFILE EMPHASIS</span>
-                        <textarea
-                          placeholder="E.G. HIGHLIGHT MY INTERN CONTRACT OR FRONTEND CONCENTRATION..."
-                          value={clPrompt}
-                          onChange={(e) => setClPrompt(e.target.value)}
-                          className="w-full min-h-[80px] bg-background border-2 border-border p-3 text-xs font-mono placeholder:text-muted-foreground uppercase tracking-wider outline-none text-foreground"
-                        />
-                      </div>
-
-                      {/* Trigger generate button */}
-                      <button
-                        onClick={generateCoverLetter}
-                        disabled={generatingCL}
-                        className="w-full h-12 border-2 border-accent bg-accent text-black font-extrabold text-xs tracking-widest uppercase flex items-center justify-center gap-2 hover:bg-black hover:text-accent hover:border-black active:scale-[0.98] transition-all disabled:opacity-50"
-                      >
-                        {generatingCL ? (
-                          <>
-                            <Loader2 className="animate-spin h-4 w-4" />
-                            <span>COMPILING DRAFT...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Play size={12} fill="currentColor" />
-                            <span>COMPILE COVER LETTER</span>
-                          </>
-                        )}
-                      </button>
-
-                      {/* Download status */}
-                      {localStatusMessage && (
-                        <div className="space-y-1.5 pt-2">
-                          <p className="text-[9px] font-bold text-accent uppercase">{localStatusMessage}</p>
-                          {localDownloadProgress !== null && (
-                            <div className="w-full bg-muted border border-border h-2 relative overflow-hidden">
-                              <div className="bg-accent h-full transition-all" style={{ width: `${localDownloadProgress}%` }} />
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Version history list */}
-                      {clVersions.length > 0 && (
-                        <div className="border-t border-border pt-4 space-y-2">
-                          <span className="text-[9px] font-black text-muted-foreground uppercase tracking-widest block">
-                            VERSION DRAFT ARCHIVE
-                          </span>
-                          <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                            {clVersions.map((v) => (
-                              <button
-                                key={v.version}
-                                onClick={() => setClContent(v.content)}
-                                className="w-full flex justify-between items-center text-[10px] font-bold bg-background border border-border p-2 hover:border-accent hover:text-accent transition-colors"
-                              >
-                                <span>VERSION {v.version}</span>
-                                <span className="text-[8px] text-muted-foreground">
-                                  {new Date(v.created_at).toLocaleString("en-IN", { hour: "numeric", minute: "2-digit" })}
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                    </div>
-
-                    {/* Cover Letter Editor Workspace */}
-                    <div className="xl:col-span-7 space-y-4">
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-black tracking-widest uppercase">WORKSPACE WORKPAD</span>
-                        <div className="flex gap-2">
-                          {clContent && (
-                            <>
-                              <button
-                                onClick={() => saveDocument("cover_letter", clContent)}
-                                disabled={savingDoc}
-                                className="h-9 px-3 border-2 border-border hover:border-accent hover:text-accent bg-background text-xs font-bold uppercase flex items-center gap-1.5 active:scale-95 transition-all"
-                                title="Commit Draft Version"
-                              >
-                                <Save size={12} />
-                                <span>SAVE DRAFT</span>
-                              </button>
-                              <button
-                                onClick={() => downloadAsTextFile(`${company.name}_CoverLetter.txt`, clContent)}
-                                className="h-9 w-9 border-2 border-border hover:border-accent hover:text-accent bg-background flex items-center justify-center active:scale-95 transition-all"
-                                title="Download as Text"
-                              >
-                                <Download size={14} />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      
-                      <textarea
-                        value={clContent}
-                        onChange={(e) => setClContent(e.target.value)}
-                        placeholder="Cover Letter content will generate here... You can freely edit this content once loaded."
-                        className="w-full min-h-[480px] bg-background border-2 border-border p-6 font-mono text-xs leading-relaxed outline-none text-foreground select-text"
-                      />
-                    </div>
-
-                  </div>
-                )}
-
-                {/* 4. INTERVIEW PREP TAB */}
-                {activeTab === "prep" && (
-                  <div className="space-y-8">
-                    
-                    {/* Header with trigger button */}
-                    <div className="border-2 border-border p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-muted/10">
-                      <div className="space-y-1">
-                        <h3 className="text-lg font-black uppercase tracking-tighter">PLACEMENT INTERVIEW SIMULATION</h3>
-                        <p className="text-xs text-muted-foreground uppercase">
-                          Deterministic core CS / technical questions mapping to JD specifications. Generate Cloud questions for behavioral matching.
-                        </p>
-                      </div>
-                      
-                      <button
-                        onClick={runCloudPrep}
-                        disabled={generatingPrep}
-                        className="h-12 px-6 border-2 border-accent bg-accent text-black font-extrabold text-xs tracking-wider uppercase flex items-center gap-2 active:scale-95 transition-all shrink-0"
-                      >
-                        {generatingPrep ? (
-                          <>
-                            <Loader2 className="animate-spin h-3.5 w-3.5" />
-                            <span>GENERATING...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles size={12} />
-                            <span>GENERATE CLOUD QUESTIONS</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-
-                    {prepData ? (
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        
-                        {/* Technical Questions */}
-                        <div className="border-2 border-border p-5 space-y-4 bg-background">
-                          <span className="text-[10px] font-black bg-black text-accent border border-black px-2 py-0.5 tracking-widest uppercase">
-                            CORE TECHNICAL SPECIFIC
-                          </span>
-                          <div className="space-y-3.5 max-h-[400px] overflow-y-auto pr-1">
-                            {prepData.technical && prepData.technical.length > 0 ? (
-                              prepData.technical.map((q, i) => (
-                                <div key={i} className="border border-border p-3 space-y-2 bg-muted/5">
-                                  <p className="text-xs font-extrabold uppercase text-foreground leading-normal">{q}</p>
-                                  <span className="text-[8px] text-muted-foreground uppercase font-black">TOPIC MATCH: {company.jd_required_skills?.[0] || "COMPILERS/DBMS"}</span>
-                                </div>
-                              ))
-                            ) : (
-                              <p className="text-xs text-muted-foreground uppercase">No technical questions available.</p>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* HR Questions */}
-                        <div className="border-2 border-border p-5 space-y-4 bg-background">
-                          <span className="text-[10px] font-black bg-muted border border-border px-2 py-0.5 tracking-widest uppercase text-muted-foreground">
-                            HR & FOUNDATION QUESTIONS
-                          </span>
-                          <div className="space-y-3.5 max-h-[400px] overflow-y-auto pr-1">
-                            {prepData.hr && prepData.hr.length > 0 ? (
-                              prepData.hr.map((q, i) => (
-                                <div key={i} className="border border-border p-3 space-y-1 bg-muted/5">
-                                  <p className="text-xs font-extrabold uppercase text-foreground leading-normal">{q}</p>
-                                </div>
-                              ))
-                            ) : (
-                              <p className="text-xs text-muted-foreground uppercase">No HR questions available.</p>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Company Specific / Behavioral */}
-                        <div className="border-2 border-border p-5 space-y-4 bg-background">
-                          <span className="text-[10px] font-black bg-accent/20 border border-accent/20 px-2 py-0.5 tracking-widest uppercase text-accent">
-                            COMPANY SPECIFIC & BEHAVIORAL
-                          </span>
-                          <div className="space-y-3.5 max-h-[400px] overflow-y-auto pr-1">
-                            {prepData.company_specific && prepData.company_specific.length > 0 ? (
-                              prepData.company_specific.map((q, i) => (
-                                <div key={i} className="border border-border p-3 space-y-2 bg-accent/5 border-accent/20">
-                                  <p className="text-xs font-extrabold uppercase text-foreground leading-normal">{q}</p>
-                                </div>
-                              ))
-                            ) : (
-                              <p className="text-xs text-muted-foreground uppercase">Trigger Cloud AI to compile behavioral questions for this drive.</p>
-                            )}
-                          </div>
-                        </div>
-
                       </div>
                     ) : (
                       <div className="text-center py-20 border border-dashed border-border text-xs font-bold text-muted-foreground uppercase">
-                        Interview questions will compile here.
+                        Loading your workspace...
                       </div>
                     )}
-
                   </div>
                 )}
 
+                {/* 2. Keyword Highlights View */}
+                {optimizerSubView === "highlight" && (
+                  <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
+                    {/* Left: Job Description */}
+                    <div className="xl:col-span-5 border-2 border-border p-6 bg-card space-y-6 max-h-[650px] overflow-y-auto">
+                      <div className="flex items-center gap-2 border-b border-border pb-3">
+                        <FileText className="w-4 h-4 text-accent" />
+                        <h3 className="text-sm font-black uppercase tracking-widest text-foreground">JOB DESCRIPTION</h3>
+                      </div>
+                      
+                      <div className="space-y-4 text-xs leading-relaxed uppercase tracking-wider font-mono text-muted-foreground whitespace-pre-wrap select-text text-left">
+                        {company.jd_text ? (
+                          <HighlightedText text={company.jd_text} keywords={jdKeywords} />
+                        ) : (
+                          "No job description details available."
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Right: Master Resume */}
+                    <div className="xl:col-span-7 border-2 border-border p-6 bg-card space-y-6 max-h-[650px] overflow-y-auto">
+                      <div className="flex items-center justify-between border-b border-border pb-3">
+                        <div className="flex items-center gap-2">
+                          <Target className="w-4 h-4 text-accent" />
+                          <h3 className="text-sm font-black uppercase tracking-widest text-foreground">MASTER RESUME MATCH</h3>
+                        </div>
+                        <span className="bg-black text-accent border border-accent px-2 py-1 text-[10px] font-black uppercase tracking-widest">
+                          {matchStats.matchPercentage}% REAL MATCH
+                        </span>
+                      </div>
+
+                      {masterResume ? (
+                        <div className="space-y-6">
+                          {masterResume.summary && (
+                            <div className="space-y-2">
+                              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">SUMMARY</span>
+                              <p className="text-xs bg-muted/20 border border-border p-3 leading-relaxed uppercase tracking-wider font-mono text-left">
+                                <HighlightedText text={masterResume.summary} keywords={jdKeywords} />
+                              </p>
+                            </div>
+                          )}
+
+                          {masterResume.skills && masterResume.skills.length > 0 && (
+                            <div className="space-y-2">
+                              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">SKILLS & TECH STACK</span>
+                              <div className="flex flex-wrap gap-1.5 bg-muted/20 border border-border p-3">
+                                {masterResume.skills.map((skill: string, i: number) => {
+                                  const isMatch = jdKeywords.has(skill.toLowerCase().trim());
+                                  return (
+                                    <span 
+                                      key={i} 
+                                      className={`text-[9px] font-bold px-2 py-0.5 border uppercase transition-colors ${
+                                        isMatch ? "bg-yellow-500/20 border-yellow-500 text-yellow-500 font-black" : "bg-background border-border text-muted-foreground"
+                                      }`}
+                                    >
+                                      {skill}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          {masterResume.experience && masterResume.experience.length > 0 && (
+                            <div className="space-y-3">
+                              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">EXPERIENCE</span>
+                              <div className="space-y-3">
+                                {masterResume.experience.map((exp: any, i: number) => (
+                                  <div key={i} className="border border-border p-3.5 space-y-2 bg-muted/5 text-left">
+                                    <div className="flex justify-between items-baseline text-[10px] font-bold uppercase">
+                                      <span>
+                                        <span className="text-foreground">{exp.company}</span>
+                                        <span className="mx-1.5 text-muted-foreground">|</span>
+                                        <span className="text-muted-foreground font-medium">{exp.role}</span>
+                                      </span>
+                                      <span className="text-[8px] text-muted-foreground">{exp.period}</span>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground font-mono leading-relaxed whitespace-pre-wrap select-text uppercase tracking-wider">
+                                      <HighlightedText text={exp.description} keywords={jdKeywords} />
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {masterResume.projects && masterResume.projects.length > 0 && (
+                            <div className="space-y-3">
+                              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">PROJECTS</span>
+                              <div className="space-y-3">
+                                {masterResume.projects.map((proj: any, i: number) => (
+                                  <div key={i} className="border border-border p-3.5 space-y-2 bg-muted/5 text-left">
+                                    <div className="flex justify-between items-baseline text-[10px] font-bold uppercase">
+                                      <span className="text-foreground">{proj.title}</span>
+                                      {proj.tech && <span className="text-[8px] border border-border px-1.5 text-muted-foreground">{proj.tech}</span>}
+                                    </div>
+                                    <p className="text-xs text-muted-foreground font-mono leading-relaxed whitespace-pre-wrap select-text uppercase tracking-wider">
+                                      <HighlightedText text={proj.description} keywords={jdKeywords} />
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {masterResume.education && masterResume.education.length > 0 && (
+                            <div className="space-y-3">
+                              <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block border-b border-border pb-1">EDUCATION</span>
+                              <div className="space-y-2 bg-muted/20 border border-border p-3.5 text-left font-mono">
+                                {masterResume.education.map((edu: any, i: number) => (
+                                  <div key={i} className="flex justify-between items-center text-[10px] font-bold uppercase border-b border-border last:border-0 pb-1.5 last:pb-0">
+                                    <span className="text-foreground">{edu.degree} — {edu.institution}</span>
+                                    <span className="text-muted-foreground text-[8px]">{edu.year} | {edu.score}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-center py-20 text-xs font-bold text-muted-foreground uppercase border border-dashed border-border">
+                          No master resume available. Please create one in Student Profile first.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Live Resume Preview */}
+                {optimizerSubView === "preview" && (
+                  <div className="space-y-6">
+                    {/* Floating Premium controls bar */}
+                    <div className="flex flex-wrap gap-3 items-center justify-between border-2 border-border p-4 bg-muted/20 no-print">
+                      <div className="flex items-center gap-2 text-xs font-black uppercase text-accent">
+                        <Printer size={14} />
+                        <span>Interactive Preview & PDF Export</span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => window.print()}
+                          className="h-10 px-4 bg-accent text-black border border-accent hover:bg-black hover:text-accent hover:border-black text-[10px] font-black uppercase flex items-center gap-2 transition-all"
+                        >
+                          <Printer size={12} />
+                          <span>Save PDF / Print</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Paper layout wrapper */}
+                    <div className="w-full overflow-x-auto py-4 bg-zinc-950/10 border-2 border-dashed border-border">
+                      <div className="print-area shadow-2xl bg-white max-w-[800px] mx-auto">
+                        <ResumeTemplatePreview data={tailoredResumeData} template={selectedTemplate} />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
               <div className="text-center py-20 text-xs font-bold text-muted-foreground uppercase">
-                Select a placement drive announcement to display the AI Toolkit Workspace.
+                Select a placement drive announcement to display the AI Resume Optimizer.
               </div>
             )}
           </div>

@@ -86,15 +86,31 @@ async function generateWithTransformers(
   // Disable local models loading (fetching from local path)
   env.allowLocalModels = false;
   
-  if (!cachedGenerator || cachedModelName !== modelName) {
-    cachedGenerator = await pipeline("text-generation", modelName, {
-      progress_callback: (data: any) => {
-        if (data.status === "progress" && onProgress) {
-          onProgress(data.progress);
-        }
-      },
-    });
-    cachedModelName = modelName;
+  const globalObj = typeof window !== "undefined" ? (window as any) : {};
+
+  if (typeof window !== "undefined") {
+    if (!globalObj.__cachedGenerator || globalObj.__cachedModelName !== modelName) {
+      globalObj.__cachedGenerator = await pipeline("text-generation", modelName, {
+        progress_callback: (data: any) => {
+          if (data.status === "progress" && onProgress) {
+            onProgress(data.progress);
+          }
+          if (data.status === "ready" || data.status === "done") {
+            try {
+              localStorage.setItem(`model_downloaded_${modelName}`, "true");
+            } catch {}
+          }
+        },
+      });
+      globalObj.__cachedModelName = modelName;
+    }
+    cachedGenerator = globalObj.__cachedGenerator;
+    cachedModelName = globalObj.__cachedModelName;
+  } else {
+    if (!cachedGenerator || cachedModelName !== modelName) {
+      cachedGenerator = await pipeline("text-generation", modelName, {});
+      cachedModelName = modelName;
+    }
   }
 
   // Format prompt for Qwen or Llama chat models
