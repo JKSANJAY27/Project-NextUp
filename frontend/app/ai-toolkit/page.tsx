@@ -89,6 +89,66 @@ function cleanObjectStrings(obj: any): any {
   return obj;
 }
 
+function repairJSONString(jsonStr: string): string {
+  let s = jsonStr.trim();
+  
+  // Strip chat template tags
+  s = s.replace(/<\|im_start\|>system[\s\S]*?<\|im_end\|>/g, "");
+  s = s.replace(/<\|im_start\|>user[\s\S]*?<\|im_end\|>/g, "");
+  s = s.replace(/<\|im_start\|>assistant/gi, "");
+  s = s.replace(/<\|im_end\|>/gi, "");
+  s = s.replace(/<\/s>/gi, "");
+  s = s.replace(/<s>/gi, "");
+
+  // Locate the JSON boundaries
+  const firstBrace = s.indexOf("{");
+  const lastBrace = s.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    s = s.substring(firstBrace, lastBrace + 1);
+  } else {
+    return jsonStr;
+  }
+
+  let inString = false;
+  let escape = false;
+  let result = "";
+  
+  for (let i = 0; i < s.length; i++) {
+    const char = s[i];
+    
+    if (inString) {
+      if (escape) {
+        result += char;
+        escape = false;
+      } else if (char === "\\") {
+        result += char;
+        escape = true;
+      } else if (char === '"') {
+        const nextChars = s.substring(i + 1, i + 10).trim();
+        if (nextChars.startsWith(",") || nextChars.startsWith("}") || nextChars.startsWith("]") || nextChars.startsWith(":") || nextChars === "") {
+          inString = false;
+          result += char;
+        } else {
+          result += '\\"';
+        }
+      } else if (char === "\n") {
+        result += "\\n";
+      } else if (char === "\r") {
+        // Skip
+      } else {
+        result += char;
+      }
+    } else {
+      if (char === '"') {
+        inString = true;
+      }
+      result += char;
+    }
+  }
+  
+  return result;
+}
+
 function parseRobustLLMJSON(rawText: string): any {
   let cleanText = rawText.trim();
   
@@ -120,11 +180,18 @@ function parseRobustLLMJSON(rawText: string): any {
     .replace(/"(?:optimized项目|优化项目|optimized_projects_zh|projects_zh)"/gi, '"optimized_projects"')
     .replace(/"(?:optimized摘要|优化摘要|optimized_summary_zh|summary_zh)"/gi, '"optimized_summary"');
 
+  let repairedText = cleanText;
+  try {
+    repairedText = repairJSONString(cleanText);
+  } catch (repairErr) {
+    console.warn("JSON repair helper failed:", repairErr);
+  }
+
   let parsedResult: any = null;
 
   // Step 3: Try standard JSON.parse after basic comma cleaning
   try {
-    const cleanedCommas = cleanText.replace(/,\s*([}\]])/g, "$1");
+    const cleanedCommas = repairedText.replace(/,\s*([}\]])/g, "$1");
     parsedResult = JSON.parse(cleanedCommas);
   } catch (err) {
     console.warn("Standard JSON parse failed, attempting regex extraction fallback:", err);
@@ -964,7 +1031,16 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
 }`;
 
       // Check cache status
-      const isDownloaded = typeof window !== "undefined" && localStorage.getItem(`model_downloaded_${atsModel}`) === "true";
+      const modelNameMap: Record<string, string> = {
+        "qwen-0.5b": "Xenova/Qwen1.5-0.5B-Chat",
+        "llama-1b": "onnx-community/Llama-3.2-1B-Instruct",
+        "gemini-nano": "gemini-nano"
+      };
+      const modelFullName = modelNameMap[atsModel] || atsModel;
+      const isDownloaded = typeof window !== "undefined" && (
+        localStorage.getItem(`model_downloaded_${atsModel}`) === "true" ||
+        localStorage.getItem(`model_downloaded_${modelFullName}`) === "true"
+      );
       if (isDownloaded) {
         setLocalStatusMessage(`Waking up cached model ${atsModel}...`);
       } else {

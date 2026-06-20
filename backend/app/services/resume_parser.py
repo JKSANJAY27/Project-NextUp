@@ -197,13 +197,16 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     lines = [line.strip() for line in text.split("\n") if line.strip()]
 
     # 1. Attempt Name Extraction (first line is commonly the candidate's name)
+    full_name = "Student Candidate"
     if lines:
         for candidate in lines[:3]:
             if re.match(r"^[a-zA-Z\s\.]+$", candidate) and len(candidate) > 2 and len(candidate) < 30:
-                data["full_name"] = candidate.strip()
+                full_name = candidate.strip()
                 break
+    data["full_name"] = full_name
 
     # 2. CGPA Extraction
+    cgpa_val = 0.0
     cgpa_match = re.search(
         r"(?:cgpa|gpa|points)\s*(?:[:\-–\s])*\s*(\d\.\d{2})|(\d\.\d{2})\s*(?:/10|/10\.0)?\s*(?:cgpa|gpa)",
         text,
@@ -212,9 +215,10 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     if cgpa_match:
         val = cgpa_match.group(1) or cgpa_match.group(2)
         try:
-            data["cgpa"] = float(val)
+            cgpa_val = float(val)
         except ValueError:
             pass
+    data["cgpa"] = cgpa_val
 
     # 3. Branch Extraction
     branch_map = {
@@ -226,40 +230,378 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
         "CIVIL": ["civil"],
         "MCA": ["mca", "computer applications"]
     }
-    found_branch = None
+    found_branch = "CSE"
     for code, keywords in branch_map.items():
         for kw in keywords:
             if re.search(rf"\b{re.escape(kw)}\b", text, re.IGNORECASE):
                 found_branch = code
                 break
-        if found_branch:
+        if found_branch != "CSE":
             break
-    if found_branch:
-        data["branch"] = found_branch
+    data["branch"] = found_branch
 
     # 4. Tenth & Twelfth Marks Extraction
+    tenth_marks = 0.0
+    twelfth_marks = 0.0
     marks_matches = re.findall(r"(\d{2}(?:\.\d+)?)\s*%", text)
     if len(marks_matches) >= 2:
         try:
             vals = [float(v) for v in marks_matches]
-            data["twelfth_marks"] = vals[0]
-            data["tenth_marks"] = vals[1]
+            twelfth_marks = vals[0]
+            tenth_marks = vals[1]
         except ValueError:
             pass
     elif len(marks_matches) == 1:
         try:
-            data["twelfth_marks"] = float(marks_matches[0])
+            twelfth_marks = float(marks_matches[0])
         except ValueError:
             pass
+    data["tenth_marks"] = tenth_marks
+    data["twelfth_marks"] = twelfth_marks
 
     # 5. Batch Year Extraction
+    batch_year = 2026
     years = re.findall(r"\b(202[4-9]|2030)\b", text)
     if years:
         try:
-            data["batch_year"] = int(max(years))
+            batch_year = int(max(years))
         except ValueError:
             pass
+    data["batch_year"] = batch_year
 
+    # 6. Advanced Section Segmentation & Extraction
+    email = ""
+    phone = ""
+    location = ""
+    
+    # Simple basic info scans from first 5 lines
+    for line in lines[:5]:
+        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', line)
+        if email_match:
+            email = email_match.group(0)
+        phone_match = re.search(r'\+?\d[\d\s\(\)-]{8,14}\d', line)
+        if phone_match:
+            phone = phone_match.group(0)
+
+    # Segment text by headings
+    sections = {}
+    current_section = "personal"
+    sections[current_section] = []
+    
+    headings = {
+        'SUMMARY': 'summary',
+        'PROFESSIONAL SUMMARY': 'summary',
+        'PROFILE': 'summary',
+        'SKILLS': 'skills',
+        'TECHNICAL SKILLS': 'skills',
+        'CORE SKILLS': 'skills',
+        'EXPERIENCE': 'experience',
+        'WORK EXPERIENCE': 'experience',
+        'PROFESSIONAL EXPERIENCE': 'experience',
+        'PROJECTS': 'projects',
+        'ACADEMIC PROJECTS': 'projects',
+        'KEY PROJECTS': 'projects',
+        'EDUCATION': 'education',
+        'EDUCATION BACKGROUND': 'education',
+        'ACADEMIC BACKGROUND': 'education',
+        'PATENTS': 'patents',
+        'ACHIEVEMENTS': 'achievements',
+        'ACHIEVEMENTS & LEADERSHIP': 'achievements',
+        'AWARDS': 'achievements',
+    }
+    
+    for line in lines:
+        line_strip = line.strip()
+        if not line_strip:
+            continue
+        line_upper = line_strip.upper().rstrip(':').strip()
+        if line_upper in headings:
+            current_section = headings[line_upper]
+            sections[current_section] = []
+            continue
+        sections[current_section].append(line_strip)
+        
+    summary = " ".join(sections.get('summary', []))
+    
+    # Process Education
+    education_entries = []
+    edu_lines = sections.get('education', [])
+    current_edu = None
+    
+    for line in edu_lines:
+        is_new_edu = any(x in line.lower() for x in ['university', 'college', 'school', 'institute', 'vit', 'cbse', 'board', 'b.tech', 'm.tech', 'degree', 'intermediate', 'diploma'])
+        year_match = re.search(r'\b(20\d{2})\b', line)
+        
+        if is_new_edu or (year_match and not current_edu):
+            if current_edu:
+                education_entries.append(current_edu)
+            
+            # Extract score first if present in the same line
+            score_val = ""
+            score_match = re.search(r'(?:cgpa|gpa|score|percentage|marks|%)\s*[:\-–\s]*\s*(\d+(?:\.\d+)?%?|\d+\.\d+)', line, re.IGNORECASE)
+            if score_match:
+                score_val = score_match.group(0).strip()
+                line_no_score = line.replace(score_match.group(0), "")
+            else:
+                line_no_score = line
+
+            # Extract year range first to avoid splitting on year hyphen
+            year_val = ""
+            year_range_match = re.search(r'\b(19\d{2}|20\d{2})\s*[-–—to/]+\s*(19\d{2}|20\d{2})\b', line_no_score)
+            if year_range_match:
+                year_val = year_range_match.group(0)
+                clean_line = line_no_score.replace(year_val, "")
+            else:
+                single_year_match = re.search(r'\b(19\d{2}|20\d{2})\b', line_no_score)
+                if single_year_match:
+                    year_val = single_year_match.group(0)
+                    clean_line = line_no_score.replace(year_val, "")
+                else:
+                    clean_line = line_no_score
+
+            # Clean clean_line from double separators/commas
+            clean_line = re.sub(r'\s+', ' ', clean_line)
+            clean_line = re.sub(r',\s*,', ',', clean_line).strip(' ,-–—|')
+
+            # Split clean_line by comma, en-dash, em-dash, pipe
+            parts = [p.strip() for p in re.split(r'\s*[\u2014\u2013|,\t]\s*|\s+-\s+', clean_line) if p.strip()]
+
+            # Determine degree and institution from parts
+            degree = "Degree / Course"
+            institution = clean_line
+
+            if len(parts) >= 2:
+                filtered_parts = []
+                for p in parts:
+                    if any(x in p.lower() for x in ['cgpa', 'gpa', 'marks', '%']):
+                        if not score_val:
+                            score_val = p
+                    else:
+                        filtered_parts.append(p)
+
+                if len(filtered_parts) >= 2:
+                    p0, p1 = filtered_parts[0], filtered_parts[1]
+                    
+                    deg_keywords = ['b.tech', 'm.tech', 'b.e', 'mca', 'mba', 'ph.d', 'b.sc', 'm.sc', 'bachelor', 'master', 'degree', 'course', 'schooling', 'high school', 'cbse', 'icse', 'intermediate', 'diploma', 'hsc', 'sslc']
+                    inst_keywords = ['institute', 'university', 'college', 'school', 'vit', 'iit', 'nit', 'academy', 'vidyalaya']
+
+                    p0_has_inst = any(x in p0.lower() for x in inst_keywords)
+                    p1_has_deg = any(x in p1.lower() for x in deg_keywords)
+                    p0_has_deg = any(x in p0.lower() for x in deg_keywords)
+                    p1_has_inst = any(x in p1.lower() for x in inst_keywords)
+
+                    if p0_has_inst or p1_has_deg:
+                        institution = p0
+                        degree = p1
+                    elif p0_has_deg or p1_has_inst:
+                        degree = p0
+                        institution = p1
+                    else:
+                        degree = p0
+                        institution = p1
+                elif len(filtered_parts) == 1:
+                    institution = filtered_parts[0]
+
+            current_edu = {
+                "degree": degree.strip(),
+                "institution": institution.strip(),
+                "year": year_val.strip(),
+                "score": score_val.strip()
+            }
+        elif current_edu:
+            score_match = re.search(r'(?:cgpa|gpa|score|percentage|marks|%)\s*[:\-–\s]*\s*(\d+(?:\.\d+)?%?|\d+\.\d+)', line, re.IGNORECASE)
+            if score_match:
+                current_edu["score"] = score_match.group(0).strip()
+            elif not current_edu["score"] and any(x in line.lower() for x in ['cgpa', 'gpa', '%', 'marks']):
+                current_edu["score"] = line
+                
+    if current_edu:
+        education_entries.append(current_edu)
+        
+    # Process Experience
+    experience_entries = []
+    exp_lines = sections.get('experience', [])
+    current_exp = None
+    
+    for line in exp_lines:
+        is_bullet = line.startswith(('•', '*', '-', 'o ', '▪'))
+        has_date = re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b|\bPresent\b|\b20\d{2}\b', line, re.IGNORECASE)
+        
+        if not is_bullet and (has_date or (not current_exp and not is_bullet)):
+            if current_exp:
+                experience_entries.append(current_exp)
+                
+            # Extract date range first to avoid splitting on hyphen
+            period_val = ""
+            date_range_match = re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\s*[-–—to]+\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\bPresent\b)\b', line, re.IGNORECASE)
+            if date_range_match:
+                period_val = date_range_match.group(0)
+                clean_line = line.replace(period_val, "")
+            else:
+                single_date_match = re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b|\bPresent\b|\bSummer\s+\d{4}\b|\b20\d{2}\s*[-–—to]+\s*20\d{2}\b|\b20\d{2}\b', line, re.IGNORECASE)
+                if single_date_match:
+                    period_val = single_date_match.group(0)
+                    clean_line = line.replace(period_val, "")
+                else:
+                    clean_line = line
+
+            clean_line = re.sub(r'\s+', ' ', clean_line)
+            clean_line = re.sub(r',\s*,', ',', clean_line).strip(' ,-–—|()')
+
+            parts = [p.strip() for p in re.split(r'\s*[\u2014\u2013|,\t]\s*|\s+-\s+', clean_line) if p.strip()]
+            role = "Software Engineer Intern"
+            company = clean_line
+            
+            if len(parts) >= 2:
+                p0, p1 = parts[0], parts[1]
+                role_keywords = ['intern', 'developer', 'engineer', 'consultant', 'analyst', 'lead', 'manager', 'specialist', 'designer', 'programmer', 'architect', 'member', 'officer', 'scholar']
+                comp_keywords = ['solutions', 'technologies', 'technology', 'inc', 'ltd', 'limited', 'corp', 'corporation', 'co', 'company', 'labs', 'systems', 'valsco', 'university', 'institute']
+
+                p0_has_role = any(x in p0.lower() for x in role_keywords)
+                p1_has_comp = any(x in p1.lower() for x in comp_keywords)
+                p0_has_comp = any(x in p0.lower() for x in comp_keywords)
+                p1_has_role = any(x in p1.lower() for x in role_keywords)
+
+                if p0_has_role or p1_has_comp:
+                    role = p0
+                    company = p1
+                elif p0_has_comp or p1_has_role:
+                    company = p0
+                    role = p1
+                else:
+                    role = p0
+                    company = p1
+                    
+            role = re.sub(r'\s*[-–—|()]\s*$', '', role).strip()
+            company = re.sub(r'\s*[-–—|()]\s*$', '', company).strip()
+            company = re.sub(r'\s*\([^)]*\)\s*$', '', company).strip()
+            
+            current_exp = {
+                "role": role,
+                "company": company,
+                "period": period_val,
+                "description": ""
+            }
+        elif is_bullet and current_exp:
+            bullet_text = re.sub(r'^[•\*\-\s▪]+', '', line).strip()
+            if current_exp["description"]:
+                current_exp["description"] += "\n• " + bullet_text
+            else:
+                current_exp["description"] = "• " + bullet_text
+        elif current_exp:
+            if current_exp["description"]:
+                current_exp["description"] += "\n" + line
+            else:
+                current_exp["description"] = line
+                
+    if current_exp:
+        experience_entries.append(current_exp)
+        
+    # Process Projects
+    project_entries = []
+    proj_lines = sections.get('projects', [])
+    current_proj = None
+    
+    for line in proj_lines:
+        is_bullet = line.startswith(('•', '*', '-', 'o ', '▪'))
+        
+        is_header = False
+        if not is_bullet and len(line) > 0 and (line[0].isupper() or line[0].isdigit()):
+            has_separator = re.search(r'[\u2014\u2013|]|\s+-\s+', line)
+            has_tech = any(x in line.lower() for x in ['python', 'react', 'nodejs', 'fastapi', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain'])
+            if has_separator or (has_tech and len(line) < 100):
+                is_header = True
+        
+        if is_header:
+            if current_proj:
+                project_entries.append(current_proj)
+                
+            parts = re.split(r'\s*[\u2014\u2013|]\s*|\s+-\s+', line)
+            title = line
+            tech = ""
+            
+            if len(parts) >= 2:
+                title = parts[0].strip()
+                tech = ", ".join(p.strip() for p in parts[1:])
+            else:
+                # Check for comma separation
+                comma_parts = [p.strip() for p in line.split(',') if p.strip()]
+                if len(comma_parts) >= 2:
+                    tech_words = ['python', 'react', 'fastapi', 'supabase', 'nodejs', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain', 'html', 'css', 'tailwind', 'typescript', 'langgraph', 'langfuse']
+                    p1_has_tech = any(x in comma_parts[1].lower() for x in tech_words)
+                    if p1_has_tech:
+                        title = comma_parts[0]
+                        tech = ", ".join(comma_parts[1:])
+                        
+                        # See if title ends with a tech keyword like Python
+                        for tw in tech_words:
+                            pattern = rf'\b{re.escape(tw)}\b$'
+                            match = re.search(pattern, title, re.IGNORECASE)
+                            if match:
+                                tech = title[match.start():].strip() + ", " + tech
+                                title = title[:match.start()].strip()
+                                break
+            
+            title = re.sub(r'\s*[-–—|()]\s*$', '', title).strip()
+            title = re.sub(r'\s*\([^)]*\)\s*$', '', title).strip()
+            tech = re.sub(r'\s*[-–—|()]\s*$', '', tech).strip()
+            
+            current_proj = {
+                "title": title,
+                "tech": tech,
+                "description": ""
+            }
+        elif is_bullet and current_proj:
+            bullet_text = re.sub(r'^[•\*\-\s▪]+', '', line).strip()
+            if current_proj["description"]:
+                current_proj["description"] += "\n• " + bullet_text
+            else:
+                current_proj["description"] = "• " + bullet_text
+        elif current_proj:
+            if current_proj["description"]:
+                current_proj["description"] += "\n" + line
+            else:
+                current_proj["description"] = line
+                
+    if current_proj:
+        project_entries.append(current_proj)
+        
+    # Process Patents
+    patents = []
+    patent_lines = sections.get('patents', [])
+    for line in patent_lines:
+        if line.strip():
+            patents.append(re.sub(r'^[•\*\-\s▪]+', '', line).strip())
+            
+    # Process Achievements
+    achievements = []
+    ach_lines = sections.get('achievements', [])
+    for line in ach_lines:
+        if line.strip():
+            achievements.append(re.sub(r'^[•\*\-\s▪]+', '', line).strip())
+
+    # Build resume_data structure
+    data["resume_data"] = {
+        "personal": {
+            "name": full_name,
+            "email": email,
+            "phone": phone,
+            "location": location,
+            "title": "",
+            "github": "",
+            "linkedin": "",
+            "website": ""
+        },
+        "summary": summary,
+        "education": education_entries,
+        "experience": experience_entries,
+        "projects": project_entries,
+        "skills": extract_skills_from_text(text),
+        "certifications": [],
+        "languages": [],
+        "awards": patents + achievements
+    }
+    
     return data
 
 def parse_resume_pdf(file_bytes: bytes) -> Dict[str, Any]:

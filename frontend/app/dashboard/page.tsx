@@ -2813,33 +2813,12 @@ function DashboardPageContent() {
                     <div className="pt-6 space-y-4">
                       <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">LAUNCH TOOLKIT ACTIONS</h4>
                       
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
                         <Link
                           href={`/ai-toolkit?companyId=${selectedCompany.id}&tab=ats`}
-                          className="flex items-center justify-between border border-border p-4 bg-muted/15 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase"
+                          className="flex items-center justify-between border border-border p-4 bg-muted/15 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase w-full"
                         >
                           <span className="text-xs font-black tracking-wider">Tailor & Optimize Resume</span>
-                          <ArrowRight size={14} />
-                        </Link>
-                        <Link
-                          href={`/ai-toolkit?companyId=${selectedCompany.id}&tab=sop`}
-                          className="flex items-center justify-between border border-border p-4 bg-muted/15 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase"
-                        >
-                          <span className="text-xs font-black tracking-wider">Generate Statement of Purpose</span>
-                          <ArrowRight size={14} />
-                        </Link>
-                        <Link
-                          href={`/ai-toolkit?companyId=${selectedCompany.id}&tab=cl`}
-                          className="flex items-center justify-between border border-border p-4 bg-muted/15 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase"
-                        >
-                          <span className="text-xs font-black tracking-wider">Draft Cover Letter</span>
-                          <ArrowRight size={14} />
-                        </Link>
-                        <Link
-                          href={`/ai-toolkit?companyId=${selectedCompany.id}&tab=prep`}
-                          className="flex items-center justify-between border border-border p-4 bg-muted/15 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase"
-                        >
-                          <span className="text-xs font-black tracking-wider">Practice Mock Interview Questions</span>
                           <ArrowRight size={14} />
                         </Link>
                       </div>
