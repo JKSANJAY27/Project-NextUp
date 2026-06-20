@@ -9,7 +9,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
 import { isProfileComplete } from "@/lib/profile-utils";
 import api from "@/lib/api";
-import { decryptData, encryptData } from "@/lib/crypto";
+import { decryptData, encryptData, deriveKey, exportKeyToHex } from "@/lib/crypto";
 import {
   Sparkles,
   Save,
@@ -25,7 +25,9 @@ import {
   Printer,
   Eye,
   Edit,
-  Highlighter
+  Highlighter,
+  ShieldCheck,
+  Unlock
 } from "lucide-react";
 import {
   generateInBrowser,
@@ -65,6 +67,28 @@ interface ATSResult {
 /**
  * Robust JSON extraction and fallback regex parsing to handle malformed LLM outputs.
  */
+function stripChineseCharacters(text: string): string {
+  return text.replace(/[\u4e00-\u9fa5]/g, "").trim();
+}
+
+function cleanObjectStrings(obj: any): any {
+  if (typeof obj === "string") {
+    return stripChineseCharacters(obj);
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(cleanObjectStrings);
+  }
+  if (obj !== null && typeof obj === "object") {
+    const cleaned: any = {};
+    for (const key of Object.keys(obj)) {
+      const cleanKey = stripChineseCharacters(key);
+      cleaned[cleanKey] = cleanObjectStrings(obj[key]);
+    }
+    return cleaned;
+  }
+  return obj;
+}
+
 function parseRobustLLMJSON(rawText: string): any {
   let cleanText = rawText.trim();
   
@@ -90,55 +114,102 @@ function parseRobustLLMJSON(rawText: string): any {
     cleanText = cleanText.substring(firstBrace, lastBrace + 1);
   }
 
+  // Pre-cleaning: Map common Chinese/hallucinated keys to correct English equivalents in the raw text
+  cleanText = cleanText
+    .replace(/"(?:optimized技能|optimized技能培训|优化技能|优化技能培训|optimized_skills_zh|skills_zh)"/gi, '"optimized_skills"')
+    .replace(/"(?:optimized项目|优化项目|optimized_projects_zh|projects_zh)"/gi, '"optimized_projects"')
+    .replace(/"(?:optimized摘要|优化摘要|optimized_summary_zh|summary_zh)"/gi, '"optimized_summary"');
+
+  let parsedResult: any = null;
+
   // Step 3: Try standard JSON.parse after basic comma cleaning
   try {
     const cleanedCommas = cleanText.replace(/,\s*([}\]])/g, "$1");
-    return JSON.parse(cleanedCommas);
+    parsedResult = JSON.parse(cleanedCommas);
   } catch (err) {
     console.warn("Standard JSON parse failed, attempting regex extraction fallback:", err);
   }
 
-  // Step 4: Regex-based fallback parser
-  try {
-    const fallbackObj: any = {};
+  // Step 4: Regex-based fallback parser if JSON.parse failed
+  if (!parsedResult) {
+    try {
+      const fallbackObj: any = {};
 
-    // Extract optimized_skills / skills array
-    const skillsMatch = cleanText.match(/"(?:optimized_skills|skills)"\s*:\s*\[([\s\S]*?)\]/i);
-    if (skillsMatch) {
-      const items = skillsMatch[1].match(/"([^"]+)"|'([^']+)'/g);
-      if (items) {
-        fallbackObj.optimized_skills = items.map(item => item.replace(/^["']|["']$/g, ""));
+      // Extract optimized_skills / skills / 技能 array
+      const skillsMatch = cleanText.match(/"(?:optimized_skills|skills|optimized技能|optimized技能培训|优化技能|优化技能培训)"\s*:\s*\[([\s\S]*?)\]/i);
+      if (skillsMatch) {
+        const items = skillsMatch[1].match(/"([^"]+)"|'([^']+)'/g);
+        if (items) {
+          fallbackObj.optimized_skills = items.map(item => item.replace(/^["']|["']$/g, ""));
+        }
+      }
+
+      // Extract optimized_summary / summary / 摘要
+      const summaryMatch = cleanText.match(/"(?:optimized_summary|summary|optimized摘要|优化摘要)"\s*:\s*"([\s\S]*?)"(?=\s*,|\s*})/i);
+      if (summaryMatch) {
+        fallbackObj.optimized_summary = summaryMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+      }
+
+      // Extract optimized_projects / projects / 项目 array of objects
+      const projectsMatch = cleanText.match(/"(?:optimized_projects|projects|optimized项目|优化项目)"\s*:\s*\[([\s\S]*?)\]/i);
+      if (projectsMatch) {
+        const projArrayText = projectsMatch[1];
+        const projObjects = projArrayText.match(/\{([\s\S]*?)\}/g);
+        if (projObjects) {
+          fallbackObj.optimized_projects = projObjects.map((projText: string) => {
+            const titleMatch = projText.match(/"title"\s*:\s*"([^"]*)"/i);
+            const descMatch = projText.match(/"description"\s*:\s*"([^"]*)"/i);
+            return {
+              title: titleMatch ? titleMatch[1] : "Project",
+              description: descMatch ? descMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"') : ""
+            };
+          });
+        }
+      }
+
+      if (fallbackObj.optimized_summary || (fallbackObj.optimized_skills && fallbackObj.optimized_skills.length > 0)) {
+        parsedResult = fallbackObj;
+      }
+    } catch (regexErr) {
+      console.error("Regex fallback parser failed:", regexErr);
+    }
+  }
+
+  // Step 5: Normalize and clean keys if we got an object
+  if (parsedResult) {
+    const normalized: any = {};
+    for (const key of Object.keys(parsedResult)) {
+      const lowerKey = key.toLowerCase();
+      if (lowerKey.includes("skill") || lowerKey.includes("技能") || lowerKey.includes("培训")) {
+        normalized.optimized_skills = parsedResult[key];
+      } else if (lowerKey.includes("project") || lowerKey.includes("项目")) {
+        normalized.optimized_projects = parsedResult[key];
+      } else if (lowerKey.includes("summary") || lowerKey.includes("摘要") || lowerKey.includes("profile")) {
+        normalized.optimized_summary = parsedResult[key];
+      } else {
+        normalized[key] = parsedResult[key];
       }
     }
 
-    // Extract optimized_summary / summary
-    const summaryMatch = cleanText.match(/"(?:optimized_summary|summary)"\s*:\s*"([\s\S]*?)"(?=\s*,|\s*})/i);
-    if (summaryMatch) {
-      fallbackObj.optimized_summary = summaryMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
-    }
+    // Default missing fields to keep it conformant to ATSResult tailored_resume structure
+    if (!normalized.optimized_skills) normalized.optimized_skills = [];
+    if (!normalized.optimized_projects) normalized.optimized_projects = [];
+    if (!normalized.optimized_summary) normalized.optimized_summary = "";
 
-    // Extract optimized_projects / projects array of objects
-    const projectsMatch = cleanText.match(/"(?:optimized_projects|projects)"\s*:\s*\[([\s\S]*?)\]/i);
-    if (projectsMatch) {
-      const projArrayText = projectsMatch[1];
-      const projObjects = projArrayText.match(/\{([\s\S]*?)\}/g);
-      if (projObjects) {
-        fallbackObj.optimized_projects = projObjects.map((projText: string) => {
-          const titleMatch = projText.match(/"title"\s*:\s*"([^"]*)"/i);
-          const descMatch = projText.match(/"description"\s*:\s*"([^"]*)"/i);
-          return {
-            title: titleMatch ? titleMatch[1] : "Project",
-            description: descMatch ? descMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"') : ""
-          };
-        });
+    // Force arrays and structures
+    if (normalized.optimized_skills && !Array.isArray(normalized.optimized_skills)) {
+      if (typeof normalized.optimized_skills === "string") {
+        normalized.optimized_skills = [normalized.optimized_skills];
+      } else {
+        normalized.optimized_skills = [];
       }
     }
-
-    if (fallbackObj.optimized_summary || (fallbackObj.optimized_skills && fallbackObj.optimized_skills.length > 0)) {
-      return fallbackObj;
+    if (normalized.optimized_projects && !Array.isArray(normalized.optimized_projects)) {
+      normalized.optimized_projects = [];
     }
-  } catch (regexErr) {
-    console.error("Regex fallback parser failed:", regexErr);
+
+    // Recursively clean all Chinese characters from the keys and values of the final object
+    return cleanObjectStrings(normalized);
   }
 
   throw new Error("Local model returned an unparseable response. Please try again.");
@@ -614,10 +685,51 @@ function ResumeTemplatePreview({ data, template }: { data: any; template: string
   }
 }
 
+async function getDeterministicSalt(email: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(email.trim().toLowerCase());
+  const hashBuffer = await window.crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 function AIToolkitContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { user, token, encryptionKey } = useAppStore();
+  const { user, token, encryptionKey, setEncryptionKey } = useAppStore();
+
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [unlockError, setUnlockError] = useState("");
+  const [unlockLoading, setUnlockLoading] = useState(false);
+
+  const handleUnlock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setUnlockError("");
+    setUnlockLoading(true);
+
+    if (!user) return;
+
+    try {
+      const emailSalt = await getDeterministicSalt(user.email);
+      const key = await deriveKey(unlockPassword, emailSalt);
+      const keyHex = await exportKeyToHex(key);
+
+      // Verify key is correct by attempting to decrypt neo_id_enc (if it exists)
+      if (user.neo_id_enc && user.neo_id_enc !== "UNSET") {
+        await decryptData(user.neo_id_enc, key);
+      }
+
+      setEncryptionKey(key, keyHex);
+      // Re-trigger data loading for active company
+      if (companyId) {
+        await loadCompanyData(companyId);
+      }
+    } catch {
+      setUnlockError("INCORRECT PASSWORD. DECRYPTION KEY IS INVALID.");
+    } finally {
+      setUnlockLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!token) {
@@ -1283,6 +1395,63 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
 
   if (!token || (user && !isProfileComplete(user))) {
     return null;
+  }
+
+  if (!encryptionKey) {
+    return (
+      <div className="min-h-screen bg-background text-foreground flex flex-col justify-center items-center font-sans p-8">
+        <div className="max-w-md w-full border-2 border-border bg-card p-8 md:p-12 space-y-8">
+          <div className="space-y-4 text-center">
+            <div className="inline-flex h-12 w-12 items-center justify-center bg-accent text-black border-2 border-black">
+              <ShieldCheck size={24} />
+            </div>
+            <h1 className="text-3xl font-extrabold tracking-tighter uppercase leading-none">
+              VAULT LOCKED
+            </h1>
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest leading-relaxed">
+              Your placement information is stored securely. Enter your password to derive the decryption key in-memory.
+            </p>
+          </div>
+
+          {unlockError && (
+            <div className="border-2 border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-600 uppercase tracking-wider text-center">
+              {unlockError}
+            </div>
+          )}
+
+          <form onSubmit={handleUnlock} className="space-y-6">
+            <div className="space-y-2">
+              <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase block">
+                PASSWORD
+              </label>
+              <input
+                type="password"
+                required
+                value={unlockPassword}
+                onChange={(e) => setUnlockPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full h-14 border-2 border-border bg-transparent text-xl font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-4 transition-colors"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={unlockLoading}
+              className="flex w-full items-center justify-center gap-3 h-14 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-50"
+            >
+              <Unlock size={16} />
+              <span>{unlockLoading ? "UNLOCKING..." : "UNLOCK VAULT"}</span>
+            </button>
+          </form>
+
+          <div className="text-center">
+            <Link href="/dashboard" className="text-xs font-bold text-accent uppercase tracking-widest hover:underline">
+              ← Return to Dashboard
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

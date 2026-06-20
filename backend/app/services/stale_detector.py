@@ -3,6 +3,13 @@ from typing import List
 from sqlalchemy.orm import Session, joinedload
 from app.models.models import Application, CompanyEvent
 
+def make_naive(dt: datetime) -> datetime:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
 def is_application_stale(app: Application) -> bool:
     """
     Checks if a student application tracker is stale:
@@ -17,14 +24,16 @@ def is_application_stale(app: Application) -> bool:
         return False
         
     # Baseline update time is the latest of applied_at and last_user_activity_at
-    dates = [d for d in (app.applied_at, app.last_user_activity_at) if d is not None]
+    dates = [make_naive(d) for d in (app.applied_at, app.last_user_activity_at) if d is not None]
     last_update_time = max(dates) if dates else datetime.utcnow()
     
     # Check if there are any company events that are newer
     if app.company and app.company.events:
         for event in app.company.events:
-            if event.timestamp and event.timestamp > last_update_time:
-                last_update_time = event.timestamp
+            if event.timestamp:
+                evt_ts = make_naive(event.timestamp)
+                if evt_ts > last_update_time:
+                    last_update_time = evt_ts
                 
     now = datetime.utcnow()
     # Stale if no updates for 30 days

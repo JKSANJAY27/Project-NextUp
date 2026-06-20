@@ -121,8 +121,8 @@ async function generateWithTransformers(
 
   const output = await cachedGenerator(formattedPrompt, {
     max_new_tokens: maxTokens,
-    temperature: 0.7,
-    do_sample: true,
+    temperature: 0.01,
+    do_sample: false,
     callback_function: (beams: any) => {
       // Access current text from generation beams
       if (onToken && beams && beams[0]) {

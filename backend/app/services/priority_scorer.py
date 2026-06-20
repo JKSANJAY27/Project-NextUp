@@ -2,6 +2,13 @@ from datetime import datetime, timedelta
 from typing import List
 from app.models.models import Application, Company, CompanyEvent
 
+def make_naive(dt: datetime) -> datetime:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
 def calculate_priority_score(app: Application, company: Company, events: List[CompanyEvent]) -> int:
     """
     Calculates dynamic priority score:
@@ -36,7 +43,7 @@ def calculate_baseline_priority(app: Application, company: Company, events: List
     # Scale up to +50 points as deadlines get closer (e.g. less than 24 hours).
     if company and company.registration_deadline:
         now = datetime.utcnow()
-        deadline = company.registration_deadline
+        deadline = make_naive(company.registration_deadline)
         if deadline > now:
             diff = deadline - now
             hours_remaining = diff.total_seconds() / 3600
@@ -51,14 +58,18 @@ def calculate_baseline_priority(app: Application, company: Company, events: List
     now = datetime.utcnow()
     has_recent_update = False
     
-    if app.last_user_activity_at and (now - app.last_user_activity_at) <= timedelta(hours=48):
-        has_recent_update = True
+    if app.last_user_activity_at:
+        last_act = make_naive(app.last_user_activity_at)
+        if (now - last_act) <= timedelta(hours=48):
+            has_recent_update = True
         
     if events:
         for event in events:
-            if event.timestamp and (now - event.timestamp) <= timedelta(hours=48):
-                has_recent_update = True
-                break
+            if event.timestamp:
+                evt_ts = make_naive(event.timestamp)
+                if (now - evt_ts) <= timedelta(hours=48):
+                    has_recent_update = True
+                    break
                 
     if has_recent_update:
         score += 20
