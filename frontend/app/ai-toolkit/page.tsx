@@ -65,7 +65,7 @@ interface ATSResult {
 /**
  * Robust JSON extraction and fallback regex parsing to handle malformed LLM outputs.
  */
-function parseRobustLLMJSON(rawText: string): ATSResult {
+function parseRobustLLMJSON(rawText: string): any {
   let cleanText = rawText.trim();
   
   // Step 1: Strip markdown block wrappers
@@ -100,53 +100,30 @@ function parseRobustLLMJSON(rawText: string): ATSResult {
 
   // Step 4: Regex-based fallback parser
   try {
-    const fallbackObj: ATSResult = {
-      ats_score: 85,
-      missing_keywords: [],
-      tailored_resume: {
-        optimized_skills: [],
-        optimized_projects: [],
-        optimized_summary: ""
-      }
-    };
+    const fallbackObj: any = {};
 
-    // Extract ats_score
-    const scoreMatch = cleanText.match(/"ats_score"\s*:\s*(\d+)/i);
-    if (scoreMatch) {
-      fallbackObj.ats_score = parseInt(scoreMatch[1]);
-    }
-
-    // Extract missing_keywords array
-    const missingMatch = cleanText.match(/"missing_keywords"\s*:\s*\[([\s\S]*?)\]/i);
-    if (missingMatch) {
-      const items = missingMatch[1].match(/"([^"]+)"|'([^']+)'/g);
-      if (items) {
-        fallbackObj.missing_keywords = items.map(item => item.replace(/^["']|["']$/g, ""));
-      }
-    }
-
-    // Extract optimized_skills array
-    const skillsMatch = cleanText.match(/"optimized_skills"\s*:\s*\[([\s\S]*?)\]/i);
+    // Extract optimized_skills / skills array
+    const skillsMatch = cleanText.match(/"(?:optimized_skills|skills)"\s*:\s*\[([\s\S]*?)\]/i);
     if (skillsMatch) {
       const items = skillsMatch[1].match(/"([^"]+)"|'([^']+)'/g);
       if (items) {
-        fallbackObj.tailored_resume.optimized_skills = items.map(item => item.replace(/^["']|["']$/g, ""));
+        fallbackObj.optimized_skills = items.map(item => item.replace(/^["']|["']$/g, ""));
       }
     }
 
-    // Extract optimized_summary
-    const summaryMatch = cleanText.match(/"optimized_summary"\s*:\s*"([\s\S]*?)"(?=\s*,|\s*})/i);
+    // Extract optimized_summary / summary
+    const summaryMatch = cleanText.match(/"(?:optimized_summary|summary)"\s*:\s*"([\s\S]*?)"(?=\s*,|\s*})/i);
     if (summaryMatch) {
-      fallbackObj.tailored_resume.optimized_summary = summaryMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+      fallbackObj.optimized_summary = summaryMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
     }
 
-    // Extract optimized_projects array of objects
-    const projectsMatch = cleanText.match(/"optimized_projects"\s*:\s*\[([\s\S]*?)\]/i);
+    // Extract optimized_projects / projects array of objects
+    const projectsMatch = cleanText.match(/"(?:optimized_projects|projects)"\s*:\s*\[([\s\S]*?)\]/i);
     if (projectsMatch) {
       const projArrayText = projectsMatch[1];
       const projObjects = projArrayText.match(/\{([\s\S]*?)\}/g);
       if (projObjects) {
-        fallbackObj.tailored_resume.optimized_projects = projObjects.map((projText: string) => {
+        fallbackObj.optimized_projects = projObjects.map((projText: string) => {
           const titleMatch = projText.match(/"title"\s*:\s*"([^"]*)"/i);
           const descMatch = projText.match(/"description"\s*:\s*"([^"]*)"/i);
           return {
@@ -157,8 +134,7 @@ function parseRobustLLMJSON(rawText: string): ATSResult {
       }
     }
 
-    // Validation
-    if (fallbackObj.tailored_resume.optimized_summary || fallbackObj.tailored_resume.optimized_skills.length > 0) {
+    if (fallbackObj.optimized_summary || (fallbackObj.optimized_skills && fallbackObj.optimized_skills.length > 0)) {
       return fallbackObj;
     }
   } catch (regexErr) {
@@ -824,39 +800,55 @@ function AIToolkitContent() {
       
       const resumeData = resMe.data.resume_data;
 
-      const prompt = `You are a professional ATS optimizer. Analyze the student's Resume JSON and the Job Description text.
-Generate a JSON output tailoring the resume to fit the JD perfectly.
+      // 1. Calculate missing keywords and ATS match score deterministically in JS
+      const resumeTextForMatch = [
+        resumeData.personal?.name || "",
+        resumeData.personal?.location || "",
+        resumeData.summary || "",
+        ...(resumeData.skills || []),
+        ...(resumeData.education || []).map((e: any) => `${e.degree} ${e.institution}`),
+        ...(resumeData.experience || []).map((e: any) => `${e.role} ${e.company} ${e.description}`),
+        ...(resumeData.projects || []).map((e: any) => `${e.title} ${e.tech} ${e.description}`),
+      ].join(" ");
+      
+      const deterministicMatch = calculateMatchStats(resumeTextForMatch, jdKeywords);
+      const missingKeywordsVal = Array.from(jdKeywords).filter(k => !deterministicMatch.matchedKeywords.has(k.toLowerCase().trim()));
+      const atsScoreVal = deterministicMatch.matchPercentage;
 
-TRUTHFULNESS & GROUNDING RULES:
-1. ONLY modify text phrasing to better align with the JD; NEVER invent metrics, years of experience, certifications, or achievements.
-2. NEVER modify or invent candidate name, contact details, company names, job titles, institutions, degrees, or dates.
-3. Keep project titles exactly as they are in the original resume.
-4. Do NOT use buzzwords or fluff (e.g., spearheaded, synergized, revolutionized, best-in-class). Write simple, direct, metric-driven accomplishments.
-5. Emphasize matching skills and keywords from the Job Description where supported by candidate experience.
+      // 2. Compact JD and Resume to prevent model attention issues and context exhaustion
+      const compactResumeData = {
+        personal: {
+          title: resumeData.personal?.title || ""
+        },
+        summary: resumeData.summary || "",
+        skills: resumeData.skills || [],
+        projects: (resumeData.projects || []).map((p: any) => ({ title: p.title, description: p.description }))
+      };
 
-Student Resume Data:
-${JSON.stringify(resumeData)}
+      const compactJDText = (company.jd_text || "").substring(0, 800) + "...";
 
-Company JD Text:
-${company.jd_text || ""}
+      const prompt = `You are a professional ATS optimizer. Optimize the student's Resume details to fit this Job Description.
+
+Job Title: ${company.role} at ${company.name}
+Job Description Context:
+${compactJDText}
 
 Required Skills:
 ${(company.jd_required_skills || []).join(", ")}
 
-Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in conversational intro/outro, do NOT add prefix explanations, start directly with the JSON):
+Original Student Resume details:
+${JSON.stringify(compactResumeData)}
+
+Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in conversational intro/outro, start directly with the JSON):
 {
-  "ats_score": 85,
-  "missing_keywords": ["Kubernetes", "Redis"],
-  "tailored_resume": {
-    "optimized_skills": ["Python", "React", "Docker"],
-    "optimized_projects": [
-      {
-        "title": "Project Title",
-        "description": "Optimized description highlighting matching keywords from the JD based on original text"
-      }
-    ],
-    "optimized_summary": "Tailored professional profile summary matching the role requirements."
-  }
+  "optimized_skills": ["Skill1", "Skill2"],
+  "optimized_projects": [
+    {
+      "title": "Project Title",
+      "description": "Optimized description highlighting matching keywords from the JD based on original text"
+    }
+  ],
+  "optimized_summary": "Tailored professional profile summary matching the role requirements."
 }`;
 
       // Check cache status
@@ -879,7 +871,23 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
 
       try {
         const parsed = parseRobustLLMJSON(result);
-        setAtsResult(parsed);
+        
+        // Extract and normalize fields to handle both nested (tailored_resume) and flat structures
+        const optSummary = parsed.optimized_summary || parsed.summary || parsed.tailored_resume?.optimized_summary || parsed.tailored_resume?.summary || "";
+        const optSkills = parsed.optimized_skills || parsed.skills || parsed.tailored_resume?.optimized_skills || parsed.tailored_resume?.skills || resumeData.skills || [];
+        const optProjects = parsed.optimized_projects || parsed.projects || parsed.tailored_resume?.optimized_projects || parsed.tailored_resume?.projects || resumeData.projects || [];
+
+        const mergedATSResult: ATSResult = {
+          ats_score: atsScoreVal,
+          missing_keywords: missingKeywordsVal,
+          tailored_resume: {
+            optimized_skills: optSkills,
+            optimized_projects: optProjects,
+            optimized_summary: optSummary
+          }
+        };
+
+        setAtsResult(mergedATSResult);
         showSuccess("Local Browser AI tailoring completed successfully.");
       } catch (parseErr) {
         console.error("Local LLM JSON parse/regex error:", parseErr, "Raw output:", result);

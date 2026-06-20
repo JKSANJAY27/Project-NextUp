@@ -116,7 +116,7 @@ async function generateWithTransformers(
   // Format prompt for Qwen or Llama chat models
   let formattedPrompt = prompt;
   if (modelName.includes("Qwen")) {
-    formattedPrompt = `<|im_start|>system\nYou are a professional placement assistant. Write high-quality, professional job application documents.<|im_end|>\n<|im_start|>user\n${prompt}<|im_end|>\n<|im_start|>assistant\n`;
+    formattedPrompt = `<|im_start|>system\nYou are a professional placement assistant. Write high-quality, professional job application documents in English only. Do NOT output any Chinese words, characters, or keys under any circumstances.<|im_end|>\n<|im_start|>user\n${prompt}<|im_end|>\n<|im_start|>assistant\n`;
   }
 
   const output = await cachedGenerator(formattedPrompt, {

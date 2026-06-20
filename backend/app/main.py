@@ -26,7 +26,12 @@ async def log_requests(request: Request, call_next):
 # Set CORS origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For development. Customize in production.
+    allow_origins=[
+        "http://localhost:3000",
+        "https://project-next-up.vercel.app",
+        "https://project-nextup.vercel.app"
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
