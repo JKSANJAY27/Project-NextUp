@@ -570,15 +570,29 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     patents = []
     patent_lines = sections.get('patents', [])
     for line in patent_lines:
-        if line.strip():
-            patents.append(re.sub(r'^[•\*\-\s▪]+', '', line).strip())
+        line_strip = line.strip()
+        if not line_strip:
+            continue
+        is_bullet = line_strip.startswith(('•', '*', '-', 'o ', '▪'))
+        clean_text = re.sub(r'^[•\*\-\s▪]+', '', line_strip).strip()
+        if is_bullet or not patents:
+            patents.append(clean_text)
+        else:
+            patents[-1] += " " + clean_text
             
     # Process Achievements
     achievements = []
     ach_lines = sections.get('achievements', [])
     for line in ach_lines:
-        if line.strip():
-            achievements.append(re.sub(r'^[•\*\-\s▪]+', '', line).strip())
+        line_strip = line.strip()
+        if not line_strip:
+            continue
+        is_bullet = line_strip.startswith(('•', '*', '-', 'o ', '▪'))
+        clean_text = re.sub(r'^[•\*\-\s▪]+', '', line_strip).strip()
+        if is_bullet or not achievements:
+            achievements.append(clean_text)
+        else:
+            achievements[-1] += " " + clean_text
 
     # Build resume_data structure
     data["resume_data"] = {

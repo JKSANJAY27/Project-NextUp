@@ -173,7 +173,7 @@ export async function generateInBrowser({
     return generateWithTransformers("Xenova/Qwen1.5-0.5B-Chat", prompt, maxTokens || 512, onProgress, onToken);
   } else if (modelType === "llama-1b") {
     // Llama 3.2 1B instruct (quantized ONNX community)
-    return generateWithTransformers("onnx-community/Llama-3.2-1B-Instruct", prompt, maxTokens || 512, onProgress, onToken);
+    return generateWithTransformers("onnx-community/Llama-3.2-1B-Instruct-ONNX", prompt, maxTokens || 512, onProgress, onToken);
   } else {
     throw new Error(`Unsupported browser model type: ${modelType}`);
   }
