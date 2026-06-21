@@ -168,7 +168,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
         # Strip fully-formed HTML tags
         text = re.sub(r'<[^>]*>', ' ', text)
         # Strip any dangling/broken HTML tag formats (e.g. <span style=, </span)
-        text = re.sub(r'<\w+\b[^>]*>?|<?/\w+>?', ' ', text)
+        text = re.sub(r'</?\w+\b[^>]*>?', ' ', text)
         text = re.sub(r'\b(style|class|id|href|src|align|valign|width|height|color|font|family|size|target|rel)=["\'][^"\']*["\']', ' ', text)
         # Remove common HTML tag/component identifiers if they got extracted as words
         text = re.sub(r'\b(strong|span|style|br|div|li|ul|p|ol|html|body|head|titleDescription)\b', ' ', text, flags=re.IGNORECASE)

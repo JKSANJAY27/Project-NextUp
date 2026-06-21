@@ -1082,21 +1082,34 @@ function AIToolkitContent() {
       const existingProjects = (resumeData.projects || []).slice(0, 4).map((p: any, i: number) => `${i+1}. ${p.title}: ${(p.description || "").substring(0, 200)}`);
       const existingSummary = (resumeData.summary || "").substring(0, 300);
 
-      // Simplified prompt designed for small (0.5B–1B) models that struggle with complex JSON
-      const prompt = `Tailor this resume for: ${company.role} at ${company.name}.
+      // Simplified few-shot prompt designed for small (0.5B–1B) models to guarantee correct JSON structure
+      const prompt = `You are a resume optimizer. Output ONLY a valid JSON object matching the requested schema. Do NOT write any introduction, explanation, markdown code blocks, or extra text.
 
-Job keywords: ${jdKeywordsStr}
-JD snippet: ${compactJDText}
+Task: Optimize the summary, skills, and projects based on the target job keywords and JD snippet. Do not invent any fake experience or new credentials.
 
-Resume summary: ${existingSummary}
-Skills: ${existingSkills.join(", ")}
-Projects:
+Target Job: ${company.role} at ${company.name}
+Job Keywords: ${jdKeywordsStr}
+JD Snippet: ${compactJDText}
+
+Original Resume:
+- Summary: ${existingSummary}
+- Skills: ${existingSkills.join(", ")}
+- Projects:
 ${existingProjects.join("\n")}
 
-Instructions: Return ONLY valid JSON. Do not add fake experience. Keep original content, just improve wording to match keywords.
+Example JSON Output:
+{
+  "optimized_summary": "Highly motivated software engineering student focused on building scalable AI systems and real-world RAG applications.",
+  "optimized_skills": ["Python", "React", "FastAPI", "SQL"],
+  "optimized_projects": [
+    {
+      "title": "LLM Knowledge Assistant",
+      "description": "Built a Retrieval-Augmented Generation (RAG) system with hybrid search and Langfuse observability."
+    }
+  ]
+}
 
-JSON format:
-{"optimized_summary":"...","optimized_skills":["skill1","skill2"],"optimized_projects":[{"title":"...","description":"..."}]}`;
+Optimize the original resume now and return ONLY the JSON object:`;
 
       const modelNameMap: Record<string, string> = {
         "qwen-0.5b": "Xenova/Qwen1.5-0.5B-Chat",
@@ -2272,6 +2285,13 @@ JSON format:
                                     placeholder="Project description and results..."
                                     rows={3}
                                     className="w-full border border-border bg-background text-xs p-3 focus:outline-none focus:border-accent font-mono uppercase"
+                                  />
+                                  <input
+                                    type="url"
+                                    value={proj.github_url || ""}
+                                    onChange={(e) => updateTailoredProject(idx, "github_url", e.target.value)}
+                                    placeholder="GitHub Repo URL (auto-filled from PDF, or paste manually)"
+                                    className="w-full border border-border bg-background text-xs px-3 h-10 focus:outline-none focus:border-accent font-mono text-zinc-500"
                                   />
                                   <div className="flex justify-end">
                                     <button

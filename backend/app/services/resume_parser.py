@@ -612,8 +612,13 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
             tech = ""
             
             if len(parts) >= 2:
-                title = parts[0].strip()
-                tech = ", ".join(p.strip() for p in parts[1:])
+                right_side = " ".join(parts[1:]).strip()
+                if is_tech_only_line(right_side):
+                    title = parts[0].strip()
+                    tech = ", ".join(p.strip() for p in parts[1:])
+                else:
+                    title = line.strip()
+                    tech = ""
             else:
                 # Check for comma separation
                 comma_parts = [p.strip() for p in line.split(',') if p.strip()]
@@ -633,8 +638,9 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
                                 title = title[:match.start()].strip()
                                 break
             
-            title = re.sub(r'\s*[-–—|()]\s*$', '', title).strip()
-            title = re.sub(r'\s*\([^)]*\)\s*$', '', title).strip()
+            title = re.sub(r'\s*[-–—|]\s*$', '', title).strip()
+            # Do NOT strip parentheses containing a URL
+            title = re.sub(r'\s*\((?!https?://)[^)]*\)\s*$', '', title).strip()
             tech = re.sub(r'\s*[-–—|()]\s*$', '', tech).strip()
             
             current_proj = {
@@ -900,14 +906,19 @@ def post_process_parsed_links(parsed: Dict[str, Any], text: str) -> Dict[str, An
         proj["description"] = desc
         
         # ── Extract GitHub URL from title (link inlining artifact) ───────────
-        url_match = re.search(r'(https?://[^\s|()]+)', title)
+        url_match = re.search(r'\s*\((https?://[^\s|()]+)\)', title)
         if url_match:
             extracted_url = url_match.group(1).rstrip('.,;:)')
-            new_title = title.replace(url_match.group(1), "").strip("() ")
-            proj["title"] = new_title
-            # Store as dedicated field, not in description
+            proj["title"] = title.replace(url_match.group(0), "").strip()
             if not proj.get("github_url") and "github.com" in extracted_url:
                 proj["github_url"] = extracted_url
+        else:
+            url_match_no_paren = re.search(r'(https?://[^\s|()]+)', title)
+            if url_match_no_paren:
+                extracted_url = url_match_no_paren.group(1).rstrip('.,;:)')
+                proj["title"] = title.replace(url_match_no_paren.group(1), "").strip("() ")
+                if not proj.get("github_url") and "github.com" in extracted_url:
+                    proj["github_url"] = extracted_url
                 
         # ── Fuzzy match project title with discovered GitHub repository URLs ─
         proj_title = proj.get("title", "")

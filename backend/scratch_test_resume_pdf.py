@@ -8,14 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from app.services.resume_parser import parse_resume_pdf
 
-pdf_path = "../test_resume.pdf"
-if not os.path.exists(pdf_path):
-    # Fallback to local root if path is different
-    pdf_path = "D:/Sanjay/B.Tech CSE/nextup/test_resume.pdf"
-
-if not os.path.exists(pdf_path):
-    print(f"Error: test_resume.pdf not found at {pdf_path}")
-    sys.exit(1)
+pdf_path = "D:/Sanjay/B.Tech CSE/Resume - Sanjay J K.pdf"
 
 print(f"Loading PDF from {pdf_path}...")
 with open(pdf_path, "rb") as f:
@@ -53,6 +46,7 @@ for i, exp in enumerate(rd.get('experience', [])):
 print(f"Projects Count: {len(rd.get('projects', []))}")
 for i, proj in enumerate(rd.get('projects', [])):
     print(f"  Proj {i+1}: {proj['title']} (Tech: {proj['tech']})")
+    print(f"    GitHub URL: {proj.get('github_url')}")
     print(f"    Description: {proj['description'][:100]}...")
 
 print(f"Awards (Patents/Achievements) Count: {len(rd.get('awards', []))}")
