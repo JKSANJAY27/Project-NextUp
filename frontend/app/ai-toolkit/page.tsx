@@ -382,7 +382,14 @@ function ResumeTemplatePreview({ data, template }: { data: any; template: string
             {projects.map((proj: any, idx: number) => (
               <div key={idx} className="space-y-1">
                 <div className="flex justify-between items-baseline font-bold text-xs">
-                  <span>{proj.title || "Project"}</span>
+                  <span className="flex items-center gap-1">
+                    {proj.title || "Project"}
+                    {proj.github_url && (
+                      <a href={proj.github_url} target="_blank" rel="noopener noreferrer" className="text-zinc-400 hover:text-zinc-700 transition-colors" title="View on GitHub">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                      </a>
+                    )}
+                  </span>
                   {proj.tech && <span className="text-zinc-500 font-normal text-[11px]">{proj.tech}</span>}
                 </div>
                 <p className="text-xs text-zinc-700 text-justify whitespace-pre-wrap">{proj.description}</p>
@@ -491,7 +498,14 @@ function ResumeTemplatePreview({ data, template }: { data: any; template: string
             {projects.map((proj: any, idx: number) => (
               <div key={idx} className="space-y-1">
                 <div className="flex justify-between items-baseline font-bold text-xs">
-                  <span className="text-slate-800">{proj.title || "Project"}</span>
+                  <span className="text-slate-800 flex items-center gap-1">
+                    {proj.title || "Project"}
+                    {proj.github_url && (
+                      <a href={proj.github_url} target="_blank" rel="noopener noreferrer" className="text-yellow-400 hover:text-yellow-600 transition-colors" title="View on GitHub">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                      </a>
+                    )}
+                  </span>
                   {proj.tech && <span className="text-yellow-600/90 text-[10px] font-bold uppercase tracking-wider">{proj.tech}</span>}
                 </div>
                 <p className="text-xs text-slate-700 text-justify whitespace-pre-wrap">{proj.description}</p>
@@ -606,7 +620,14 @@ function ResumeTemplatePreview({ data, template }: { data: any; template: string
             {projects.map((proj: any, idx: number) => (
               <div key={idx} className="space-y-0.5">
                 <div className="flex justify-between items-baseline font-bold text-neutral-900">
-                  <span>{proj.title || "Project"}</span>
+                  <span className="flex items-center gap-1">
+                    {proj.title || "Project"}
+                    {proj.github_url && (
+                      <a href={proj.github_url} target="_blank" rel="noopener noreferrer" className="text-neutral-400 hover:text-neutral-700 transition-colors" title="View on GitHub">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                      </a>
+                    )}
+                  </span>
                   {proj.tech && <span className="text-neutral-500 font-normal text-[10px]">{proj.tech}</span>}
                 </div>
                 <p className="text-neutral-600 text-justify whitespace-pre-wrap">{proj.description}</p>
@@ -764,7 +785,14 @@ function ResumeTemplatePreview({ data, template }: { data: any; template: string
                 <div key={idx} className="space-y-1 border-l border-slate-200 pl-3 relative ml-1">
                   <div className="absolute w-2 h-2 rounded-full bg-slate-900 left-[-4.5px] top-[4px]" />
                   <div className="flex justify-between items-baseline font-bold text-xs">
-                    <span className="text-slate-800">{proj.title || "Project"}</span>
+                    <span className="text-slate-800 flex items-center gap-1">
+                      {proj.title || "Project"}
+                      {proj.github_url && (
+                        <a href={proj.github_url} target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-slate-700 transition-colors" title="View on GitHub">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                        </a>
+                      )}
+                    </span>
                     {proj.tech && <span className="text-slate-500 text-[9px] font-bold uppercase tracking-wider">{proj.tech}</span>}
                   </div>
                   <p className="text-xs text-slate-600 text-justify whitespace-pre-wrap leading-relaxed">{proj.description}</p>
@@ -1047,46 +1075,28 @@ function AIToolkitContent() {
       const missingKeywordsVal = Array.from(jdKeywords).filter(k => !deterministicMatch.matchedKeywords.has(k.toLowerCase().trim()));
       const atsScoreVal = deterministicMatch.matchPercentage;
 
-      // 2. Compact JD and Resume to prevent model attention issues and context exhaustion
-      const compactResumeData = {
-        personal: {
-          title: resumeData.personal?.title || ""
-        },
-        summary: resumeData.summary || "",
-        skills: resumeData.skills || [],
-        projects: (resumeData.projects || []).map((p: any) => ({ title: p.title, description: p.description }))
-      };
+      // 2. Compact JD and Resume — keep it very short for small browser models
+      const jdKeywordsStr = (company.jd_required_skills || []).slice(0, 15).join(", ");
+      const compactJDText = (company.jd_text || "").substring(0, 400);
+      const existingSkills = (resumeData.skills || []).slice(0, 20);
+      const existingProjects = (resumeData.projects || []).slice(0, 4).map((p: any, i: number) => `${i+1}. ${p.title}: ${(p.description || "").substring(0, 200)}`);
+      const existingSummary = (resumeData.summary || "").substring(0, 300);
 
-      const compactJDText = (company.jd_text || "").substring(0, 800) + "...";
+      // Simplified prompt designed for small (0.5B–1B) models that struggle with complex JSON
+      const prompt = `Tailor this resume for: ${company.role} at ${company.name}.
 
-      const prompt = `You are a professional ATS optimizer. Optimize the student's Resume details to fit this Job Description.
+Job keywords: ${jdKeywordsStr}
+JD snippet: ${compactJDText}
 
-Job Title: ${company.role} at ${company.name}
-Job Description Context:
-${compactJDText}
+Resume summary: ${existingSummary}
+Skills: ${existingSkills.join(", ")}
+Projects:
+${existingProjects.join("\n")}
 
-Required Skills:
-${(company.jd_required_skills || []).join(", ")}
+Instructions: Return ONLY valid JSON. Do not add fake experience. Keep original content, just improve wording to match keywords.
 
-Original Student Resume details:
-${JSON.stringify(compactResumeData)}
-
-Guidelines:
-1. Maintain strict truthfulness and originality: DO NOT invent new projects, certifications, degrees, or experiences out of thin air.
-2. Tailor the wording of existing project descriptions and the summary to highlight relevant keywords from the Job Description and required skills.
-3. The optimized_skills list must be a subset of the candidate's existing skills combined with those technical skills from the JD that the candidate actually possesses (or are strongly related to their existing projects and experiences). Do not add unrelated skills.
-
-Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in conversational intro/outro, start directly with the JSON):
-{
-  "optimized_skills": ["Skill1", "Skill2"],
-  "optimized_projects": [
-    {
-      "title": "Project Title",
-      "description": "Optimized description highlighting matching keywords from the JD based on original text"
-    }
-  ],
-  "optimized_summary": "Tailored professional profile summary matching the role requirements."
-}`;
+JSON format:
+{"optimized_summary":"...","optimized_skills":["skill1","skill2"],"optimized_projects":[{"title":"...","description":"..."}]}`;
 
       const modelNameMap: Record<string, string> = {
         "qwen-0.5b": "Xenova/Qwen1.5-0.5B-Chat",
@@ -1107,7 +1117,7 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
       const result = await generateInBrowser({
         modelType: atsModel,
         prompt: prompt,
-        maxTokens: 2048,
+        maxTokens: 1024,
         onProgress: (p) => {
           setLocalDownloadProgress(Math.round(p * 100));
           setLocalStatusMessage(`Loading model weights: ${Math.round(p * 100)}%`);
@@ -1208,8 +1218,23 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
 
         setOptimizerSubView("preview");
       } catch (parseErr) {
-        console.error("Local LLM JSON parse/regex error:", parseErr, "Raw output:", result);
-        throw new Error("Local model returned invalid JSON structure. Please try generating again.");
+        console.warn("Local LLM JSON parse/regex error (applying graceful fallback):", parseErr, "Raw output:", result);
+        // ── Graceful fallback: use original resume data as the tailored base ───
+        // The small browser model couldn't produce parseable JSON, but we still
+        // want to show SOMETHING useful rather than a hard error.
+        const fallbackData = JSON.parse(JSON.stringify(tailoredResumeData || masterResume || resumeData));
+        setTailoredResumeData(fallbackData);
+        setAtsResult({
+          ats_score: atsScoreVal,
+          missing_keywords: missingKeywordsVal,
+          tailored_resume: {
+            optimized_skills: fallbackData.skills || [],
+            optimized_projects: fallbackData.projects || [],
+            optimized_summary: fallbackData.summary || ""
+          }
+        });
+        setOptimizerSubView("preview");
+        showSuccess("Browser AI ran but couldn't generate structured output. Your original resume is loaded — you can edit it manually in the tailored workspace.");
       }
     } catch (err: any) {
       console.error("Local ATS tailoring failed:", err);

@@ -193,21 +193,47 @@ def parse_resume_with_huggingface(text: str) -> Dict[str, Any]:
     return {}
 
 def is_tech_only_line(line: str) -> bool:
-    line_clean = re.sub(r'[\s,;|•\*\-\(\)▪\d–—]', ' ', line.lower())
-    words = [w.strip() for w in line_clean.split() if w.strip()]
+    """
+    Returns True if this line looks like a comma/pipe separated list of tech keywords.
+    Fixes the digit-stripping issue: splits by delimiter chars first so 'Neo4j' stays 'neo4j'.
+    """
+    # Split by common tech-list delimiters (comma, semicolon, pipe)
+    raw_parts = re.split(r'[,;|]', line)
+    words = []
+    for part in raw_parts:
+        # Strip whitespace, bullet chars, dashes, parens
+        cleaned = part.strip().strip('•*▪()-–— ').lower()
+        if cleaned:
+            words.append(cleaned)
+    
     if not words:
         return False
-    # Check what proportion of words are technical keywords
+    
     tech_words = {
-        'python', 'react', 'fastapi', 'supabase', 'nodejs', 'node.js', 'node', 'js', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain', 'html', 'css', 'tailwind', 'tailwindcss', 'typescript', 'langgraph', 'langfuse', 'pytorch', 'scikit-learn', 'c', 'git', 'github', 'nlp', 'ai', 'ml', 'docker', 'kubernetes', 'aws', 'gcp', 'azure', 'vue', 'angular', 'svelte', 'express', 'express.js', 'flask', 'django', 'networkx', 'rest', 'api', 'apis', 'graphql', 'grpc', 'web', 'full-stack', 'frontend', 'backend', 'next.js', 'nextjs', 'pandas', 'numpy', 'opencv', 'keras', 'tensorflow', 'redis', 'postgres', 'postgresql', 'mysql', 'sqlite', 'nosql', 'sqlite3', 'prisma', 'restful', 'ci/cd', 'docker-compose', 'postman', 'figma', 'jira'
+        # Core languages
+        'python', 'java', 'javascript', 'typescript', 'c', 'c++', 'c#', 'go', 'rust', 'swift', 'kotlin', 'ruby', 'php', 'scala',
+        # Web frameworks
+        'react', 'reactjs', 'nextjs', 'next.js', 'vuejs', 'vue', 'angular', 'svelte', 'html', 'css', 'tailwind', 'tailwindcss',
+        'node', 'nodejs', 'node.js', 'express', 'express.js', 'fastapi', 'flask', 'django',
+        # Databases
+        'mongodb', 'sql', 'mysql', 'postgresql', 'postgres', 'sqlite', 'sqlite3', 'chromadb', 'neo4j', 'redis',
+        'nosql', 'prisma', 'supabase',
+        # AI/ML
+        'pytorch', 'scikit-learn', 'tensorflow', 'keras', 'pandas', 'numpy', 'opencv', 'nlp', 'llm', 'llms', 'rag', 'graphrag',
+        'langchain', 'langgraph', 'langfuse', 'ollama', 'deepgram', 'elevenlabs', 'onnx', 'wasm', 'webassembly',
+        # DevOps / Cloud
+        'docker', 'kubernetes', 'aws', 'gcp', 'azure', 'git', 'github', 'ci/cd', 'docker-compose',
+        # Other tech
+        'websockets', 'graphql', 'grpc', 'rest', 'api', 'apis', 'restful', 'networkx',
+        'ai', 'ml', 'web', 'full-stack', 'frontend', 'backend', 'js', 'postman', 'figma', 'jira',
     }
-    # Check the first word. If the first word is not a tech word, it's highly likely a project title or header.
-    first_word = re.sub(r'^[^a-z0-9+#]+|[^a-z0-9+#]+$', '', words[0])
-    if first_word not in tech_words:
+    
+    # The first word must be a tech keyword — if not, it's a project title or header
+    if words[0] not in tech_words:
         return False
-        
-    tech_count = sum(1 for w in words if re.sub(r'^[^a-z0-9+#]+|[^a-z0-9+#]+$', '', w) in tech_words)
-    return (tech_count / len(words)) >= 0.7
+    
+    tech_count = sum(1 for w in words if w in tech_words)
+    return (tech_count / len(words)) >= 0.65
 
 def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     data = {}
@@ -849,7 +875,7 @@ def post_process_parsed_links(parsed: Dict[str, Any], text: str) -> Dict[str, An
                     pers["website"] = u
                     break
 
-    # 2. Match GitHub project repository URLs
+    # 2. Match GitHub project repository URLs and clean URL pollution from tech/description fields
     all_github_urls = list(set(re.findall(r'https?://github\.com/[^\s|()]+', text)))
     clean_github_urls = []
     for u in all_github_urls:
@@ -858,31 +884,42 @@ def post_process_parsed_links(parsed: Dict[str, Any], text: str) -> Dict[str, An
     for proj in rd.get("projects", []):
         title = proj.get("title", "")
         desc = proj.get("description", "")
+        tech = proj.get("tech", "")
         
-        # Check if title has a URL in it (due to link inlining)
+        # ── Clean any inline URL artifacts from the tech field ──────────────
+        tech = re.sub(r'\s*\([^)]*https?://[^)]*\)\s*', ' ', tech)
+        tech = re.sub(r'\s*https?://\S+\s*', ' ', tech)
+        tech = re.sub(r'\s+', ' ', tech).strip()
+        proj["tech"] = tech
+        
+        # ── Clean any inline URL artifacts from bullet descriptions ─────────
+        # Removes patterns like: (https://github.com/...) at start of bullet lines
+        desc = re.sub(r'(?m)^(\s*[•\*▪\-]?\s*)\([^)]*https?://[^)]*\)\s*', r'\1', desc)
+        desc = re.sub(r'(?m)^\s*https?://\S+\s*\n?', '', desc)
+        desc = desc.strip()
+        proj["description"] = desc
+        
+        # ── Extract GitHub URL from title (link inlining artifact) ───────────
         url_match = re.search(r'(https?://[^\s|()]+)', title)
         if url_match:
-            url = url_match.group(1).rstrip('.,;:)')
+            extracted_url = url_match.group(1).rstrip('.,;:)')
             new_title = title.replace(url_match.group(1), "").strip("() ")
             proj["title"] = new_title
-            # Add to description if not already there
-            if url not in desc:
-                separator = "\n" if desc else ""
-                proj["description"] = f"{desc}{separator}GitHub Repository: {url}"
-                desc = proj["description"]
+            # Store as dedicated field, not in description
+            if not proj.get("github_url") and "github.com" in extracted_url:
+                proj["github_url"] = extracted_url
                 
-        # Fuzzy match project title with github repository urls
+        # ── Fuzzy match project title with discovered GitHub repository URLs ─
         proj_title = proj.get("title", "")
         proj_slug = slugify(proj_title)
-        if proj_title and proj_slug and "github.com" not in desc.lower():
+        if proj_title and proj_slug and not proj.get("github_url"):
             for url in clean_github_urls:
                 parts = url.rstrip('/').split('/')
                 if len(parts) >= 5:
                     repo_name = parts[-1]
                     repo_slug = slugify(repo_name)
                     if (proj_slug in repo_slug) or (repo_slug in proj_slug) or (len(proj_slug) > 3 and proj_slug[:5] in repo_slug):
-                        separator = "\n" if desc else ""
-                        proj["description"] = f"{desc}{separator}GitHub Repository: {url}"
+                        proj["github_url"] = url
                         break
                         
     return parsed

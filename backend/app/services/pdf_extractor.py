@@ -55,6 +55,9 @@ def extract_text_with_links_fitz(file_bytes: bytes) -> str:
                 
             sorted_keys = sorted(lines_dict.keys(), key=lambda k: (lines_dict[k][0][1], lines_dict[k][0][0]))
             
+            # Track link rects that have already been inlined (as rounded-tuple keys)
+            used_link_rect_keys: set = set()
+            
             page_text_lines = []
             for key in sorted_keys:
                 line_words = sorted(lines_dict[key], key=lambda w: w[0])
@@ -67,14 +70,18 @@ def extract_text_with_links_fitz(file_bytes: bytes) -> str:
                     
                     matched_uri = None
                     matched_rect = None
+                    matched_rect_key = None
                     for l_rect, uri in rect_links:
                         # Check intersection
                         if word_rect.intersects(l_rect) or l_rect.contains(word_rect):
                             matched_uri = uri
                             matched_rect = l_rect
+                            # Use a rounded tuple as a stable dict key for this rect
+                            matched_rect_key = (round(l_rect.x0, 1), round(l_rect.y0, 1), round(l_rect.x1, 1), round(l_rect.y1, 1))
                             break
                             
-                    if matched_uri:
+                    if matched_uri and matched_rect_key not in used_link_rect_keys:
+                        # First time we encounter this link: consume all words inside this rect
                         linked_words = [word]
                         j = i + 1
                         while j < len(line_words):
@@ -94,7 +101,13 @@ def extract_text_with_links_fitz(file_bytes: bytes) -> str:
                             line_text += f"{phrase} "
                         else:
                             line_text += f"{phrase} ({clean_uri}) "
+                        # Mark this link rect as consumed — do NOT inline again
+                        used_link_rect_keys.add(matched_rect_key)
                         i = j
+                    elif matched_uri and matched_rect_key in used_link_rect_keys:
+                        # Same link rect already inlined — just output the plain word
+                        line_text += f"{word} "
+                        i += 1
                     else:
                         line_text += f"{word} "
                         i += 1
