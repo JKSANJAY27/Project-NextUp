@@ -207,6 +207,63 @@ function repairJSONString(jsonStr: string): string {
   return result;
 }
 
+function balanceJSONStack(jsonStr: string): string {
+  const s = jsonStr.trim();
+  const stack: string[] = [];
+  let inString = false;
+  let escape = false;
+  let clean = "";
+
+  for (let i = 0; i < s.length; i++) {
+    const char = s[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (char === "\\") {
+        escape = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      clean += char;
+    } else {
+      if (char === '"') {
+        inString = true;
+        clean += char;
+      } else if (char === "{") {
+        stack.push("}");
+        clean += char;
+      } else if (char === "[") {
+        stack.push("]");
+        clean += char;
+      } else if (char === "}") {
+        const lastIdx = stack.lastIndexOf("}");
+        if (lastIdx !== -1) {
+          stack.splice(lastIdx, 1);
+          clean += char;
+        }
+      } else if (char === "]") {
+        const lastIdx = stack.lastIndexOf("]");
+        if (lastIdx !== -1) {
+          stack.splice(lastIdx, 1);
+          clean += char;
+        }
+      } else {
+        clean += char;
+      }
+    }
+  }
+
+  if (inString) {
+    clean += '"';
+  }
+
+  while (stack.length > 0) {
+    clean += stack.pop();
+  }
+
+  return clean;
+}
+
 function parseRobustLLMJSON(rawText: string): any {
   let cleanText = normalizeLLMResponseText(rawText);
   
@@ -228,9 +285,15 @@ function parseRobustLLMJSON(rawText: string): any {
   // Step 2: Extract block between first '{' and last '}'
   const firstBrace = cleanText.indexOf("{");
   const lastBrace = cleanText.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace !== -1) {
-    cleanText = cleanText.substring(firstBrace, lastBrace + 1);
+  if (firstBrace !== -1) {
+    if (lastBrace !== -1 && lastBrace > firstBrace) {
+      cleanText = cleanText.substring(firstBrace, lastBrace + 1);
+    } else {
+      cleanText = cleanText.substring(firstBrace);
+    }
   }
+
+  cleanText = balanceJSONStack(cleanText);
 
   // Pre-cleaning: Map common Chinese/hallucinated keys to correct English equivalents in the raw text
   cleanText = cleanText
@@ -1318,111 +1381,131 @@ Optimize the original resume now and return ONLY the JSON object:`;
         throw new Error("No master resume found. Please ensure you have parsed your master resume first.");
       }
 
-      // Compact resume contents
-      const existingSummary = (resumeData.summary || "").substring(0, 300);
-      const existingSkills = (resumeData.skills || []).slice(0, 20).join(", ");
-      const existingProjects = (resumeData.projects || []).slice(0, 4).map((p: any) => p.title).join(", ");
+      // 1. Gather all candidate skills from skills and project tech fields
+      const candidateSkills = new Set<string>();
+      (resumeData.skills || []).forEach((s: string) => candidateSkills.add(s.toLowerCase().trim()));
+      (resumeData.projects || []).forEach((p: any) => {
+        if (p.tech) {
+          p.tech.split(',').forEach((t: string) => candidateSkills.add(t.trim().toLowerCase()));
+        }
+      });
+
+      // 2. Identify missing skills/keywords from the JD
+      const jdRequired = company.jd_required_skills || [];
+      const jdATS = company.jd_ats_keywords || [];
+      const allJDSkills = Array.from(new Set([...jdRequired, ...jdATS]));
       
-      const jdKeywordsStr = (company.jd_required_skills || []).slice(0, 15).join(", ");
-      const compactJDText = (company.jd_text || "").substring(0, 400);
+      const missingSkills = allJDSkills.filter(skill => {
+        const sLower = skill.toLowerCase().trim();
+        if (sLower.length <= 2) return false;
+        if (sLower === company.name.toLowerCase()) return false;
+        return !candidateSkills.has(sLower);
+      });
 
-      const resumeTextForMatch = [
-        resumeData.personal?.name || "",
-        resumeData.personal?.location || "",
-        resumeData.summary || "",
-        ...(resumeData.skills || []),
-        ...(resumeData.education || []).map((e: any) => `${e.degree} ${e.institution}`),
-        ...(resumeData.experience || []).map((e: any) => `${e.role} ${e.company} ${e.description}`),
-        ...(resumeData.projects || []).map((e: any) => `${e.title} ${e.tech} ${e.description}`),
-      ].join(" ");
+      // 3. Mapping of skills to highly concrete questions that can go directly into a resume
+      const skillQuestionTemplates: Record<string, string> = {
+        "linux": "Have you used Linux extensively for development, server administration, Docker deployments, security labs, or scripting? Describe your experience.",
+        "docker": "Have you packaged, run, or deployed any of your projects using Docker containers?",
+        "kubernetes": "Have you worked with Kubernetes, container orchestration, or Helm charts for microservices?",
+        "aws": "Have you hosted applications or used services on AWS (e.g. EC2, S3, RDS, IAM, Lambda, VPC)?",
+        "gcp": "Have you hosted services or used APIs on Google Cloud Platform (e.g. Compute Engine, Cloud Run, GCS)?",
+        "azure": "Have you deployed applications or managed IAM policies on Microsoft Azure?",
+        "cloud": "Have you used cloud platforms (AWS, GCP, or Azure) for hosting, storage, serverless functions, or deployment workflows?",
+        "networking": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
+        "tcp/ip": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
+        "dns": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
+        "http": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
+        "security tools": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how you used them.",
+        "nmap": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how you used them.",
+        "wireshark": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how you used them.",
+        "metasploit": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how you used them.",
+        "burp suite": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how you used them.",
+        "owasp": "Have you studied or worked with OWASP Top 10 vulnerabilities (e.g. SQL Injection, XSS, CSRF, SSRF, IDOR, or insecure APIs)? Describe your exposure.",
+        "web security": "Have you studied or worked with OWASP Top 10 vulnerabilities (e.g. SQL Injection, XSS, CSRF, SSRF, IDOR, or insecure APIs)? Describe your exposure.",
+        "cybersecurity": "Have you completed coursework, labs, or certifications related to cybersecurity, ethical hacking, secure coding, or network security?",
+        "ethical hacking": "Have you completed coursework, labs, or certifications related to cybersecurity, ethical hacking, secure coding, or network security?",
+        "cryptography": "Have you worked with cryptographic principles (AES, RSA, hashing, SSL/TLS, signatures) in any project?",
+        "penetration testing": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
+        "pentesting": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
+        "vulnerability": "Have you identified or validated security vulnerabilities (e.g., OWASP Top 10), performed threat modeling, or written vulnerability reports?",
+        "threat modeling": "Have you analyzed systems to identify attack paths, trust boundaries, or security risks before deployment?",
+        "ctf": "Have you participated in CTFs (Capture The Flag), TryHackMe, Hack The Box, bug bounty programs, or security labs?",
+        "llm security": "Have you explored security risks in AI systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
+        "ai security": "Have you explored security risks in AI systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
+        "api security": "Your projects expose APIs. Have you implemented authentication, authorization, rate limiting, token validation, or abuse prevention mechanisms?",
+        "redis": "Have you used Redis for caching, session management, or pub/sub messaging in any of your real-time projects?",
+        "nginx": "Have you used Nginx as a reverse proxy, load balancer, or web server in your deployments?",
+        "git": "Have you used Git and GitHub for version control, branching, pull requests, or CI/CD pipelines?",
+        "ci/cd": "Have you set up CI/CD pipelines (e.g. GitHub Actions, Jenkins) for automated testing or deployment?"
+      };
+
+      const jobQuestions: CopilotQuestion[] = [];
+      const processedTemplates = new Set<string>();
+
+      // 4. Select Job-Specific Questions matching the missing skills
+      missingSkills.forEach(skill => {
+        const sLower = skill.toLowerCase().trim();
+        const templateKey = Object.keys(skillQuestionTemplates).find(k => sLower.includes(k) || k.includes(sLower));
+        
+        if (templateKey) {
+          const qText = skillQuestionTemplates[templateKey];
+          if (!processedTemplates.has(qText)) {
+            processedTemplates.add(qText);
+            jobQuestions.push({
+              id: Math.random().toString(),
+              type: "job_specific",
+              text: qText,
+              answer: ""
+            });
+          }
+        } else {
+          const qText = `The job description requires experience with '${skill}'. Have you worked with this tool, framework, or concept in any projects, coursework, or self-learning? Describe your exposure.`;
+          if (!processedTemplates.has(qText)) {
+            processedTemplates.add(qText);
+            jobQuestions.push({
+              id: Math.random().toString(),
+              type: "job_specific",
+              text: qText,
+              answer: ""
+            });
+          }
+        }
+      });
+
+      // 5. Select General Questions (customized with the candidate's actual projects)
+      const projectTitles = (resumeData.projects || []).slice(0, 4).map((p: any) => p.title).join(", ");
+      const generalQuestions: CopilotQuestion[] = [
+        {
+          id: Math.random().toString(),
+          type: "general",
+          text: `Several of your projects involve deployment and real-time systems. Can you describe the infrastructure, cloud services, operating systems, containers, databases, caching systems, or deployment tools (e.g. Linux, Docker, AWS, EC2, Nginx, Redis) used?`,
+          answer: ""
+        },
+        {
+          id: Math.random().toString(),
+          type: "general",
+          text: `For your major projects (${projectTitles || "projects"}), what were the most technically challenging engineering problems you solved (e.g. concurrency, async streaming, scaling, latency, observability)?`,
+          answer: ""
+        },
+        {
+          id: Math.random().toString(),
+          type: "general",
+          text: `Do you have additional quantitative metrics or performance gains (e.g. user count, requests/day, latency improvements, throughput, evaluation scores, or cost reductions) for your projects or internships?`,
+          answer: ""
+        },
+        {
+          id: Math.random().toString(),
+          type: "general",
+          text: `Are there any other programming languages, frameworks, databases, security tools, DevOps tools, or AI frameworks you have used but are not listed on your resume?`,
+          answer: ""
+        }
+      ];
+
+      // 6. Combine questions (Limit to max 8 questions: 3 general + 5 job_specific)
+      const finalGeneral = generalQuestions.slice(0, 3);
+      const finalJob = jobQuestions.slice(0, 5);
       
-      const deterministicMatch = calculateMatchStats(resumeTextForMatch, jdKeywords);
-      const missingKeywordsVal = Array.from(jdKeywords).filter(k => !deterministicMatch.matchedKeywords.has(k.toLowerCase().trim()));
-
-      const qPrompt = `You are a resume tailoring coach. Analyze this job description and the candidate's original resume details. Generate exactly 4 short, highly specific interview-style questions.
-      
-Job Title: ${company.role} at ${company.name}
-Job Keywords: ${jdKeywordsStr}
-JD Snippet: ${compactJDText}
-
-Candidate Resume:
-- Summary: ${existingSummary}
-- Skills: ${existingSkills}
-- Projects: ${existingProjects}
-
-Goal: Ask specific questions to extract more details or check if they possess missing requirements.
-Instructions:
-Generate exactly 4 questions (one per line, starting with the bracketed prefix):
-- 2 General Questions (Prefix: [GENERAL]): Ask for more tech stack details, metrics, or responsibilities on their existing projects/internships. E.g. "[GENERAL] In your project LLM Knowledge Assistant, what database or vector store did you use?"
-- 2 Job-Specific Questions (Prefix: [JOB_SPECIFIC]): Ask if they have experience with required keywords from the JD that are currently missing. E.g. "[JOB_SPECIFIC] Have you worked with Linux or Security tools in any projects?"
-
-Return ONLY these 4 lines:`;
-
-      setLocalStatusMessage("Generating Copilot Questions...");
-      let result = "";
-      try {
-        result = await generateInBrowser({
-          modelType: atsModel,
-          prompt: qPrompt,
-          maxTokens: 512,
-        });
-      } catch (nanoErr) {
-        console.warn("Browser LLM failed to generate questions, using local JS fallback:", nanoErr);
-      }
-
-      let parsedQAs: CopilotQuestion[] = [];
-      if (result) {
-        const lines = result.split("\n").map(l => l.trim()).filter(l => l.length > 0);
-        lines.forEach(line => {
-          let type: "general" | "job_specific" = "general";
-          let text = line;
-          if (line.toUpperCase().startsWith("[GENERAL]")) {
-            type = "general";
-            text = line.substring("[GENERAL]".length).trim();
-          } else if (line.toUpperCase().startsWith("[JOB_SPECIFIC]")) {
-            type = "job_specific";
-            text = line.substring("[JOB_SPECIFIC]".length).trim();
-          } else {
-            const hasMissing = missingKeywordsVal.some(k => line.toLowerCase().includes(k.toLowerCase()));
-            type = hasMissing ? "job_specific" : "general";
-          }
-          
-          text = text.replace(/^["'-\s•*▪\[\]]+|["'\]]+$/g, "").trim();
-          if (text) {
-            parsedQAs.push({ id: Math.random().toString(), type, text, answer: "" });
-          }
-        });
-      }
-
-      if (parsedQAs.length < 2) {
-        const missingSlice = missingKeywordsVal.slice(0, 3).join(", ");
-        parsedQAs = [
-          {
-            id: "f1",
-            type: "general",
-            text: `In your existing academic projects (${existingProjects || "projects"}), what specific technical libraries, databases, or WebSocket mechanisms did you use?`,
-            answer: ""
-          },
-          {
-            id: "f2",
-            type: "general",
-            text: `Can you share any quantitative metrics or performance gains (e.g. latency, user count, efficiency) from your projects or Valsco internship?`,
-            answer: ""
-          },
-          {
-            id: "f3",
-            type: "job_specific",
-            text: `The ${company.name} description requires experience with: ${missingSlice || "relevant skills"}. Have you used these in any academic/personal tasks?`,
-            answer: ""
-          },
-          {
-            id: "f4",
-            type: "job_specific",
-            text: `Do you have experience in any topics related to the role of ${company.role} (e.g. system design, server setup, automated checks)? If yes, please describe.`,
-            answer: ""
-          }
-        ];
-      }
+      const parsedQAs: CopilotQuestion[] = [...finalGeneral, ...finalJob];
 
       setCopilotQuestions(parsedQAs);
       showSuccess("Copilot questions generated successfully! Answer them below to personalize your resume.");
@@ -2116,25 +2199,48 @@ Return ONLY these 4 lines:`;
                       </div>
                     )}
 
-                    <button
-                      onClick={runLocalATS}
-                      disabled={calculatingATS}
-                      className="w-full h-10 border-2 border-border bg-background hover:bg-muted font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50"
-                    >
-                      {calculatingATS ? (
-                        <>
-                          <Loader2 className="animate-spin h-3.5 w-3.5" />
-                          <span>TAILORING RESUME...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles size={12} className="text-accent" />
-                          <span>TAILOR WITH BROWSER AI</span>
-                        </>
-                      )}
-                    </button>
+                    {generatingQuestions ? (
+                      <button
+                        disabled
+                        className="w-full h-10 border-2 border-border bg-background font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-2 transition-all opacity-50 font-mono"
+                      >
+                        <Loader2 className="animate-spin h-3.5 w-3.5" />
+                        <span>Generating Questions...</span>
+                      </button>
+                    ) : copilotQuestions.length === 0 ? (
+                      <button
+                        onClick={generateCopilotQuestions}
+                        className="w-full h-10 border-2 border-accent bg-accent/5 hover:bg-accent hover:text-black font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-2 active:scale-[0.98] transition-all font-mono"
+                      >
+                        <Sparkles size={12} className="text-accent" />
+                        <span>Start AI Resume Copilot</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={runLocalATS}
+                        disabled={calculatingATS}
+                        className="w-full h-10 border-2 border-accent bg-accent text-black hover:bg-black hover:text-accent hover:border-accent font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50 font-mono"
+                      >
+                        {calculatingATS ? (
+                          <>
+                            <Loader2 className="animate-spin h-3.5 w-3.5" />
+                            <span>TAILORING RESUME...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles size={12} />
+                            <span>{atsResult ? "Re-Optimize Resume" : "Generate Optimized Resume"}</span>
+                          </>
+                        )}
+                      </button>
+                    )}
                     <span className="text-[8px] text-muted-foreground uppercase text-center block leading-normal font-mono">
-                      GENERATION RUNS ENTIRELY ON CLIENT COMPUTE. COMPILES TAILORED SKILLS, SUMMARY, AND PROJECTS TO MATCH THE ANNOUNCEMENT.
+                      {copilotQuestions.length === 0 
+                        ? "Wizards the Job Description against your resume and generates targeted Q&A to build a verified fact matrix."
+                        : atsResult 
+                        ? "Re-runs optimization with any updated general or job-specific answers."
+                        : "Processes your verified facts through local AI to output your tailored resume."
+                      }
                     </span>
                   </div>
                 </div>
