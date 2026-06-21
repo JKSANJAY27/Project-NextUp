@@ -1052,7 +1052,7 @@ export default function ProfilePage() {
                     />
                     <input
                       type="url"
-                      value={(proj as any).github_url || ""}
+                      value={proj.github_url || ""}
                       onChange={(e) => updateProject(idx, "github_url", e.target.value)}
                       placeholder="GitHub Repo URL (auto-filled from PDF, or paste manually)"
                       className="w-full border border-border bg-background text-xs px-3 h-10 focus:outline-none focus:border-accent font-mono text-zinc-500"
