@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-patch_page.py — Evidence-First Architecture rewrite for page.tsx
-Run from: d:/Sanjay/B.Tech CSE/nextup/frontend/
-  $env:PYTHONIOENCODING="utf-8"; python patch_page.py
+patch_page_perfect.py — Perfect patch script for Evidence-First Architecture rewrite
 """
 import sys, re
 
@@ -13,10 +11,13 @@ with open(FILE, "r", encoding="utf-8", newline="") as f:
 orig_len = len(src)
 print(f"File loaded: {orig_len} chars")
 
+# Normalize all line endings in src to LF to prevent mismatches
+src = src.replace("\r\n", "\n")
+
 # ─── helpers ─────────────────────────────────────────────────────────────────
 def crlf(s):
-    """Ensure consistent CRLF line endings."""
-    return s.replace("\r\n", "\n").replace("\n", "\r\n")
+    """Normalize newlines to LF to match normalized src."""
+    return s.replace("\r\n", "\n")
 
 def exact_replace(name, old, new, allow_multi=False):
     global src
@@ -31,7 +32,8 @@ def exact_replace(name, old, new, allow_multi=False):
 
 def regex_replace(name, pattern, new, flags=re.DOTALL):
     global src
-    m = re.search(pattern, src, flags)
+    normalized_pattern = pattern.replace("\r\n", "\n")
+    m = re.search(normalized_pattern, src, flags)
     if not m:
         print(f"FAIL [{name}] — regex not found!")
         sys.exit(1)
@@ -40,10 +42,6 @@ def regex_replace(name, pattern, new, flags=re.DOTALL):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PATCH 1: Replace interfaces block (lines 67-138)
-# Remove old: CopilotQuestion, VaultQA, Capability, AlignmentStrategy,
-#             AlignmentResult, EvidenceNode, EvidenceGap, VerifiedEvidence
-# Add new: WorkspaceCapability, UserEvidence, CapabilityCoverage,
-#          EvidenceQuestion, ResumePatch, CapabilityVerification, VaultQA
 # ═══════════════════════════════════════════════════════════════════════════════
 OLD1 = crlf(
 """interface CopilotQuestion {
@@ -188,12 +186,9 @@ exact_replace("1:interfaces", OLD1, NEW1)
 # PATCH 2: Replace buildEvidenceGraph + buildFallbackGaps with
 #          CAPABILITY_ONTOLOGY + 6-stage pipeline functions
 # ═══════════════════════════════════════════════════════════════════════════════
-# Old block starts at `function buildEvidenceGraph(` (line 357) and ends after
-# `buildFallbackGaps` closing brace (line 749). Replace the whole block.
 OLD2_START = "function buildEvidenceGraph(resumeData: any): EvidenceNode[] {"
-OLD2_END   = "\r\nfunction parseRobustLLMJSON(rawText: string): any {"
+OLD2_END   = "function parseRobustLLMJSON(rawText: string): any {"
 
-# Find the exact substring from OLD2_START to OLD2_END (inclusive of start, exclusive of end-anchor)
 pat2 = re.compile(
     re.escape(OLD2_START) + r".*?" + r"(?=" + re.escape(OLD2_END) + r")",
     re.DOTALL
@@ -239,7 +234,7 @@ const CAPABILITY_ONTOLOGY: Record<string, {
   ci_cd:                  { id:"ci_cd",                 name:"CI/CD",                     importance:"medium",  category:"cloud_devops",  aliases:["github actions","jenkins","gitlab ci","continuous integration","continuous deployment","pipeline"] },
   observability:          { id:"observability",         name:"Observability & Monitoring",importance:"medium",  category:"cloud_devops",  aliases:["monitoring","logging","tracing","prometheus","grafana","opentelemetry","datadog","sentry"] },
   // ─── Backend / Systems ───────────────────────────────────────────────────
-  python:                 { id:"python",                name:"Python",                    importance:"high",    category:"backend",       aliases:["py","python3","python programming","python scripting"] },
+  python:                 { id:"python",                name:"Python",                    importance:"high",    category:"backend",       aliases:["python","py","python3","python programming","python scripting"] },
   golang:                 { id:"golang",                name:"Go (Golang)",               importance:"medium",  category:"backend",       aliases:["go","golang","go lang"] },
   java:                   { id:"java",                  name:"Java",                      importance:"medium",  category:"backend",       aliases:["java programming","spring","spring boot"] },
   cpp:                    { id:"cpp",                   name:"C++",                       importance:"medium",  category:"backend",       aliases:["c++","cpp","c plus plus"] },
@@ -318,8 +313,8 @@ function deterministicExtractCapabilities(jdText: string): WorkspaceCapability[]
   const lower = jdText.toLowerCase();
   const found = new Map<string, WorkspaceCapability>();
   ONTOLOGY_ALIAS_MAP.forEach(entry => {
-    const escaped = entry.pattern.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
-    if (new RegExp(`\\b${escaped}\\b`).test(lower)) {
+    const escaped = entry.pattern.replace(/[-\/\\\\^$*+?.()|[\\\\\\]{}]/g, "\\\\$&");
+    if (new RegExp(`\\\\b\${escaped}\\\\b`).test(lower)) {
       if (!found.has(entry.id)) {
         const cap = CAPABILITY_ONTOLOGY[entry.id];
         found.set(entry.id, { id: cap.id, name: cap.name, importance: cap.importance, category: cap.category });
@@ -334,8 +329,8 @@ async function extractCapabilities(jdText: string, companyName: string, modelTyp
   try {
     const prompt = `Extract the technical skills, tools, and domain capabilities required by this job description.
 Return ONLY a JSON array of strings, each being one specific technical capability. Do not include soft skills.
-Company: ${companyName}
-Job Description: ${jdText.substring(0, 900)}
+Company: \${companyName}
+Job Description: \${jdText.substring(0, 900)}
 Return ONLY the JSON array like: ["OWASP Top 10","Burp Suite","Python","Linux","Docker"]`;
     const raw = await generateInBrowser({ modelType, prompt, maxTokens: 256 });
     const parsed: string[] = JSON.parse(parseRobustLLMJSON(raw));
@@ -372,10 +367,11 @@ function extractResumeEvidence(resumeData: any): UserEvidence[] {
   // Projects — scan tech + description
   const projects: any[] = resumeData.projects || [];
   projects.forEach((p, idx) => {
-    const combined = `${p.title || ""} ${p.tech || ""} ${p.description || ""}`.toLowerCase();
+    const combined = `\${p.title || ""} \${p.tech || ""} \${p.description || ""}`.toLowerCase();
     ONTOLOGY_ALIAS_MAP.forEach(entry => {
-      if (new RegExp(`\\b${entry.pattern.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")}\\b`).test(combined)) {
-        evidence.push({ capabilityId: entry.id, text: `Project "${p.title}": ${entry.pattern}`, source: "resume", verified: true });
+      const escaped = entry.pattern.replace(/[-\/\\\\^$*+?.()|[\\\\\\]{}]/g, "\\\\$&");
+      if (new RegExp(`\\\\b\${escaped}\\\\b`).test(combined)) {
+        evidence.push({ capabilityId: entry.id, text: `Project "\${p.title}": \${entry.pattern}`, source: "resume", verified: true });
       }
     });
   });
@@ -383,10 +379,11 @@ function extractResumeEvidence(resumeData: any): UserEvidence[] {
   // Experience — scan description
   const experiences: any[] = resumeData.experience || [];
   experiences.forEach(exp => {
-    const combined = `${exp.company || ""} ${exp.role || ""} ${exp.description || ""}`.toLowerCase();
+    const combined = `\${exp.company || ""} \dots\${exp.role || ""} \dots\${exp.description || ""}`.toLowerCase();
     ONTOLOGY_ALIAS_MAP.forEach(entry => {
-      if (new RegExp(`\\b${entry.pattern.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")}\\b`).test(combined)) {
-        evidence.push({ capabilityId: entry.id, text: `Experience at "${exp.company}": ${entry.pattern}`, source: "resume", verified: true });
+      const escaped = entry.pattern.replace(/[-\/\\\\^$*+?.()|[\\\\\\]{}]/g, "\\\\$&");
+      if (new RegExp(`\\\\b\${escaped}\\\\b`).test(combined)) {
+        evidence.push({ capabilityId: entry.id, text: `Experience at "\${exp.company}": \${entry.pattern}`, source: "resume", verified: true });
       }
     });
   });
@@ -400,10 +397,10 @@ function extractResumeEvidence(resumeData: any): UserEvidence[] {
 
 function buildHeuristicContext(resumeData: any): { isCSBranch: boolean; hasWebProject: boolean; hasCloudProject: boolean; skillTexts: string[] } {
   const branch = (resumeData.education?.[0]?.branch || resumeData.personal?.branch || "").toLowerCase();
-  const isCSBranch = /computer|software|information|cse|it\b|ece|electronics/.test(branch);
+  const isCSBranch = /computer|software|information|cse|it\\\\b|ece|electronics/.test(branch);
   const projects: any[] = resumeData.projects || [];
-  const hasWebProject = projects.some(p => /react|flask|django|node|express|html|css|javascript|frontend|backend|api|web/.test(`${p.tech || ""} ${p.description || ""}`.toLowerCase()));
-  const hasCloudProject = projects.some(p => /aws|gcp|azure|docker|kubernetes|cloud|deploy|heroku|vercel|netlify/.test(`${p.tech || ""} ${p.description || ""}`.toLowerCase()));
+  const hasWebProject = projects.some(p => /react|flask|django|node|express|html|css|javascript|frontend|backend|api|web/.test(`\${p.tech || ""} \${p.description || ""}`.toLowerCase()));
+  const hasCloudProject = projects.some(p => /aws|gcp|azure|docker|kubernetes|cloud|deploy|heroku|vercel|netlify/.test(`\${p.tech || ""} \${p.description || ""}`.toLowerCase()));
   const skillTexts = (resumeData.skills || []).map((s: string) => s.toLowerCase());
   return { isCSBranch, hasWebProject, hasCloudProject, skillTexts };
 }
@@ -414,17 +411,17 @@ function mapCapabilityStates(capabilities: WorkspaceCapability[], evidence: User
     const matching = evidence.filter(e => e.capabilityId === cap.id);
 
     if (matching.length >= 2 || (matching.length === 1 && matching[0].source === "resume" && matching[0].text.toLowerCase().includes(cap.name.toLowerCase().split(" ")[0]))) {
-      return { capability: cap, state: "strong" as EvidenceState, matchedEvidence: matching, reasoning: `Found ${matching.length} evidence item(s) directly referencing this capability.` };
+      return { capability: cap, state: "strong" as EvidenceState, matchedEvidence: matching, reasoning: `Found \${matching.length} evidence item(s) directly referencing this capability.` };
     }
 
     if (matching.length === 1) {
-      return { capability: cap, state: "weak" as EvidenceState, matchedEvidence: matching, reasoning: `Found indirect evidence: "${matching[0].text.substring(0, 60)}..."` };
+      return { capability: cap, state: "weak" as EvidenceState, matchedEvidence: matching, reasoning: `Found indirect evidence: "\${matching[0].text.substring(0, 60)}..."` };
     }
 
     // No direct evidence — check heuristics for Unknown
     const heuristic = HEURISTIC_RULES.find(r => r.capabilityId === cap.id && r.trigger(ctx));
     if (heuristic) {
-      return { capability: cap, state: "unknown" as EvidenceState, matchedEvidence: [], reasoning: `No direct evidence found, but statistically likely given your background (CS branch: ${ctx.isCSBranch}, web project: ${ctx.hasWebProject}, cloud project: ${ctx.hasCloudProject}).` };
+      return { capability: cap, state: "unknown" as EvidenceState, matchedEvidence: [], reasoning: `No direct evidence found, but statistically likely given your background (CS branch: \${ctx.isCSBranch}, web project: \${ctx.hasWebProject}, cloud project: \${ctx.hasCloudProject}).` };
     }
 
     return { capability: cap, state: "missing" as EvidenceState, matchedEvidence: [], reasoning: "No evidence found and no heuristic path available. This is a specialized capability not commonly implied by your profile." };
@@ -451,21 +448,21 @@ function calculateReadinessScore(coverages: CapabilityCoverage[]): number {
 
 async function generateEvidenceQuestion(coverage: CapabilityCoverage, modelType: string): Promise<EvidenceQuestion> {
   const cap = coverage.capability;
-  const fallbackQuestion = `Have you worked with ${cap.name} in any projects, labs, coursework, or competitions? If yes, describe what you did and the tools you used.`;
+  const fallbackQuestion = `Have you worked with \${cap.name} in any projects, labs, coursework, or competitions? If yes, describe what you did and the tools you used.`;
   try {
     const prompt = `You are an expert technical recruiter conducting a resume enrichment interview.
-Generate ONE targeted question to determine whether the candidate has real experience with "${cap.name}" that is not documented in their resume.
+Generate ONE targeted question to determine whether the candidate has real experience with "\${cap.name}" that is not documented in their resume.
 Do NOT ask generic questions. Ask for concrete evidence: projects, labs, CTFs, coursework, competitions, bug bounties, or research.
 Return ONLY a JSON object: {"question": "..."}
-Capability: ${cap.name} (Category: ${cap.category})
-Current Evidence Status: ${coverage.state} — ${coverage.reasoning}`;
+Capability: \${cap.name} (Category: \${cap.category})
+Current Evidence Status: \${coverage.state} — \dots\${coverage.reasoning}`;
     const raw = await generateInBrowser({ modelType, prompt, maxTokens: 128 });
     const parsed = JSON.parse(parseRobustLLMJSON(raw));
     const q = typeof parsed === "object" && parsed.question ? String(parsed.question) : fallbackQuestion;
-    return { id: `q_${cap.id}_${Date.now()}`, capabilityId: cap.id, capabilityName: cap.name, text: q, answer: "", stableKey: normalizeStableKey(`capability:${cap.id}`) };
+    return { id: `q_\${cap.id}_\${Date.now()}`, capabilityId: cap.id, capabilityName: cap.name, text: q, answer: "", stableKey: normalizeStableKey(`capability:\${cap.id}`) };
   } catch (e) {
-    console.warn(`[Stage 4] LLM question generation failed for ${cap.name}:`, e);
-    return { id: `q_${cap.id}_${Date.now()}`, capabilityId: cap.id, capabilityName: cap.name, text: fallbackQuestion, answer: "", stableKey: normalizeStableKey(`capability:${cap.id}`) };
+    console.warn(`[Stage 4] LLM question generation failed for \${cap.name}:`, e);
+    return { id: `q_\${cap.id}_\${Date.now()}`, capabilityId: cap.id, capabilityName: cap.name, text: fallbackQuestion, answer: "", stableKey: normalizeStableKey(`capability:\${cap.id}`) };
   }
 }
 
@@ -507,7 +504,7 @@ async function generateResumePatches(
   vaultEvidence.forEach(e => {
     const cap = capabilities.find(c => c.id === e.capabilityId);
     if (cap && !existingSkills.has(cap.name.toLowerCase())) {
-      patches.push({ section: "skills", action: "add", content: cap.name, reasoning: `Vault evidence confirms: "${e.text.substring(0, 60)}"` });
+      patches.push({ section: "skills", action: "add", content: cap.name, reasoning: `Vault evidence confirms: "\${e.text.substring(0, 60)}"` });
     }
   });
 
@@ -520,14 +517,14 @@ async function generateResumePatches(
     try {
       const prompt = `You are a resume editor. Suggest ONE enhancement to this project description using ONLY the evidence provided.
 STRICT RULES: Do NOT invent tools, metrics, or projects. Only use the provided evidence. If evidence is insufficient, return null.
-Project: ${p.title}
-Current description: ${p.description || "(empty)"}
-Evidence from vault: ${relevantEvidence.map(e => e.text).join("; ")}
+Project: \dots\${p.title}
+Current description: \dots\${p.description || "(empty)"}
+Evidence from vault: \dots\${relevantEvidence.map(e => e.text).join("; ")}
 Return ONLY JSON: {"enhancement": "..."} or {"enhancement": null}`;
       const raw = await generateInBrowser({ modelType, prompt, maxTokens: 128 });
       const parsed = JSON.parse(parseRobustLLMJSON(raw));
       if (parsed?.enhancement && typeof parsed.enhancement === "string") {
-        patches.push({ section: `project_${i}`, action: "enhance", content: parsed.enhancement, reasoning: `Grounded in vault evidence for project "${p.title}"` });
+        patches.push({ section: `project_\dots\${i}`, action: "enhance", content: parsed.enhancement, reasoning: `Grounded in vault evidence for project "\${p.title}"` });
       }
     } catch (e) { /* skip this project */ }
   }
@@ -550,7 +547,7 @@ function applyPatches(masterResume: any, patches: ResumePatch[]): any {
       const idx = parseInt(patch.section.split("_")[1]);
       if (tailored.projects[idx]) {
         const existing = tailored.projects[idx].description || "";
-        tailored.projects[idx].description = existing ? `${existing} ${patch.content}` : patch.content;
+        tailored.projects[idx].description = existing ? `\${existing} \dots\${patch.content}` : patch.content;
       }
     } else if (patch.section === "summary" && (patch.action === "add" || patch.action === "rephrase")) {
       tailored.summary = patch.content;
@@ -558,16 +555,231 @@ function applyPatches(masterResume: any, patches: ResumePatch[]): any {
   });
 
   return tailored;
+}
+
+// ─── Preserved Answer Feedback helpers ───────────────────────────────────────
+
+function calculateAnswerUsability(answer: string): number {
+  const text = answer.trim();
+  if (text.length === 0) return 0;
+  
+  const lower = text.toLowerCase();
+  if (/^(yes|no|none|na|n\\\\/a|not yet|never|yeah|sure|yep|nop|nope)$/.test(lower)) {
+    return 10;
+  }
+  
+  let score = 20;
+  
+  if (text.length > 20) score += 10;
+  if (text.length > 50) score += 20;
+  if (text.length > 100) score += 20;
+  
+  const hasNumbers = /[0-9]+%?/.test(text);
+  if (hasNumbers) score += 15;
+  
+  const techKeywords = ["docker", "kubernetes", "aws", "gcp", "azure", "ec2", "s3", "lambda", "nginx", "redis", "postgresql", "mongodb", "fastapi", "react", "next.js", "node", "concurrency", "websocket", "latency", "throughput", "monitoring", "prometheus", "grafana", "git", "ci/cd"];
+  let techCount = 0;
+  techKeywords.forEach(kw => {
+    if (lower.includes(kw)) techCount++;
+  });
+  score += Math.min(25, techCount * 8);
+
+  return Math.min(100, score);
+}
+
+function getAnswerFeedback(answer: string): { status: "empty" | "weak" | "strong"; feedback: string } {
+  const usability = calculateAnswerUsability(answer);
+  if (answer.trim().length === 0) {
+    return { status: "empty", feedback: "Please provide technical details or metrics to help optimize your resume." };
+  }
+  if (usability < 40) {
+    return { status: "weak", feedback: "⚠️ Too brief. Try adding specific tools, metrics, or details (e.g. 'Used AWS S3 for storage' instead of 'Yes')." };
+  }
+  return { status: "strong", feedback: "✨ Excellent detail! This contains strong evidence that can be integrated into your resume." };
+}
+""")
+
+src = src[:m2.start()] + NEW2 + src[m2.end():]
+print("OK   [2:ontology-block]")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATCH 3: Replace state hooks
+# ═══════════════════════════════════════════════════════════════════════════════
+OLD3 = crlf(
+"""  const [copilotQuestions, setCopilotQuestions] = useState<CopilotQuestion[]>([]);
+  const [evidenceGaps, setEvidenceGaps] = useState<EvidenceGap[]>([]);
+  const [generatingQuestions, setGeneratingQuestions] = useState(false);
+  const [savingVault, setSavingVault] = useState(false);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [copilotTab, setCopilotTab] = useState<"gaps" | "questions">("gaps");""")
+
+NEW3 = crlf(
+"""  const [evidenceQuestions, setEvidenceQuestions] = useState<EvidenceQuestion[]>([]);
+  const [coverages, setCoverages] = useState<CapabilityCoverage[]>([]);
+  const [workspaceCapabilities, setWorkspaceCapabilities] = useState<WorkspaceCapability[]>([]);
+  const [readinessScore, setReadinessScore] = useState<number | null>(null);
+  const [verificationCache, setVerificationCache] = useState<Record<string, CapabilityVerification>>({});
+  const [pendingPatches, setPendingPatches] = useState<ResumePatch[]>([]);
+  const [generatingQuestions, setGeneratingQuestions] = useState(false);
+  const [savingVault, setSavingVault] = useState(false);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [copilotTab, setCopilotTab] = useState<string>("gaps");""")
+
+exact_replace("3:state-hooks", OLD3, NEW3)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATCH 4: Disable runDeterministicATS call inside loadCompanyData
+# ═══════════════════════════════════════════════════════════════════════════════
+OLD4 = crlf("      await runDeterministicATS(compRes.data);")
+NEW4 = crlf("      // runDeterministicATS disabled")
+exact_replace("4:loadCompanyData-call", OLD4, NEW4)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATCH 5: Disable/remove runDeterministicATS and runLocalATS functions block
+# ═══════════════════════════════════════════════════════════════════════════════
+OLD5_START = "  const runDeterministicATS = async (activeCompany: Company) => {"
+OLD5_END   = "  const generateCopilotQuestions = async () => {"
+
+pat5 = re.compile(
+    re.escape(OLD5_START) + r".*?" + r"(?=" + re.escape(OLD5_END) + r")",
+    re.DOTALL
+)
+m5 = pat5.search(src)
+if not m5:
+    print("FAIL [5:ats-block] — anchor not found!")
+    sys.exit(1)
+
+NEW5 = crlf(
+"""  // Deterministic and Local ATS handlers disabled in favor of runAnalysis
+""")
+
+src = src[:m5.start()] + NEW5 + src[m5.end():]
+print("OK   [5:ats-block]")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATCH 6: Replace generateCopilotQuestions with runAnalysis
+# ═══════════════════════════════════════════════════════════════════════════════
+OLD6_START = "  const generateCopilotQuestions = async () => {"
+OLD6_END   = "  const handleSaveToVault = async () => {"
+
+pat6 = re.compile(
+    re.escape(OLD6_START) + r".*?" + r"(?=" + re.escape(OLD6_END) + r")",
+    re.DOTALL
+)
+m6 = pat6.search(src)
+if not m6:
+    print("FAIL [6:generateCopilotQuestions] — anchor not found!")
+    sys.exit(1)
+
+NEW6 = crlf(
+"""  const runAnalysis = async () => {
+    if (!company) return;
+    setGeneratingQuestions(true);
+    setErrorMsg("");
+    setSuccessMsg("");
+    setLocalStatusMessage("");
+    setEvidenceQuestions([]);
+    setCoverages([]);
+    setAnswers({});
+    setCopilotTab("gaps");
+
+    try {
+      const resMe = await api.get("/resumes/me");
+      const resumeData = resMe.data?.resume_data || masterResume || {};
+      if (!resumeData || Object.keys(resumeData).length === 0) {
+        throw new Error("No master resume found. Please ensure you have parsed your master resume first.");
+      }
+
+      // Stage 1: Extract capabilities
+      setLocalStatusMessage("Stage 1/4: Analyzing Job Description...");
+      const caps = await extractCapabilities(company.jd_text || "", company.name, atsModel);
+      setWorkspaceCapabilities(caps);
+
+      // Stage 2: Extract resume evidence
+      setLocalStatusMessage("Stage 2/4: Extracting evidence from resume...");
+      const resumeEvidence = extractResumeEvidence(resumeData);
+
+      // Load existing vault evidence
+      const existingVault: VaultQA[] = resumeData.context_vault || [];
+      const vaultEvidence: UserEvidence[] = existingVault
+        .filter(v => v.stableKey && v.answer.trim().length > 20)
+        .map(v => ({
+          capabilityId: v.stableKey!.replace("capability:", ""),
+          text: v.answer.trim(),
+          source: "vault" as const,
+          verified: true
+        }));
+
+      const allEvidence = [...resumeEvidence, ...vaultEvidence];
+
+      // Stage 3: Map capability states
+      setLocalStatusMessage("Stage 3/4: Mapping capability coverage...");
+      const mappedCoverages = mapCapabilityStates(caps, allEvidence, resumeData);
+      setCoverages(mappedCoverages);
+
+      // Calculate score
+      const score = calculateReadinessScore(mappedCoverages);
+      setReadinessScore(score);
+
+      // Load verification cache
+      const cacheArray: CapabilityVerification[] = resumeData.capability_verifications || [];
+      const cacheMap: Record<string, CapabilityVerification> = {};
+      cacheArray.forEach(v => { cacheMap[v.capabilityId] = v; });
+      setVerificationCache(cacheMap);
+
+      // Stage 4: Compile questions (only for unknown/missing, and not verified in cache)
+      setLocalStatusMessage("Stage 4/4: Compiling targeted questions...");
+      const targetCoverages = mappedCoverages
+        .filter(c => (c.state === "unknown" || c.state === "missing") && !cacheMap[c.capability.id]?.verified)
+        // Sort by importance so critical/high come first
+        .sort((a, b) => {
+          const weights: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+          return weights[b.capability.importance] - weights[a.capability.importance];
+        })
+        .slice(0, 3);
+
+      const compiledQuestions = await Promise.all(
+        targetCoverages.map(c => generateEvidenceQuestion(c, atsModel))
+      );
+
+      const initialAnswers: Record<string, string> = {};
+      compiledQuestions.forEach(q => { initialAnswers[q.id] = ""; });
+
+      setEvidenceQuestions(compiledQuestions);
+      setAnswers(initialAnswers);
+
+      showSuccess(`Analysis complete! Readiness score: ${score}%. ${compiledQuestions.length} targeted question(s) compiled.`);
+    } catch (err: any) {
+      console.error("Failed to run analysis:", err);
+      setErrorMsg(err.message || "Failed to run analysis.");
+    } finally {
+      setGeneratingQuestions(false);
+      setLocalStatusMessage("");
+    }
+  };
+
+""")
+
+src = src[:m6.start()] + NEW6 + src[m6.end():]
+print("OK   [6:runAnalysis]")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATCH 7: Replace handleSaveToVault
+# ═══════════════════════════════════════════════════════════════════════════════
+OLD7_START = "  const handleSaveToVault = async () => {"
+OLD7_END   = "  const updateCopilotAnswer = (id: string, val: string) => {"
+
 pat7 = re.compile(
-    r"  const handleSaveToVault = async \(\) => \{.+?\r\n  \};",
+    re.escape(OLD7_START) + r".*?" + r"(?=" + re.escape(OLD7_END) + r")",
     re.DOTALL
 )
 m7 = pat7.search(src)
 if not m7:
-    print("FAIL [7:handleSaveToVault] — not found")
+    print("FAIL [7:handleSaveToVault] — anchor not found!")
     sys.exit(1)
 
-NEW7 = crlf("""  const handleSaveToVault = async () => {
+NEW7 = crlf(
+"""  const handleSaveToVault = async () => {
     if (!masterResume || !encryptionKey) {
       setErrorMsg("Vault session key missing. Please ensure your Vault is unlocked.");
       return;
@@ -612,31 +824,37 @@ NEW7 = crlf("""  const handleSaveToVault = async () => {
       setReadinessScore(calculateReadinessScore(newCoverages));
 
       showSuccess("Answers saved to vault! Your Resume Readiness Score has been updated.");
-      setCopilotTab("readiness");
+      setCopilotTab("gaps");
     } catch (err: any) {
       console.error("Failed to save to vault", err);
       setErrorMsg(err.response?.data?.detail || "Failed to save answers to secure vault.");
     } finally {
       setSavingVault(false);
     }
-  };""")
+  };
+
+""")
 
 src = src[:m7.start()] + NEW7 + src[m7.end():]
 print("OK   [7:handleSaveToVault]")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 8: Replace handleGenerateTailoredResume to use patch-based tailoring
+# PATCH 8: Replace handleGenerateTailoredResume
 # ═══════════════════════════════════════════════════════════════════════════════
+OLD8_START = "  const handleGenerateTailoredResume = async () => {"
+OLD8_END   = "  const handleSaveTailoredResume = async () => {"
+
 pat8 = re.compile(
-    r"  const handleGenerateTailoredResume = async \(\) => \{.+?\r\n  \};",
+    re.escape(OLD8_START) + r".*?" + r"(?=" + re.escape(OLD8_END) + r")",
     re.DOTALL
 )
 m8 = pat8.search(src)
 if not m8:
-    print("FAIL [8:handleGenerateTailoredResume] — not found")
+    print("FAIL [8:handleGenerateTailoredResume] — anchor not found!")
     sys.exit(1)
 
-NEW8 = crlf("""  const handleGenerateTailoredResume = async () => {
+NEW8 = crlf(
+"""  const handleGenerateTailoredResume = async () => {
     if (!masterResume) {
       setErrorMsg("No master resume found. Cannot generate tailored resume.");
       return;
@@ -668,7 +886,9 @@ NEW8 = crlf("""  const handleGenerateTailoredResume = async () => {
       setCalculatingATS(false);
       setLocalStatusMessage("");
     }
-  };""")
+  };
+
+""")
 
 src = src[:m8.start()] + NEW8 + src[m8.end():]
 print("OK   [8:handleGenerateTailoredResume]")
@@ -676,54 +896,253 @@ print("OK   [8:handleGenerateTailoredResume]")
 # ═══════════════════════════════════════════════════════════════════════════════
 # PATCH 9: Update updateCopilotAnswer references
 # ═══════════════════════════════════════════════════════════════════════════════
-OLD9 = crlf("  const updateCopilotAnswer = (id: string, val: string) => {\n    setAnswers(prev => ({ ...prev, [id]: val }));\n    setCopilotQuestions(prev => prev.map(q => q.id === id ? { ...q, answer: val } : q));\n  };")
-NEW9 = crlf("  const updateCopilotAnswer = (id: string, val: string) => {\n    setAnswers(prev => ({ ...prev, [id]: val }));\n    setEvidenceQuestions(prev => prev.map(q => q.id === id ? { ...q, answer: val } : q));\n  };")
-exact_replace("9:updateCopilotAnswer", OLD9, NEW9)
+OLD9_START = "  const updateCopilotAnswer = (id: string, val: string) => {"
+OLD9_END   = "  const handleGenerateTailoredResume = async () => {"
+
+pat9 = re.compile(
+    re.escape(OLD9_START) + r".*?" + r"(\r?\n  \};)",
+    re.DOTALL
+)
+m9 = pat9.search(src)
+
+if not m9:
+    print("FAIL [9:updateCopilotAnswer] — anchor not found!")
+    sys.exit(1)
+
+NEW9 = crlf(
+"""  const updateCopilotAnswer = (id: string, val: string) => {
+    setAnswers(prev => ({ ...prev, [id]: val }));
+    setEvidenceQuestions(prev => prev.map(q => q.id === id ? { ...q, answer: val } : q));
+  };""")
+
+src = src[:m9.start()] + NEW9 + src[m9.end():]
+print("OK   [9:updateCopilotAnswer]")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 10: Replace JSX gaps render block with new Readiness Panel
+# PATCH 10: Replace Action Button Panel in Sidebar (lines 3694 to 3737 area)
 # ═══════════════════════════════════════════════════════════════════════════════
-# Find the gap render section (evidenceGaps.map block)
+OLD10_START = "                    {generatingQuestions ? ("
+# anchor for the end of the block
+OLD10_END   = "                    <span className=\"text-[8px] text-muted-foreground uppercase text-center block leading-normal font-mono\">"
+
 pat10 = re.compile(
-    r"                              <div className=\"grid grid-cols-1 md:grid-cols-2 gap-4\">\r\n"
-    r"                                \{evidenceGaps\.map\(\(gap, idx\) => \{.+?\}\)}\r\n"
-    r"                              </div>",
+    re.escape(OLD10_START) + r".*?" + r"(?=" + re.escape(OLD10_END) + r")",
     re.DOTALL
 )
 m10 = pat10.search(src)
 if not m10:
-    print("FAIL [10:gaps-render] — evidenceGaps.map block not found")
+    print("FAIL [10:sidebar-buttons] — anchor not found!")
     sys.exit(1)
 
-BADGE_COLORS: dict = {}  # just for reference
-NEW10 = crlf("""                              {/* ── Resume Readiness Score ──────────────────── */}
+NEW10 = crlf(
+"""                    {generatingQuestions ? (
+                      <button
+                        disabled
+                        className="w-full h-10 border-2 border-border bg-background font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-2 transition-all opacity-50 font-mono"
+                      >
+                        <Loader2 className="animate-spin h-3.5 w-3.5" />
+                        <span>Running Analysis...</span>
+                      </button>
+                    ) : coverages.length === 0 ? (
+                      <button
+                        onClick={runAnalysis}
+                        className="w-full h-10 border-2 border-accent bg-accent/5 hover:bg-accent hover:text-black font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-2 active:scale-[0.98] transition-all font-mono"
+                      >
+                        <Sparkles size={12} className="text-accent" />
+                        <span>Start AI Resume Copilot</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleGenerateTailoredResume}
+                        disabled={calculatingATS}
+                        className="w-full h-10 border-2 border-accent bg-accent text-black hover:bg-black hover:text-accent hover:border-accent font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50 font-mono"
+                      >
+                        {calculatingATS ? (
+                          <>
+                            <Loader2 className="animate-spin h-3.5 w-3.5" />
+                            <span>TAILORING RESUME...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles size={12} />
+                            <span>{tailoredResumeData ? "Re-Optimize Resume" : "Generate Optimized Resume"}</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+""")
+
+src = src[:m10.start()] + NEW10 + src[m10.end():]
+print("OK   [10:sidebar-buttons]")
+
+# Also replace the span describing the copilot state
+OLD10b = crlf(
+"""                    <span className="text-[8px] text-muted-foreground uppercase text-center block leading-normal font-mono">
+                      {copilotQuestions.length === 0 
+                        ? "Wizards the Job Description against your resume and generates targeted Q&A to build a verified fact matrix."
+                        : atsResult 
+                        ? "Re-runs optimization with any updated general or job-specific answers."
+                        : "Processes your verified facts through local AI to output your tailored resume."
+                      }
+                    </span>""")
+
+NEW10b = crlf(
+"""                    <span className="text-[8px] text-muted-foreground uppercase text-center block leading-normal font-mono">
+                      {coverages.length === 0 
+                        ? "Wizards the Job Description against your resume and generates targeted Q&A to build a verified fact matrix."
+                        : tailoredResumeData 
+                        ? "Re-runs optimization with any updated general or job-specific answers."
+                        : "Processes your verified facts through local AI to output your tailored resume."
+                      }
+                    </span>""")
+
+exact_replace("10b:sidebar-description", OLD10b, NEW10b)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PATCH 11: Replace the entire Q&A Copilot panel UI container block (lines 3862 to 4073)
+# ═══════════════════════════════════════════════════════════════════════════════
+OLD11_START = '                        {/* AI Resume Copilot Panel */}'
+OLD11_END   = '                        {/* Interactive Form */}'
+
+pat11 = re.compile(
+    re.escape(OLD11_START) + r".*?" + r"(?=" + re.escape(OLD11_END) + r")",
+    re.DOTALL
+)
+m11 = pat11.search(src)
+if not m11:
+    print("FAIL [11:copilot-panel] — anchor not found!")
+    sys.exit(1)
+
+NEW11 = crlf(
+"""                        {/* AI Resume Copilot Panel */}
+                        <div className="border-2 border-border p-6 bg-card space-y-6">
+                          <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-border pb-4 gap-4">
+                            <div>
+                              <h3 className="text-sm font-black tracking-widest text-accent uppercase flex items-center gap-2">
+                                <Sparkles size={16} className="text-accent" />
+                                <span>🤖 AI RESUME COPILOT EVIDENCE GRAPH</span>
+                              </h3>
+                              <p className="text-[10px] text-zinc-500 uppercase mt-1 leading-normal">
+                                Provide verified facts and confirm details so the AI optimizer matches your resume to this role without fabricating skills.
+                              </p>
+                              <p className="text-[10px] text-accent/80 font-mono uppercase mt-1.5 leading-normal">
+                                Note: The Copilot is discovering verifiable evidence that may already exist but is missing from your resume.
+                              </p>
+                            </div>
+                            {coverages.length === 0 && evidenceQuestions.length === 0 ? (
+                              <button
+                                onClick={runAnalysis}
+                                disabled={generatingQuestions}
+                                className="h-9 px-4 border-2 border-accent bg-accent/5 hover:bg-accent hover:text-black text-accent text-[10px] font-black uppercase flex items-center gap-1.5 transition-all shrink-0"
+                              >
+                                {generatingQuestions ? (
+                                  <>
+                                    <Loader2 className="animate-spin h-3.5 w-3.5" />
+                                    <span>Analyzing...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles size={11} />
+                                    <span>Run Copilot Analysis</span>
+                                  </>
+                                )}
+                              </button>
+                            ) : (
+                              <div className="flex gap-2 shrink-0">
+                                <button
+                                  onClick={handleSaveToVault}
+                                  disabled={savingVault}
+                                  className="h-9 px-3 border border-border bg-muted hover:border-accent hover:text-accent text-[10px] font-black uppercase flex items-center gap-1 transition-all"
+                                  title="Persist general project/experience details to your encrypted master resume vault for reuse"
+                                >
+                                  {savingVault ? "Saving..." : "Save Answers to Vault"}
+                                </button>
+                                <button
+                                  onClick={handleGenerateTailoredResume}
+                                  disabled={calculatingATS}
+                                  className="h-9 px-3 border border-accent bg-accent/10 hover:bg-accent hover:text-black text-[10px] font-black uppercase flex items-center gap-1 transition-all"
+                                >
+                                  {calculatingATS ? "Tailoring..." : "Tailor Resume"}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setEvidenceQuestions([]);
+                                    setCoverages([]);
+                                    setReadinessScore(null);
+                                    setAnswers({});
+                                    setPendingPatches([]);
+                                    setCopilotTab("gaps");
+                                  }}
+                                  className="h-9 px-3 border border-red-500/30 text-red-500 hover:bg-red-500/10 text-[10px] font-black uppercase transition-all"
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {(coverages.length > 0 || evidenceQuestions.length > 0) && (
+                            <div className="flex border-b border-border gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setCopilotTab("gaps")}
+                                className={`pb-2 px-4 text-xs font-black tracking-wider uppercase border-b-2 transition-all \${
+                                  copilotTab === "gaps" ? "border-accent text-accent" : "border-transparent text-muted-foreground hover:text-foreground"
+                                }`}
+                              >
+                                📊 Resume Readiness
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setCopilotTab("questions")}
+                                className={`pb-2 px-4 text-xs font-black tracking-wider uppercase border-b-2 transition-all \${
+                                  copilotTab === "questions" ? "border-accent text-accent" : "border-transparent text-muted-foreground hover:text-foreground"
+                                }`}
+                              >
+                                ❓ Interview Questions ({evidenceQuestions.length})
+                              </button>
+                              {pendingPatches.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setCopilotTab("patches")}
+                                  className={`pb-2 px-4 text-xs font-black tracking-wider uppercase border-b-2 transition-all \${
+                                    copilotTab === "patches" ? "border-accent text-accent" : "border-transparent text-muted-foreground hover:text-foreground"
+                                  }`}
+                                >
+                                  🛠️ Generated Patches ({pendingPatches.length})
+                                </button>
+                              )}
+                            </div>
+                          )}
+
+                          {copilotTab === "gaps" && coverages.length > 0 ? (
+                            <div className="space-y-4">
                               {readinessScore !== null && (
                                 <div className="mb-4 p-4 border border-border bg-background/50 rounded-sm">
                                   <div className="flex justify-between items-center mb-2">
                                     <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Resume Readiness Score</span>
-                                    <span className={`text-lg font-black ${readinessScore >= 70 ? "text-emerald-400" : readinessScore >= 40 ? "text-amber-400" : "text-red-400"}`}>
+                                    <span className={`text-lg font-black \${readinessScore >= 70 ? "text-emerald-400" : readinessScore >= 40 ? "text-amber-400" : "text-red-400"}`}>
                                       {readinessScore}%
                                     </span>
                                   </div>
                                   <div className="w-full h-1.5 bg-border rounded-full overflow-hidden">
-                                    <div className={`h-full rounded-full transition-all duration-700 ${readinessScore >= 70 ? "bg-emerald-500" : readinessScore >= 40 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${readinessScore}%` }} />
+                                    <div className={`h-full rounded-full transition-all duration-700 \${readinessScore >= 70 ? "bg-emerald-500" : readinessScore >= 40 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${readinessScore}%` }} />
                                   </div>
                                 </div>
                               )}
 
-                              {/* ── 4-State Coverage Grid ─────────────────────── */}
-                              {(["strong","weak","unknown","missing"] as EvidenceState[]).map(state => {
+                              {(["strong", "weak", "unknown", "missing"] as EvidenceState[]).map(state => {
                                 const items = coverages.filter(c => c.state === state);
                                 if (items.length === 0) return null;
                                 const config = {
-                                  strong:  { label:"✓ Strong Evidence",          color:"text-emerald-400", border:"border-emerald-500/25 bg-emerald-500/5" },
-                                  weak:    { label:"⚠ Needs Better Evidence",    color:"text-amber-400",   border:"border-amber-500/25 bg-amber-500/5" },
-                                  unknown: { label:"? Need Verification",         color:"text-blue-400",    border:"border-blue-500/25 bg-blue-500/5" },
-                                  missing: { label:"✗ No Evidence Found",         color:"text-red-400",     border:"border-red-500/25 bg-red-500/5" },
+                                  strong:  { label: "✓ Strong Evidence",          color: "text-emerald-400", border: "border-emerald-500/25 bg-emerald-500/5" },
+                                  weak:    { label: "⚠ Needs Better Evidence",    color: "text-amber-400",   border: "border-amber-500/25 bg-amber-500/5" },
+                                  unknown: { label: "? Need Verification",         color: "text-blue-400",    border: "border-blue-500/25 bg-blue-500/5" },
+                                  missing: { label: "✗ No Evidence Found",         color: "text-red-400",     border: "border-red-500/25 bg-red-500/5" },
                                 }[state];
                                 return (
-                                  <div key={state} className={`border ${config.border} rounded-sm p-3 mb-3`}>
-                                    <div className={`text-[9px] font-black uppercase tracking-widest mb-2 ${config.color}`}>{config.label} ({items.length})</div>
+                                  <div key={state} className={`border \${config.border} rounded-sm p-3 mb-3`}>
+                                    <div className={`text-[9px] font-black uppercase tracking-widest mb-2 \${config.color}`}>{config.label} ({items.length})</div>
                                     <div className="flex flex-wrap gap-1.5">
                                       {items.map(c => (
                                         <span key={c.capability.id} className="text-[10px] font-bold text-foreground bg-muted/40 px-2 py-0.5 rounded-sm border border-border">
@@ -733,26 +1152,11 @@ NEW10 = crlf("""                              {/* ── Resume Readiness Score 
                                     </div>
                                   </div>
                                 );
-                              })}""")
-
-src = src[:m10.start()] + NEW10 + src[m10.end():]
-print("OK   [10:readiness-panel-jsx]")
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 11: Replace questions render block (copilotQuestions.map)
-# ═══════════════════════════════════════════════════════════════════════════════
-pat11 = re.compile(
-    r"                              <div className=\"grid grid-cols-1 md:grid-cols-2 gap-4\">\r\n"
-    r"                                \{copilotQuestions\.map\(\(q\) => \{.+?\}\)}\r\n"
-    r"                              </div>",
-    re.DOTALL
-)
-m11 = pat11.search(src)
-if not m11:
-    print("FAIL [11:questions-render] — copilotQuestions.map block not found")
-    sys.exit(1)
-
-NEW11 = crlf("""                              <div className="space-y-4">
+                              })}
+                            </div>
+                          ) : copilotTab === "questions" && evidenceQuestions.length > 0 ? (
+                            <div className="space-y-4">
+                              <div className="space-y-4">
                                 {evidenceQuestions.map((q) => {
                                   const feedback = getAnswerFeedback(answers[q.id] || "");
                                   return (
@@ -767,7 +1171,7 @@ NEW11 = crlf("""                              <div className="space-y-4">
                                       </div>
                                       <div className="space-y-2">
                                         <textarea
-                                          id={`copilot-answer-${q.id}`}
+                                          id={`copilot-answer-\${q.id}`}
                                           value={answers[q.id] || ""}
                                           onChange={e => updateCopilotAnswer(q.id, e.target.value)}
                                           placeholder="Describe your experience — include specific tools, projects, or metrics..."
@@ -775,7 +1179,7 @@ NEW11 = crlf("""                              <div className="space-y-4">
                                           className="w-full text-xs bg-muted/20 border border-border rounded-sm p-2.5 text-foreground placeholder:text-muted-foreground/60 resize-none focus:outline-none focus:border-accent/60 font-medium"
                                         />
                                         {(answers[q.id] || "").trim().length > 0 && (
-                                          <p className={`text-[10px] font-bold ${feedback.status === "strong" ? "text-emerald-400" : "text-amber-400"}`}>
+                                          <p className={`text-[10px] font-bold \${feedback.status === "strong" ? "text-emerald-400" : "text-amber-400"}`}>
                                             {feedback.feedback}
                                           </p>
                                         )}
@@ -783,26 +1187,53 @@ NEW11 = crlf("""                              <div className="space-y-4">
                                     </div>
                                   );
                                 })}
-                              </div>""")
+                              </div>
+                              <div className="border-t border-border pt-4 flex justify-between items-center">
+                                <span className="text-[9px] text-zinc-500 uppercase leading-snug">
+                                  Your answers will be securely saved to your Master Vault on submit.
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={handleSaveToVault}
+                                  disabled={savingVault}
+                                  className="h-10 px-5 border-2 border-accent bg-accent text-black hover:bg-black hover:text-accent hover:border-accent text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all"
+                                >
+                                  <span>{savingVault ? "Saving..." : "Save to Vault"}</span>
+                                </button>
+                              </div>
+                            </div>
+                          ) : copilotTab === "patches" && pendingPatches.length > 0 ? (
+                            <div className="space-y-4">
+                              <div className="space-y-3">
+                                {pendingPatches.map((patch, idx) => (
+                                  <div key={idx} className="border border-border bg-background p-4 rounded-sm space-y-2">
+                                    <div className="flex justify-between items-center">
+                                      <span className={`px-2 py-0.5 text-[8px] font-black border uppercase tracking-wider \${
+                                        patch.action === "add" ? "border-emerald-500/35 text-emerald-400 bg-emerald-500/5" : "border-blue-500/35 text-blue-400 bg-blue-500/5"
+                                      }`}>
+                                        {patch.action.toUpperCase()} ({patch.section})
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-foreground font-mono font-bold leading-normal">{patch.content}</p>
+                                    <p className="text-[10px] text-muted-foreground font-medium italic">Reason: {patch.reasoning}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="border border-dashed border-border p-6 text-center">
+                              <p className="text-xs text-muted-foreground uppercase leading-relaxed font-bold">
+                                {coverages.length === 0 && evidenceQuestions.length === 0
+                                  ? "Want a highly optimized, accurate resume tailoring? Let the Copilot analyze the Job Description and your resume to generate targeted verification questions."
+                                  : "No items to show in this tab."}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+""")
 
 src = src[:m11.start()] + NEW11 + src[m11.end():]
-print("OK   [11:questions-render-jsx]")
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 12: Fix button references (generateCopilotQuestions → runAnalysis)
-# ═══════════════════════════════════════════════════════════════════════════════
-old12 = "onClick={generateCopilotQuestions}"
-new12 = "onClick={runAnalysis}"
-count12 = src.count(old12)
-if count12 == 0:
-    print("WARN [12:button-ref] — generateCopilotQuestions onClick not found, skipping")
-else:
-    src = src.replace(old12, new12)
-    print(f"OK   [12:button-ref] ({count12} occurrence(s))")
-
-# Fix tab references
-src = src.replace('"gaps"', '"readiness"', 1) if '"gaps"' in src else src
-print("OK   [12b:tab-ref-fixup]")
+print("OK   [11:copilot-panel]")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # WRITE BACK
@@ -812,7 +1243,8 @@ if new_len < orig_len * 0.7:
     print(f"SAFETY ABORT: file shrank too much ({orig_len} -> {new_len})")
     sys.exit(1)
 
-with open(FILE, "w", encoding="utf-8", newline="") as f:
+with open(FILE, "w", encoding="utf-8", newline="\n") as f:
     f.write(src)
 
-print(f"\nAll patches applied. {orig_len} -> {new_len} chars (+{new_len-orig_len})")
+print(f"\n✅ All patches applied successfully!")
+print(f"File: {new_len} chars (was {orig_len}, delta +{new_len - orig_len})")
