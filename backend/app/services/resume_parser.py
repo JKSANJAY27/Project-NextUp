@@ -192,6 +192,23 @@ def parse_resume_with_huggingface(text: str) -> Dict[str, Any]:
         logger.warning(f"HuggingFace escalation resume parsing failed: {str(e)}")
     return {}
 
+def is_tech_only_line(line: str) -> bool:
+    line_clean = re.sub(r'[\s,;|•\*\-\(\)▪\d–—]', ' ', line.lower())
+    words = [w.strip() for w in line_clean.split() if w.strip()]
+    if not words:
+        return False
+    # Check what proportion of words are technical keywords
+    tech_words = {
+        'python', 'react', 'fastapi', 'supabase', 'nodejs', 'node.js', 'node', 'js', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain', 'html', 'css', 'tailwind', 'tailwindcss', 'typescript', 'langgraph', 'langfuse', 'pytorch', 'scikit-learn', 'c', 'git', 'github', 'nlp', 'ai', 'ml', 'docker', 'kubernetes', 'aws', 'gcp', 'azure', 'vue', 'angular', 'svelte', 'express', 'express.js', 'flask', 'django', 'networkx', 'rest', 'api', 'apis', 'graphql', 'grpc', 'web', 'full-stack', 'frontend', 'backend', 'next.js', 'nextjs', 'pandas', 'numpy', 'opencv', 'keras', 'tensorflow', 'redis', 'postgres', 'postgresql', 'mysql', 'sqlite', 'nosql', 'sqlite3', 'prisma', 'restful', 'ci/cd', 'docker-compose', 'postman', 'figma', 'jira'
+    }
+    # Check the first word. If the first word is not a tech word, it's highly likely a project title or header.
+    first_word = re.sub(r'^[^a-z0-9+#]+|[^a-z0-9+#]+$', '', words[0])
+    if first_word not in tech_words:
+        return False
+        
+    tech_count = sum(1 for w in words if re.sub(r'^[^a-z0-9+#]+|[^a-z0-9+#]+$', '', w) in tech_words)
+    return (tech_count / len(words)) >= 0.7
+
 def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     data = {}
     lines = [line.strip() for line in text.split("\n") if line.strip()]
@@ -423,11 +440,41 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     exp_lines = sections.get('experience', [])
     current_exp = None
     
+    role_keywords = ['intern', 'developer', 'engineer', 'consultant', 'analyst', 'lead', 'manager', 'specialist', 'designer', 'programmer', 'architect', 'member', 'officer', 'scholar', 'student', 'founder', 'co-founder', 'head', 'president', 'vice', 'director']
+    comp_keywords = ['solutions', 'technologies', 'technology', 'inc', 'ltd', 'limited', 'corp', 'corporation', 'co', 'company', 'labs', 'systems', 'valsco', 'university', 'institute']
+
     for line in exp_lines:
         is_bullet = line.startswith(('•', '*', '-', 'o ', '▪'))
         has_date = re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b|\bPresent\b|\b20\d{2}\b', line, re.IGNORECASE)
         
-        if not is_bullet and (has_date or (not current_exp and not is_bullet)):
+        # Check if line is just a date range or location (no role keyword)
+        is_date_only = False
+        if has_date and not is_bullet:
+            has_role = any(re.search(rf"\b{re.escape(x)}\b", line.lower()) for x in role_keywords)
+            if not has_role:
+                is_date_only = True
+                
+        if is_date_only:
+            if current_exp:
+                # Extract period
+                period_match = re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\s*[-–—to]+\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\bPresent\b)\b', line, re.IGNORECASE)
+                if period_match:
+                    current_exp["period"] = period_match.group(0)
+                else:
+                    current_exp["period"] = line.strip(' ,-–—|()')
+            continue
+            
+        # Determine if we should start a new experience
+        is_new_exp = False
+        if not is_bullet:
+            has_role = any(re.search(rf"\b{re.escape(x)}\b", line.lower()) for x in role_keywords)
+            if has_role:
+                has_comp = any(re.search(rf"\b{re.escape(x)}\b", line.lower()) for x in comp_keywords)
+                has_sep = bool(re.search(r'[\u2014\u2013|]|\s+-\s+', line))
+                if has_date or has_comp or has_sep or not current_exp:
+                    is_new_exp = True
+                    
+        if is_new_exp:
             if current_exp:
                 experience_entries.append(current_exp)
                 
@@ -454,13 +501,10 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
             
             if len(parts) >= 2:
                 p0, p1 = parts[0], parts[1]
-                role_keywords = ['intern', 'developer', 'engineer', 'consultant', 'analyst', 'lead', 'manager', 'specialist', 'designer', 'programmer', 'architect', 'member', 'officer', 'scholar']
-                comp_keywords = ['solutions', 'technologies', 'technology', 'inc', 'ltd', 'limited', 'corp', 'corporation', 'co', 'company', 'labs', 'systems', 'valsco', 'university', 'institute']
-
-                p0_has_role = any(x in p0.lower() for x in role_keywords)
-                p1_has_comp = any(x in p1.lower() for x in comp_keywords)
-                p0_has_comp = any(x in p0.lower() for x in comp_keywords)
-                p1_has_role = any(x in p1.lower() for x in role_keywords)
+                p0_has_role = any(re.search(rf"\b{re.escape(x)}\b", p0.lower()) for x in role_keywords)
+                p1_has_comp = any(re.search(rf"\b{re.escape(x)}\b", p1.lower()) for x in comp_keywords)
+                p0_has_comp = any(re.search(rf"\b{re.escape(x)}\b", p0.lower()) for x in comp_keywords)
+                p1_has_role = any(re.search(rf"\b{re.escape(x)}\b", p1.lower()) for x in role_keywords)
 
                 if p0_has_role or p1_has_comp:
                     role = p0
@@ -493,7 +537,7 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
                 current_exp["description"] += "\n" + line
             else:
                 current_exp["description"] = line
-                
+
     if current_exp:
         experience_entries.append(current_exp)
         
@@ -505,12 +549,33 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     for line in proj_lines:
         is_bullet = line.startswith(('•', '*', '-', 'o ', '▪'))
         
+        # Check if line is just a tech stack for the current project
+        is_tech_only = False
+        if not is_bullet:
+            if is_tech_only_line(line):
+                is_tech_only = True
+                
+        if is_tech_only:
+            if current_proj:
+                cleaned_tech = line.strip(' ,-–—|()')
+                if current_proj["tech"]:
+                    # Avoid duplicates in tech stack list
+                    existing = [x.strip().lower() for x in current_proj["tech"].split(',')]
+                    new_skills = [x.strip() for x in cleaned_tech.split(',') if x.strip().lower() not in existing]
+                    if new_skills:
+                        current_proj["tech"] += ", " + ", ".join(new_skills)
+                else:
+                    current_proj["tech"] = cleaned_tech
+            continue
+            
         is_header = False
         if not is_bullet and len(line) > 0 and (line[0].isupper() or line[0].isdigit()):
-            has_separator = re.search(r'[\u2014\u2013|]|\s+-\s+', line)
-            has_tech = any(x in line.lower() for x in ['python', 'react', 'nodejs', 'fastapi', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain'])
-            if has_separator or (has_tech and len(line) < 100):
-                is_header = True
+            # A project header must not be a tech-only line
+            if not is_tech_only_line(line):
+                has_separator = re.search(r'[\u2014\u2013|]|\s+-\s+', line)
+                has_tech = any(x in line.lower() for x in ['python', 'react', 'nodejs', 'fastapi', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain'])
+                if has_separator or (has_tech and len(line) < 100) or not current_proj:
+                    is_header = True
         
         if is_header:
             if current_proj:

@@ -3,6 +3,7 @@ import io
 import re
 import json
 import logging
+import html
 from typing import Dict, Any, List
 import pdfplumber
 import fitz  # PyMuPDF
@@ -147,6 +148,21 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
             doc.close()
         except Exception as e:
             logger.error(f"pytesseract OCR fallback failed: {str(e)}")
+    # Clean HTML/XML tags (replace with space to preserve word separation)
+    if text:
+        # Decode HTML entities (e.g. &lt; -> <, &amp; -> &)
+        text = html.unescape(text)
+        # Strip fully-formed HTML tags
+        text = re.sub(r'<[^>]*>', ' ', text)
+        # Strip any dangling/broken HTML tag formats (e.g. <span style=, </span)
+        text = re.sub(r'<\w+\b[^>]*>?|<?/\w+>?', ' ', text)
+        text = re.sub(r'\b(style|class|id|href|src|align|valign|width|height|color|font|family|size|target|rel)=["\'][^"\']*["\']', ' ', text)
+        # Remove common HTML tag/component identifiers if they got extracted as words
+        text = re.sub(r'\b(strong|span|style|br|div|li|ul|p|ol|html|body|head|titleDescription)\b', ' ', text, flags=re.IGNORECASE)
+        # Strip any stray angle brackets
+        text = text.replace('<', ' ').replace('>', ' ')
+        # Clean multiple spaces/tabs/newlines
+        text = re.sub(r'[ \t]+', ' ', text)
 
     return text
 

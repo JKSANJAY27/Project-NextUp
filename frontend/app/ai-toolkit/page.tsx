@@ -97,34 +97,19 @@ function normalizeLLMResponseText(text: string): string {
   s = s.replace(/```/g, "");
 
   // 2. Replace common Chinese keys and abbreviations with standard English keys (quoted, unquoted, and mixed)
-  s = s.replace(/"(?:optimized技能|optimized技能培训|优化技能|优化技能培训|optimized_skills_zh|skills_zh|优化_skills|技能|优化skills)"/gi, '"optimized_skills"');
-  s = s.replace(/'(?:optimized技能|optimized技能培训|优化技能|优化技能培训|optimized_skills_zh|skills_zh|优化_skills|技能|优化skills)'/gi, '"optimized_skills"');
-  s = s.replace(/\b(?:optimized技能|optimized技能培训|优化技能|优化技能培训|optimized_skills_zh|skills_zh|优化_skills|技能|优化skills)\b/gi, '"optimized_skills"');
+  s = s.replace(/(['"]?)(?:optimized技能|optimized技能培训|优化技能|优化技能培训|optimized_skills_zh|skills_zh|优化_skills|技能|优化skills)(['"]?)\s*:/gi, '"optimized_skills":');
+  s = s.replace(/(['"]?)(?:optimized项目|优化项目|optimized_projects_zh|projects_zh|优化_projects|项目|优化projects)(['"]?)\s*:/gi, '"optimized_projects":');
+  s = s.replace(/(['"]?)(?:optimized摘要|优化摘要|optimized_summary_zh|summary_zh|优化_summary|摘要|优化summary)(['"]?)\s*:/gi, '"optimized_summary":');
 
-  s = s.replace(/"(?:optimized项目|优化项目|optimized_projects_zh|projects_zh|优化_projects|项目|优化projects)"/gi, '"optimized_projects"');
-  s = s.replace(/'(?:optimized项目|优化项目|optimized_projects_zh|projects_zh|优化_projects|项目|优化projects)'/gi, '"optimized_projects"');
-  s = s.replace(/\b(?:optimized项目|优化项目|optimized_projects_zh|projects_zh|优化_projects|项目|优化projects)\b/gi, '"optimized_projects"');
-
-  s = s.replace(/"(?:optimized摘要|优化摘要|optimized_summary_zh|summary_zh|优化_summary|摘要|优化summary)"/gi, '"optimized_summary"');
-  s = s.replace(/'(?:optimized摘要|优化摘要|optimized_summary_zh|summary_zh|优化_summary|摘要|优化summary)'/gi, '"optimized_summary"');
-  s = s.replace(/\b(?:optimized摘要|优化摘要|optimized_summary_zh|summary_zh|优化_summary|摘要|优化summary)\b/gi, '"optimized_summary"');
-
-  // Map other variations like desc, description, title, etc. (both quoted and unquoted)
-  s = s.replace(/'?desc(?:ription)?'?\s*:/gi, '"description":');
-  s = s.replace(/\bdesc(?:ription)?\b\s*:/gi, '"description":');
-  s = s.replace(/'?title'?\s*:/gi, '"title":');
-  s = s.replace(/\btitle\b\s*:/gi, '"title":');
-  s = s.replace(/'?skills?'?\s*:/gi, '"optimized_skills":');
-  s = s.replace(/\bskills?\b\s*:/gi, '"optimized_skills":');
-  s = s.replace(/'?projects?'?\s*:/gi, '"optimized_projects":');
-  s = s.replace(/\bprojects?\b\s*:/gi, '"optimized_projects":');
-  s = s.replace(/'?summary'?\s*:/gi, '"optimized_summary":');
-  s = s.replace(/\bsummary\b\s*:/gi, '"optimized_summary":');
+  // Map other variations like desc, description, title, etc. (quoted or unquoted, prevents duplicate double quotes)
+  s = s.replace(/(['"]?)desc(?:ription)?(['"]?)\s*:/gi, '"description":');
+  s = s.replace(/(['"]?)title(['"]?)\s*:/gi, '"title":');
+  s = s.replace(/(?<!optimized_)(['"]?)skills?(['"]?)\s*:/gi, '"optimized_skills":');
+  s = s.replace(/(?<!optimized_)(['"]?)projects?(['"]?)\s*:/gi, '"optimized_projects":');
+  s = s.replace(/(?<!optimized_)(['"]?)summary(['"]?)\s*:/gi, '"optimized_summary":');
 
   // Fix Chinese characters in keys inside quotes like '技能' or 'desc' or 'title'
-  s = s.replace(/"技能"\s*:/g, '"optimized_skills":');
-  s = s.replace(/'技能'\s*:/g, '"optimized_skills":');
-  s = s.replace(/\b技能\s*:/g, '"optimized_skills":');
+  s = s.replace(/(['"]?)技能(['"]?)\s*:/g, '"optimized_skills":');
 
   // 3. Fix unquoted words in arrays (e.g. ["Python", Java] -> ["Python", "Java"])
   s = s.replace(/:\s*\[([^{}[\]]*?)\]/g, (match, arrayContent) => {
@@ -1150,49 +1135,78 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
         setAtsResult(mergedATSResult);
 
         // Auto-apply optimized values to tailoredResumeData
-        setTailoredResumeData((prev: any) => {
-          if (!prev) return prev;
-          const updatedData = JSON.parse(JSON.stringify(prev));
-          if (optSummary) {
-            updatedData.summary = optSummary;
-          }
-          if (optSkills && optSkills.length > 0) {
-            updatedData.skills = Array.from(new Set([
-              ...optSkills,
-              ...(updatedData.skills || [])
-            ]));
-          }
-          if (optProjects && optProjects.length > 0) {
-            const projects = updatedData.projects || [];
-            optProjects.forEach((optProj: any) => {
-              // Try to find project by title match
-              const match = projects.find((p: any) => 
-                p.title.trim().toLowerCase() === optProj.title.trim().toLowerCase()
-              );
-              if (match) {
-                match.description = optProj.description;
+        let baseData = tailoredResumeData || masterResume;
+        if (!baseData && resumeData) {
+          baseData = resumeData;
+        }
+        if (!baseData) {
+          throw new Error("No resume template data available to tailor.");
+        }
+
+        const updatedData = JSON.parse(JSON.stringify(baseData));
+        if (optSummary) {
+          updatedData.summary = optSummary;
+        }
+        if (optSkills && optSkills.length > 0) {
+          updatedData.skills = Array.from(new Set([
+            ...optSkills,
+            ...(updatedData.skills || [])
+          ]));
+        }
+        if (optProjects && optProjects.length > 0) {
+          const projects = updatedData.projects || [];
+          optProjects.forEach((optProj: any) => {
+            const match = projects.find((p: any) => 
+              p.title.trim().toLowerCase() === optProj.title.trim().toLowerCase()
+            );
+            if (match) {
+              match.description = optProj.description;
+            } else if (projects.length > 0) {
+              if (projects.length === 1 && optProjects.length === 1) {
+                projects[0].description = optProjects[0].description;
               } else {
-                // If title doesn't match perfectly, fallback to fuzzy/index-based match or single project override
-                if (projects.length > 0) {
-                  if (projects.length === 1 && optProjects.length === 1) {
-                    projects[0].description = optProjects[0].description;
-                  } else {
-                    const idx = optProjects.indexOf(optProj);
-                    if (idx !== -1 && projects[idx]) {
-                      projects[idx].description = optProj.description;
-                      if (optProj.title) {
-                        projects[idx].title = optProj.title;
-                      }
-                    }
+                const idx = optProjects.indexOf(optProj);
+                if (idx !== -1 && projects[idx]) {
+                  projects[idx].description = optProj.description;
+                  if (optProj.title) {
+                    projects[idx].title = optProj.title;
                   }
                 }
               }
-            });
-          }
-          return updatedData;
-        });
+            }
+          });
+        }
 
-        showSuccess("Local Browser AI tailoring completed and applied successfully. Click Save to lock it in!");
+        setTailoredResumeData(updatedData);
+
+        // Securely Auto-Save/Encrypt to Backend
+        if (encryptionKey && company) {
+          try {
+            const encResume = await encryptData(JSON.stringify(updatedData), encryptionKey);
+            if (activeApplication) {
+              const res = await api.patch(`/applications/${activeApplication.id}`, {
+                tailored_resume_enc: encResume
+              });
+              setActiveApplication(res.data);
+            } else {
+              const res = await api.post("/applications", {
+                company_id: company.id,
+                status: "Applied",
+                tailored_resume_enc: encResume,
+                recruitment_state: "Registration"
+              });
+              setActiveApplication(res.data);
+            }
+            showSuccess("Local Browser AI tailoring completed, applied, and saved securely!");
+          } catch (saveErr) {
+            console.error("Auto-save failed:", saveErr);
+            showSuccess("Local Browser AI tailoring completed and applied successfully! (Failed to auto-save to database)");
+          }
+        } else {
+          showSuccess("Local Browser AI tailoring completed and applied successfully!");
+        }
+
+        setOptimizerSubView("preview");
       } catch (parseErr) {
         console.error("Local LLM JSON parse/regex error:", parseErr, "Raw output:", result);
         throw new Error("Local model returned invalid JSON structure. Please try generating again.");

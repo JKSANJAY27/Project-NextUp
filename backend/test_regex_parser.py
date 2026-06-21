@@ -58,6 +58,17 @@ civic-tech hackathon.
 • Finalist – DeepShiva Open Source LLM Hackathon (Healthcare): Ranked among the top 3 teams nationally.
 • Board Member – Design Lead, AEE VIT Chapter & Senior Core Member – CodeChef VIT & TAM-VIT"""
 
+def is_tech_only_line(line: str) -> bool:
+    line_clean = re.sub(r'[\s,;|•\*\-\(\)▪\d–—]', ' ', line.lower())
+    words = [w.strip() for w in line_clean.split() if w.strip()]
+    if not words:
+        return False
+    tech_words = {
+        'python', 'react', 'fastapi', 'supabase', 'nodejs', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain', 'html', 'css', 'tailwind', 'typescript', 'langgraph', 'langfuse', 'pytorch', 'scikit-learn', 'c', 'git', 'github', 'nlp', 'ai', 'ml', 'docker', 'kubernetes', 'aws', 'gcp', 'azure', 'vue', 'angular', 'svelte', 'express', 'flask', 'django', 'networkx', 'rest', 'api', 'apis', 'graphql', 'grpc', 'web', 'full-stack', 'frontend', 'backend'
+    }
+    tech_count = sum(1 for w in words if w in tech_words)
+    return (tech_count / len(words)) >= 0.7
+
 def parse_sections(text: str):
     # Normalize line endings
     text = text.replace('\r\n', '\n')
@@ -119,7 +130,6 @@ def parse_sections(text: str):
             continue
         
         # Check if line is a section heading
-        # Section headings are usually uppercase, short lines, or match exactly
         line_upper = line_strip.upper()
         if line_upper in headings:
             current_section = headings[line_upper]
@@ -131,7 +141,7 @@ def parse_sections(text: str):
     # Process Summary
     summary = " ".join(sections.get('summary', []))
     
-    # Process Skills (already extracted via extract_skills_from_text from entire text, but we can also get raw text)
+    # Process Skills
     skills_raw = " ".join(sections.get('skills', []))
     
     # Process Education
@@ -139,20 +149,14 @@ def parse_sections(text: str):
     edu_lines = sections.get('education', [])
     current_edu = None
     
-    # Simple regexes for education parsing
     for line in edu_lines:
-        # Check if line indicates a new institution/degree
-        # Usually contains University, College, School, Institute, VIT, CBSE, State Board, High School
         is_new_edu = any(x in line.lower() for x in ['university', 'college', 'school', 'institute', 'vit', 'cbse', 'board', 'b.tech', 'm.tech', 'degree'])
-        
-        # Or contains graduation year ranges
         year_match = re.search(r'\b(20\d{2})\b', line)
         
         if is_new_edu or (year_match and not current_edu):
             if current_edu:
                 education_entries.append(current_edu)
             
-            # Split degree and institution by separator
             parts = re.split(r'[—–\-|]', line)
             degree = "Degree / Course"
             institution = line
@@ -161,7 +165,6 @@ def parse_sections(text: str):
                 institution = parts[0].strip()
                 degree = parts[1].strip()
             
-            # Clean up year from degree/institution
             year_val = ""
             years_found = re.findall(r'\b(19\d{2}|20\d{2})\b', line)
             if years_found:
@@ -170,11 +173,9 @@ def parse_sections(text: str):
                 else:
                     year_val = years_found[0]
                     
-                # Strip years from degree and institution
                 degree = re.sub(r'\b(19\d{2}|20\d{2})\b', '', degree).strip()
                 institution = re.sub(r'\b(19\d{2}|20\d{2})\b', '', institution).strip()
             
-            # Remove trailing delimiters
             degree = re.sub(r'\s*[-–—|]\s*$', '', degree).strip()
             institution = re.sub(r'\s*[-–—|]\s*$', '', institution).strip()
             
@@ -185,7 +186,6 @@ def parse_sections(text: str):
                 "score": ""
             }
         elif current_edu:
-            # Look for score (CGPA / Marks)
             score_match = re.search(r'(?:cgpa|gpa|score|percentage|marks|%)\s*[:\-–\s]*\s*(\d+(?:\.\d+)?%?|\d+\.\d+)', line, re.IGNORECASE)
             if score_match:
                 current_edu["score"] = score_match.group(0).strip()
@@ -200,25 +200,40 @@ def parse_sections(text: str):
     exp_lines = sections.get('experience', [])
     current_exp = None
     
+    role_keywords = ['intern', 'developer', 'engineer', 'consultant', 'analyst', 'lead', 'manager', 'specialist', 'designer', 'programmer', 'architect', 'member', 'officer', 'scholar', 'student', 'founder', 'co-founder', 'head', 'president', 'vice', 'director']
+    comp_keywords = ['solutions', 'technologies', 'technology', 'inc', 'ltd', 'limited', 'corp', 'corporation', 'co', 'company', 'labs', 'systems', 'valsco', 'university', 'institute']
+
     for line in exp_lines:
-        # A new experience starts if line has a company name + role indicator, or starts with a month/year range
-        # Usually has: Month Year – Month Year, e.g. Jun 2024 – Sep 2024
         is_bullet = line.startswith(('•', '*', '-', 'o '))
-        
-        # Check if line contains a period or date format (like "Jun 2024", "Present", "2024")
         has_date = re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b|\bPresent\b', line, re.IGNORECASE)
         
-        if not is_bullet and (has_date or (not current_exp and not is_bullet)):
+        is_date_only = False
+        if has_date and not is_bullet:
+            has_role = any(re.search(rf"\b{re.escape(x)}\b", line.lower()) for x in role_keywords)
+            if not has_role:
+                is_date_only = True
+                
+        if is_date_only:
+            if current_exp:
+                period_match = re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\s*[-–—to]+\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\bPresent\b)\b', line, re.IGNORECASE)
+                if period_match:
+                    current_exp["period"] = period_match.group(0)
+                else:
+                    current_exp["period"] = line.strip(' ,-–—|()')
+            continue
+            
+        is_new_exp = False
+        if not is_bullet:
+            has_role = any(re.search(rf"\b{re.escape(x)}\b", line.lower()) for x in role_keywords)
+            if has_role:
+                has_comp = any(re.search(rf"\b{re.escape(x)}\b", line.lower()) for x in comp_keywords)
+                has_sep = bool(re.search(r'[—–\-|]|\s+-\s+', line))
+                if has_date or has_comp or has_sep or not current_exp:
+                    is_new_exp = True
+                    
+        if is_new_exp:
             if current_exp:
                 experience_entries.append(current_exp)
-                
-            parts = re.split(r'[—–\-|]', line)
-            role = "Software Engineer Intern"
-            company = line
-            
-            if len(parts) >= 2:
-                role = parts[0].strip()
-                company = parts[1].strip()
                 
             period_val = ""
             date_matches = re.findall(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b|\bPresent\b|\b20\d{2}\b', line, re.IGNORECASE)
@@ -228,14 +243,38 @@ def parse_sections(text: str):
                 else:
                     period_val = date_matches[0]
                 
-                # Strip dates from role/company
+                clean_line = line
                 for d in date_matches:
-                    role = re.sub(re.escape(d), '', role, flags=re.IGNORECASE).strip()
-                    company = re.sub(re.escape(d), '', company, flags=re.IGNORECASE).strip()
+                    clean_line = re.sub(re.escape(d), '', clean_line, flags=re.IGNORECASE).strip()
+            else:
+                clean_line = line
+                
+            clean_line = re.sub(r'\s+', ' ', clean_line)
+            clean_line = re.sub(r',\s*,', ',', clean_line).strip(' ,-–—|()')
+            
+            parts = [p.strip() for p in re.split(r'\s*[\u2014\u2013|,\t]\s*|\s+-\s+', clean_line) if p.strip()]
+            role = "Software Engineer Intern"
+            company = clean_line
+            
+            if len(parts) >= 2:
+                p0, p1 = parts[0], parts[1]
+                p0_has_role = any(re.search(rf"\b{re.escape(x)}\b", p0.lower()) for x in role_keywords)
+                p1_has_comp = any(re.search(rf"\b{re.escape(x)}\b", p1.lower()) for x in comp_keywords)
+                p0_has_comp = any(re.search(rf"\b{re.escape(x)}\b", p0.lower()) for x in comp_keywords)
+                p1_has_role = any(re.search(rf"\b{re.escape(x)}\b", p1.lower()) for x in role_keywords)
+
+                if p0_has_role or p1_has_comp:
+                    role = p0
+                    company = p1
+                elif p0_has_comp or p1_has_role:
+                    company = p0
+                    role = p1
+                else:
+                    role = p0
+                    company = p1
                     
             role = re.sub(r'\s*[-–—|()]\s*$', '', role).strip()
             company = re.sub(r'\s*[-–—|()]\s*$', '', company).strip()
-            # Clean up Remote/Location from company name if present
             company = re.sub(r'\s*\([^)]*\)\s*$', '', company).strip()
             
             current_exp = {
@@ -245,13 +284,12 @@ def parse_sections(text: str):
                 "description": ""
             }
         elif is_bullet and current_exp:
-            bullet_text = re.sub(r'^[•\*\-\s]+', '', line).strip()
+            bullet_text = re.sub(r'^[•\*\-\s▪]+', '', line).strip()
             if current_exp["description"]:
                 current_exp["description"] += "\n• " + bullet_text
             else:
                 current_exp["description"] = "• " + bullet_text
         elif current_exp:
-            # Append line to description
             if current_exp["description"]:
                 current_exp["description"] += "\n" + line
             else:
@@ -268,13 +306,30 @@ def parse_sections(text: str):
     for line in proj_lines:
         is_bullet = line.startswith(('•', '*', '-', 'o ', '▪'))
         
-        # A new project starts if there's a heading and no bullet
+        is_tech_only = False
+        if not is_bullet:
+            if is_tech_only_line(line):
+                is_tech_only = True
+                
+        if is_tech_only:
+            if current_proj:
+                cleaned_tech = line.strip(' ,-–—|()')
+                if current_proj["tech"]:
+                    existing = [x.strip().lower() for x in current_proj["tech"].split(',')]
+                    new_skills = [x.strip() for x in cleaned_tech.split(',') if x.strip().lower() not in existing]
+                    if new_skills:
+                        current_proj["tech"] += ", " + ", ".join(new_skills)
+                else:
+                    current_proj["tech"] = cleaned_tech
+            continue
+            
         is_header = False
         if not is_bullet and len(line) > 0 and (line[0].isupper() or line[0].isdigit()):
-            has_separator = re.search(r'[\u2014\u2013|]|\s+-\s+', line)
-            has_tech = any(x in line.lower() for x in ['python', 'react', 'nodejs', 'fastapi', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain'])
-            if has_separator or (has_tech and len(line) < 100):
-                is_header = True
+            if not is_tech_only_line(line):
+                has_separator = re.search(r'[\u2014\u2013|]|\s+-\s+', line)
+                has_tech = any(x in line.lower() for x in ['python', 'react', 'nodejs', 'fastapi', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain'])
+                if has_separator or (has_tech and len(line) < 100) or not current_proj:
+                    is_header = True
         
         if is_header:
             if current_proj:
@@ -286,10 +341,19 @@ def parse_sections(text: str):
             
             if len(parts) >= 2:
                 title = parts[0].strip()
-                tech = " — ".join(p.strip() for p in parts[1:])
-                
-            # Clean up parentheses from title
+                tech = ", ".join(p.strip() for p in parts[1:])
+            else:
+                comma_parts = [p.strip() for p in line.split(',') if p.strip()]
+                if len(comma_parts) >= 2:
+                    tech_words = ['python', 'react', 'fastapi', 'supabase', 'nodejs', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain', 'html', 'css', 'tailwind', 'typescript', 'langgraph', 'langfuse']
+                    p1_has_tech = any(x in comma_parts[1].lower() for x in tech_words)
+                    if p1_has_tech:
+                        title = comma_parts[0]
+                        tech = ", ".join(comma_parts[1:])
+            
+            title = re.sub(r'\s*[-–—|()]\s*$', '', title).strip()
             title = re.sub(r'\s*\([^)]*\)\s*$', '', title).strip()
+            tech = re.sub(r'\s*[-–—|()]\s*$', '', tech).strip()
             
             current_proj = {
                 "title": title,
