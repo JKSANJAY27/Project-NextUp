@@ -64,6 +64,19 @@ interface ATSResult {
   };
 }
 
+interface CopilotQuestion {
+  id: string;
+  type: "general" | "job_specific";
+  text: string;
+  answer: string;
+}
+
+interface VaultQA {
+  question: string;
+  answer: string;
+  timestamp: string;
+}
+
 /**
  * Robust JSON extraction and fallback regex parsing to handle malformed LLM outputs.
  */
@@ -907,6 +920,11 @@ function AIToolkitContent() {
   const [selectedTemplate, setSelectedTemplate] = useState<string>("Classic");
   const [compareWithMaster, setCompareWithMaster] = useState(false);
   
+  // Resume Q&A Copilot States
+  const [copilotQuestions, setCopilotQuestions] = useState<CopilotQuestion[]>([]);
+  const [generatingQuestions, setGeneratingQuestions] = useState(false);
+  const [savingVault, setSavingVault] = useState(false);
+  
   // Helpers inside editor
   const [newCert, setNewCert] = useState("");
   const [newLang, setNewLang] = useState("");
@@ -1082,15 +1100,42 @@ function AIToolkitContent() {
       const existingProjects = (resumeData.projects || []).slice(0, 4).map((p: any, i: number) => `${i+1}. ${p.title}: ${(p.description || "").substring(0, 200)}`);
       const existingSummary = (resumeData.summary || "").substring(0, 300);
 
+      // 3. Construct verified candidate context
+      const vaultQAs = (masterResume?.context_vault || [])
+        .map((qa: any) => `- Q: ${qa.question}\n  A: ${qa.answer}`)
+        .join("\n");
+      const currentGeneralQAs = copilotQuestions
+        .filter(q => q.type === "general" && q.answer.trim())
+        .map(q => `- Q: ${q.text}\n  A: ${q.answer}`)
+        .join("\n");
+      const currentJobQAs = copilotQuestions
+        .filter(q => q.type === "job_specific" && q.answer.trim())
+        .map(q => `- Q: ${q.text}\n  A: ${q.answer}`)
+        .join("\n");
+
+      let verifiedContextBlock = "";
+      if (vaultQAs || currentGeneralQAs || currentJobQAs) {
+        verifiedContextBlock = `\nVerified Extra Details & Context from Candidate (use these facts to enrich descriptions, summaries, and verify skills):
+${vaultQAs ? `\n--- Global Candidate Context ---\n${vaultQAs}` : ""}
+${currentGeneralQAs ? `\n--- Additional Project Context ---\n${currentGeneralQAs}` : ""}
+${currentJobQAs ? `\n--- Job Specific Context ---\n${currentJobQAs}` : ""}
+`;
+      }
+
       // Simplified few-shot prompt designed for small (0.5B–1B) models to guarantee correct JSON structure
       const prompt = `You are a resume optimizer. Output ONLY a valid JSON object matching the requested schema. Do NOT write any introduction, explanation, markdown code blocks, or extra text.
 
-Task: Optimize the summary, skills, and projects based on the target job keywords and JD snippet. Do not invent any fake experience or new credentials.
+Task: Optimize the summary, skills, and projects based on the target job keywords and JD snippet.
+Guidelines:
+1. In "optimized_summary", write a tailored professional summary that aligns with the target job role.
+2. In "optimized_skills", keep all original skills, and add new skills from the target job keywords ONLY if they are confirmed or mentioned in the "Verified Extra Details & Context" above. Do NOT add any missing skills that the candidate has not confirmed.
+3. In "optimized_projects", update the project descriptions to incorporate the specific technical libraries, databases, or performance metrics provided in the "Verified Extra Details & Context" above. Keep other projects' descriptions concise but professional.
+4. Do NOT fabricate any new experience, job titles, or skills not present in the original resume or verified context.
 
 Target Job: ${company.role} at ${company.name}
 Job Keywords: ${jdKeywordsStr}
 JD Snippet: ${compactJDText}
-
+${verifiedContextBlock}
 Original Resume:
 - Summary: ${existingSummary}
 - Skills: ${existingSkills.join(", ")}
@@ -1257,6 +1302,193 @@ Optimize the original resume now and return ONLY the JSON object:`;
       setLocalDownloadProgress(null);
       setLocalStatusMessage("");
     }
+  };
+
+  const generateCopilotQuestions = async () => {
+    if (!company) return;
+    setGeneratingQuestions(true);
+    setErrorMsg("");
+    setSuccessMsg("");
+    setLocalStatusMessage("");
+
+    try {
+      const resMe = await api.get("/resumes/me");
+      const resumeData = resMe.data?.resume_data || masterResume || {};
+      if (!resumeData || Object.keys(resumeData).length === 0) {
+        throw new Error("No master resume found. Please ensure you have parsed your master resume first.");
+      }
+
+      // Compact resume contents
+      const existingSummary = (resumeData.summary || "").substring(0, 300);
+      const existingSkills = (resumeData.skills || []).slice(0, 20).join(", ");
+      const existingProjects = (resumeData.projects || []).slice(0, 4).map((p: any) => p.title).join(", ");
+      
+      const jdKeywordsStr = (company.jd_required_skills || []).slice(0, 15).join(", ");
+      const compactJDText = (company.jd_text || "").substring(0, 400);
+
+      const resumeTextForMatch = [
+        resumeData.personal?.name || "",
+        resumeData.personal?.location || "",
+        resumeData.summary || "",
+        ...(resumeData.skills || []),
+        ...(resumeData.education || []).map((e: any) => `${e.degree} ${e.institution}`),
+        ...(resumeData.experience || []).map((e: any) => `${e.role} ${e.company} ${e.description}`),
+        ...(resumeData.projects || []).map((e: any) => `${e.title} ${e.tech} ${e.description}`),
+      ].join(" ");
+      
+      const deterministicMatch = calculateMatchStats(resumeTextForMatch, jdKeywords);
+      const missingKeywordsVal = Array.from(jdKeywords).filter(k => !deterministicMatch.matchedKeywords.has(k.toLowerCase().trim()));
+
+      const qPrompt = `You are a resume tailoring coach. Analyze this job description and the candidate's original resume details. Generate exactly 4 short, highly specific interview-style questions.
+      
+Job Title: ${company.role} at ${company.name}
+Job Keywords: ${jdKeywordsStr}
+
+Candidate Resume:
+- Summary: ${existingSummary}
+- Skills: ${existingSkills}
+- Projects: ${existingProjects}
+
+Goal: Ask specific questions to extract more details or check if they possess missing requirements.
+Instructions:
+Generate exactly 4 questions (one per line, starting with the bracketed prefix):
+- 2 General Questions (Prefix: [GENERAL]): Ask for more tech stack details, metrics, or responsibilities on their existing projects/internships. E.g. "[GENERAL] In your project LLM Knowledge Assistant, what database or vector store did you use?"
+- 2 Job-Specific Questions (Prefix: [JOB_SPECIFIC]): Ask if they have experience with required keywords from the JD that are currently missing. E.g. "[JOB_SPECIFIC] Have you worked with Linux or Security tools in any projects?"
+
+Return ONLY these 4 lines:`;
+
+      setLocalStatusMessage("Generating Copilot Questions...");
+      let result = "";
+      try {
+        result = await generateInBrowser({
+          modelType: atsModel,
+          prompt: qPrompt,
+          maxTokens: 512,
+        });
+      } catch (nanoErr) {
+        console.warn("Browser LLM failed to generate questions, using local JS fallback:", nanoErr);
+      }
+
+      let parsedQAs: CopilotQuestion[] = [];
+      if (result) {
+        const lines = result.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+        lines.forEach(line => {
+          let type: "general" | "job_specific" = "general";
+          let text = line;
+          if (line.toUpperCase().startsWith("[GENERAL]")) {
+            type = "general";
+            text = line.substring("[GENERAL]".length).trim();
+          } else if (line.toUpperCase().startsWith("[JOB_SPECIFIC]")) {
+            type = "job_specific";
+            text = line.substring("[JOB_SPECIFIC]".length).trim();
+          } else {
+            const hasMissing = missingKeywordsVal.some(k => line.toLowerCase().includes(k.toLowerCase()));
+            type = hasMissing ? "job_specific" : "general";
+          }
+          
+          text = text.replace(/^["'-\s•*▪\[\]]+|["'\]]+$/g, "").trim();
+          if (text) {
+            parsedQAs.push({ id: Math.random().toString(), type, text, answer: "" });
+          }
+        });
+      }
+
+      if (parsedQAs.length < 2) {
+        const missingSlice = missingKeywordsVal.slice(0, 3).join(", ");
+        parsedQAs = [
+          {
+            id: "f1",
+            type: "general",
+            text: `In your existing academic projects (${existingProjects || "projects"}), what specific technical libraries, databases, or WebSocket mechanisms did you use?`,
+            answer: ""
+          },
+          {
+            id: "f2",
+            type: "general",
+            text: `Can you share any quantitative metrics or performance gains (e.g. latency, user count, efficiency) from your projects or Valsco internship?`,
+            answer: ""
+          },
+          {
+            id: "f3",
+            type: "job_specific",
+            text: `The ${company.name} description requires experience with: ${missingSlice || "relevant skills"}. Have you used these in any academic/personal tasks?`,
+            answer: ""
+          },
+          {
+            id: "f4",
+            type: "job_specific",
+            text: `Do you have experience in any topics related to the role of ${company.role} (e.g. system design, server setup, automated checks)? If yes, please describe.`,
+            answer: ""
+          }
+        ];
+      }
+
+      setCopilotQuestions(parsedQAs);
+      showSuccess("Copilot questions generated successfully! Answer them below to personalize your resume.");
+    } catch (err: any) {
+      console.error("Failed to generate copilot questions:", err);
+      setErrorMsg(err.message || "Failed to generate Copilot questions.");
+    } finally {
+      setGeneratingQuestions(false);
+      setLocalStatusMessage("");
+    }
+  };
+
+  const handleSaveToVault = async () => {
+    if (!masterResume || !encryptionKey) {
+      setErrorMsg("Decryption Key or Master Resume missing. Please ensure your Vault is unlocked.");
+      return;
+    }
+    setSavingVault(true);
+    try {
+      const generalQAs: VaultQA[] = copilotQuestions
+        .filter(q => q.type === "general" && q.answer.trim().length > 0)
+        .map(q => ({
+          question: q.text,
+          answer: q.answer.trim(),
+          timestamp: new Date().toISOString()
+        }));
+
+      if (generalQAs.length === 0) {
+        showSuccess("No general answers to save.");
+        setSavingVault(false);
+        return;
+      }
+
+      const existingVault: VaultQA[] = masterResume.context_vault || [];
+      const updatedVault = [...existingVault];
+
+      generalQAs.forEach(newQA => {
+        const idx = updatedVault.findIndex(q => q.question.toLowerCase() === newQA.question.toLowerCase());
+        if (idx !== -1) {
+          updatedVault[idx] = newQA;
+        } else {
+          updatedVault.push(newQA);
+        }
+      });
+
+      const updatedMaster = {
+        ...masterResume,
+        context_vault: updatedVault
+      };
+
+      const payload = {
+        template: selectedTemplate,
+        resume_data: updatedMaster
+      };
+      await api.put("/resumes/me", payload);
+      setMasterResume(updatedMaster);
+      showSuccess("Saved general answers to your Master Vault successfully!");
+    } catch (err: any) {
+      console.error("Failed to save to vault", err);
+      setErrorMsg(err.response?.data?.detail || "Failed to save answers to secure vault.");
+    } finally {
+      setSavingVault(false);
+    }
+  };
+
+  const updateCopilotAnswer = (id: string, val: string) => {
+    setCopilotQuestions(prev => prev.map(q => q.id === id ? { ...q, answer: val } : q));
   };
 
   const jdKeywords = React.useMemo(() => {
@@ -2025,6 +2257,106 @@ Optimize the original resume now and return ONLY the JSON object:`;
                               Reset to Master
                             </button>
                           </div>
+                        </div>
+
+                        {/* AI Resume Copilot Panel */}
+                        <div className="border-2 border-border p-6 bg-card space-y-6">
+                          <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-border pb-4 gap-4">
+                            <div>
+                              <h3 className="text-sm font-black tracking-widest text-accent uppercase flex items-center gap-2">
+                                <Sparkles size={16} className="text-accent" />
+                                <span>🤖 AI RESUME COPILOT Q&A INTERVIEW</span>
+                              </h3>
+                              <p className="text-[10px] text-zinc-500 uppercase mt-1 leading-normal">
+                                Provide verified facts and confirm details so the AI optimizer matches your resume to this role without fabricating skills.
+                              </p>
+                            </div>
+                            {copilotQuestions.length === 0 ? (
+                              <button
+                                onClick={generateCopilotQuestions}
+                                disabled={generatingQuestions}
+                                className="h-9 px-4 border-2 border-accent bg-accent/5 hover:bg-accent hover:text-black text-accent text-[10px] font-black uppercase flex items-center gap-1.5 transition-all shrink-0"
+                              >
+                                {generatingQuestions ? (
+                                  <>
+                                    <Loader2 className="animate-spin h-3.5 w-3.5" />
+                                    <span>Generating Questions...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles size={11} />
+                                    <span>Generate Copilot Questions</span>
+                                  </>
+                                )}
+                              </button>
+                            ) : (
+                              <div className="flex gap-2 shrink-0">
+                                <button
+                                  onClick={handleSaveToVault}
+                                  disabled={savingVault}
+                                  className="h-9 px-3 border border-border bg-muted hover:border-accent hover:text-accent text-[10px] font-black uppercase flex items-center gap-1 transition-all"
+                                  title="Persist general project/experience details to your encrypted master resume vault for reuse"
+                                >
+                                  {savingVault ? "Saving..." : "Save to Master Vault"}
+                                </button>
+                                <button
+                                  onClick={() => setCopilotQuestions([])}
+                                  className="h-9 px-3 border border-red-500/30 text-red-500 hover:bg-red-500/10 text-[10px] font-black uppercase transition-all"
+                                >
+                                  Clear Questions
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {copilotQuestions.length > 0 ? (
+                            <div className="space-y-4">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {copilotQuestions.map((q) => (
+                                  <div key={q.id} className="border border-border bg-background p-4 space-y-3 relative flex flex-col justify-between">
+                                    <div className="space-y-2">
+                                      <div className="flex justify-between items-center">
+                                        <span className={`px-2 py-0.5 text-[8px] font-black border ${
+                                          q.type === "general" ? "border-blue-500/55 text-blue-400 bg-blue-500/5" : "border-amber-500/55 text-amber-400 bg-amber-500/5"
+                                        }`}>
+                                          {q.type === "general" ? "🔄 PERSISTED TO MASTER VAULT" : "🎯 JOB-SPECIFIC (THIS APP ONLY)"}
+                                        </span>
+                                      </div>
+                                      <p className="text-xs font-bold text-foreground leading-normal">{q.text}</p>
+                                    </div>
+                                    <textarea
+                                      value={q.answer}
+                                      onChange={(e) => updateCopilotAnswer(q.id, e.target.value)}
+                                      placeholder={q.type === "general" 
+                                        ? "Describe technical details, databases, libraries used, or metrics..." 
+                                        : "Enter details (e.g. Yes, I have worked with this tool in...)"}
+                                      rows={2}
+                                      className="w-full mt-2 border border-border bg-background text-xs p-2.5 focus:border-accent focus:outline-none font-bold"
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="border-t border-border pt-4 flex justify-between items-center">
+                                <span className="text-[9px] text-zinc-500 uppercase leading-snug">
+                                  {copilotQuestions.some(q => q.type === "general" && q.answer.trim()) && "🔄 Unsaved changes in Persisted Vault questions. Click 'Save to Master Vault' to persist."}
+                                </span>
+                                <button
+                                  onClick={runLocalATS}
+                                  disabled={calculatingATS}
+                                  className="h-10 px-5 border-2 border-accent bg-accent text-black hover:bg-black hover:text-accent hover:border-accent text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all"
+                                >
+                                  <Sparkles size={13} />
+                                  <span>Tailor Resume using verified context</span>
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="border border-dashed border-border p-6 text-center">
+                              <p className="text-xs text-muted-foreground uppercase leading-relaxed font-bold">
+                                Want a highly optimized, accurate resume tailoring? Let the Copilot analyze the Job Description and your resume to generate targeted verification questions.
+                              </p>
+                            </div>
+                          )}
                         </div>
 
                         {/* Interactive Form */}
