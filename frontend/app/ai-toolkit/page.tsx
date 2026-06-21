@@ -67,14 +67,46 @@ interface ATSResult {
 interface CopilotQuestion {
   id: string;
   type: "general" | "job_specific";
+  stableKey: string;
   text: string;
   answer: string;
+  sourceGapKey?: string;
 }
 
 interface VaultQA {
+  stableKey?: string;
   question: string;
   answer: string;
   timestamp: string;
+}
+
+interface EvidenceNode {
+  id: string;
+  type: "skill" | "project" | "experience" | "certification";
+  name: string;
+  confidence: number; // 0-100
+  supportingEvidence: string[];
+}
+
+interface EvidenceGap {
+  stableKey: string;
+  category: "GENERAL" | "JOB_SPECIFIC";
+  gapType: "missing_skill" | "weak_skill" | "project_depth" | "missing_metric" | "missing_infrastructure" | "enrichment_opportunity";
+  skillOrProjectName: string;
+  reason: string;
+  evidenceMissing: string;
+  importance: number; // 0-100
+  confidence: number; // 0-100
+  resumeImpactScore: number; // 0-100
+  priority?: number;
+}
+
+interface VerifiedEvidence {
+  stableKey: string;
+  category: string;
+  confidence: number;
+  answer: string;
+  usableForResume: boolean;
 }
 
 /**
@@ -262,6 +294,406 @@ function balanceJSONStack(jsonStr: string): string {
   }
 
   return clean;
+}
+
+function normalizeStableKey(key: string): string {
+  const parts = key.trim().toLowerCase().split(":");
+  if (parts.length === 0) return "";
+  const prefix = parts[0];
+  
+  if (prefix === "skill" && parts.length > 1) {
+    const skillName = parts.slice(1).join(":").trim();
+    // Normalize common aliases
+    let norm = skillName;
+    if (skillName === "reactjs" || skillName === "react.js" || skillName === "react js") norm = "react";
+    if (skillName === "nodejs" || skillName === "node.js" || skillName === "node js") norm = "node.js";
+    if (skillName === "golang") norm = "go";
+    if (skillName === "amazon web services") norm = "aws";
+    if (skillName === "google cloud platform" || skillName === "google cloud") norm = "gcp";
+    if (skillName === "microsoft azure") norm = "azure";
+    return `skill:${norm}`;
+  }
+  
+  if (prefix === "project" && parts.length > 2) {
+    const projName = parts[1].trim();
+    const category = parts[2].trim();
+    // Ensure category is one of the formal categories
+    let finalCat = category;
+    if (category === "infra" || category === "hosting") finalCat = "deployment";
+    return `project:${projName}:${finalCat}`;
+  }
+  
+  return key.trim().toLowerCase();
+}
+
+function buildEvidenceGraph(resumeData: any): EvidenceNode[] {
+  const nodes: EvidenceNode[] = [];
+
+  // 1. Add skill nodes
+  (resumeData.skills || []).forEach((s: string) => {
+    nodes.push({
+      id: `skill:${s.trim().toLowerCase()}`,
+      type: "skill",
+      name: s.trim(),
+      confidence: 100,
+      supportingEvidence: ["Listed explicitly in core skills section of the master resume."]
+    });
+  });
+
+  // 2. Add project nodes and extract tech-stack supporting evidence
+  (resumeData.projects || []).forEach((p: any) => {
+    const projId = `project:${p.title.trim().toLowerCase()}`;
+    const supporting: string[] = [];
+    if (p.description) supporting.push(`Project Description: ${p.description}`);
+    if (p.tech) {
+      supporting.push(`Project Tech Stack: ${p.tech}`);
+      p.tech.split(',').forEach((t: string) => {
+        const tTrim = t.trim();
+        const skillId = `skill:${tTrim.toLowerCase()}`;
+        
+        // Link project to skill: Add or increase confidence of the skill if it was already listed
+        const existingSkill = nodes.find(n => n.id === skillId);
+        if (existingSkill) {
+          existingSkill.supportingEvidence.push(`Used in project '${p.title}': "${p.description || ""}"`);
+        } else {
+          nodes.push({
+            id: skillId,
+            type: "skill",
+            name: tTrim,
+            confidence: 90,
+            supportingEvidence: [`Found in tech stack of project '${p.title}'.`]
+          });
+        }
+      });
+    }
+    
+    nodes.push({
+      id: projId,
+      type: "project",
+      name: p.title,
+      confidence: 100,
+      supportingEvidence: supporting
+    });
+  });
+
+  // 3. Add experience nodes and extract supporting evidence
+  (resumeData.experience || []).forEach((e: any) => {
+    const expId = `experience:${e.company.trim().toLowerCase()}:${e.role.trim().toLowerCase()}`;
+    const supporting: string[] = [];
+    if (e.description) supporting.push(`Role Description: ${e.description}`);
+    
+    // We can search the experience description for skills to boost confidence
+    const allSkillsLower = nodes.filter(n => n.type === "skill").map(n => n.name.toLowerCase());
+    if (e.description) {
+      const descLower = e.description.toLowerCase();
+      allSkillsLower.forEach(skillLower => {
+        const escaped = skillLower.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+        if (regex.test(descLower)) {
+          const skillNode = nodes.find(n => n.id === `skill:${skillLower}`);
+          if (skillNode) {
+            skillNode.supportingEvidence.push(`Mentioned in work experience at '${e.company}' as '${e.role}': "${e.description}"`);
+            skillNode.confidence = Math.min(100, skillNode.confidence + 5); // boost confidence
+          }
+        }
+      });
+    }
+
+    nodes.push({
+      id: expId,
+      type: "experience",
+      name: `${e.role} at ${e.company}`,
+      confidence: 100,
+      supportingEvidence: supporting
+    });
+  });
+
+  // 4. Add certifications nodes
+  (resumeData.certifications || []).forEach((c: string) => {
+    nodes.push({
+      id: `certification:${c.trim().toLowerCase()}`,
+      type: "certification",
+      name: c.trim(),
+      confidence: 100,
+      supportingEvidence: ["Listed explicitly in certifications section of the master resume."]
+    });
+  });
+
+  return nodes;
+}
+
+function calculateAnswerUsability(answer: string): number {
+  const text = answer.trim();
+  if (text.length === 0) return 0;
+  
+  const lower = text.toLowerCase();
+  if (/^(yes|no|none|na|n\/a|not yet|never|yeah|sure|yep|nop|nope)$/.test(lower)) {
+    return 10;
+  }
+  
+  let score = 20;
+  
+  if (text.length > 20) score += 10;
+  if (text.length > 50) score += 20;
+  if (text.length > 100) score += 20;
+  
+  const hasNumbers = /[0-9]+%?/.test(text);
+  if (hasNumbers) score += 15;
+  
+  const techKeywords = ["docker", "kubernetes", "aws", "gcp", "azure", "ec2", "s3", "lambda", "nginx", "redis", "postgresql", "mongodb", "fastapi", "react", "next.js", "node", "concurrency", "websocket", "latency", "throughput", "monitoring", "prometheus", "grafana", "git", "ci/cd"];
+  let techCount = 0;
+  techKeywords.forEach(kw => {
+    if (lower.includes(kw)) techCount++;
+  });
+  score += Math.min(25, techCount * 8);
+
+  return Math.min(100, score);
+}
+
+function getAnswerFeedback(answer: string): { status: "empty" | "weak" | "strong"; feedback: string } {
+  const usability = calculateAnswerUsability(answer);
+  if (answer.trim().length === 0) {
+    return { status: "empty", feedback: "Please provide technical details or metrics to help optimize your resume." };
+  }
+  if (usability < 40) {
+    return { status: "weak", feedback: "⚠️ Too brief. Try adding specific tools, metrics, or details (e.g. 'Used AWS S3 for storage' instead of 'Yes')." };
+  }
+  return { status: "strong", feedback: "✨ Excellent detail! This contains strong evidence that can be integrated into your resume." };
+}
+
+function buildFallbackGaps(resumeData: any, activeCompany: Company, evidenceGraph: EvidenceNode[]): EvidenceGap[] {
+  const gaps: EvidenceGap[] = [];
+  const provenSkills = new Set<string>();
+  
+  evidenceGraph.forEach(node => {
+    if (node.type === "skill" && node.confidence >= 80) {
+      provenSkills.add(node.name.toLowerCase().trim());
+    }
+  });
+
+  const resumeTextParts: string[] = [];
+  if (resumeData.summary) resumeTextParts.push(resumeData.summary.toLowerCase());
+  (resumeData.experience || []).forEach((e: any) => {
+    if (e.role) resumeTextParts.push(e.role.toLowerCase());
+    if (e.company) resumeTextParts.push(e.company.toLowerCase());
+    if (e.description) resumeTextParts.push(e.description.toLowerCase());
+  });
+  (resumeData.projects || []).forEach((p: any) => {
+    if (p.title) resumeTextParts.push(p.title.toLowerCase());
+    if (p.tech) resumeTextParts.push(p.tech.toLowerCase());
+    if (p.description) resumeTextParts.push(p.description.toLowerCase());
+  });
+  const resumeText = resumeTextParts.join(" ");
+
+  const domainKeywords = [
+    "air purification", "indoor air quality", "iaq", "hvac", "biotechnology",
+    "materials science", "nanotechnology", "life sciences", "polymer technology",
+    "chemical engineering", "prototype development", "invention disclosures",
+    "patent-related activities", "technology transfer", "feasibility assessments",
+    "benchmarking",
+    
+    "penetration testing", "pentesting", "adversarial simulation", "ethical hacking",
+    "threat modeling", "vulnerability assessment", "owasp top 10", "sql injection",
+    "xss", "csrf", "ssrf", "idor", "api security", "llm security", "prompt injection",
+    "jailbreaks", "retrieval poisoning", "cryptography", "aes", "rsa", "ssl/tls",
+    "burp suite", "nmap", "wireshark", "metasploit", "owasp zap", "tryhackme",
+    "hack the box", "ctf", "networking", "tcp/ip", "dns", "http/https", "proxies",
+    "sockets", "packet analysis", "cybersecurity", "web security",
+    
+    "linux", "docker", "kubernetes", "helm charts", "aws", "gcp", "google cloud",
+    "azure", "microsoft azure", "ec2", "s3", "rds", "iam", "lambda", "vpc",
+    "nginx", "redis", "terraform", "ansible", "jenkins", "ci/cd", "github actions",
+    
+    "python", "javascript", "typescript", "go", "golang", "java", "c++", "rust",
+    "node.js", "react", "next.js", "fastapi", "flask", "django", "sql", "postgresql",
+    "mongodb", "neo4j", "concurrency", "async streaming", "scaling", "latency",
+    "observability", "microservices", "websockets"
+  ];
+
+  const jdTextLower = (activeCompany.jd_text || "").toLowerCase();
+  const extractedFromJD = new Set<string>();
+
+  domainKeywords.forEach(keyword => {
+    const escaped = keyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+    if (regex.test(jdTextLower)) {
+      extractedFromJD.add(keyword);
+    }
+  });
+
+  const dbRequired = activeCompany.jd_required_skills || [];
+  const dbATS = activeCompany.jd_ats_keywords || [];
+  const blacklistWords = new Set([
+    "strong", "active", "excellent", "global", "basic", "solutions", "environment", 
+    "team", "growth", "skills", "details", "attention", "communication", "collaborative",
+    "technologies", "opportunity", "department", "limited", "company", "role", "work",
+    "experience", "interest", "learning", "growth", "development", "product", "lines",
+    "support", "explore", "internal", "external", "business", "units", "activities",
+    "efforts", "methods", "materials", "systems", "processes"
+  ]);
+
+  [...dbRequired, ...dbATS].forEach(skill => {
+    const sLower = skill.toLowerCase().trim();
+    if (sLower.length <= 2) return;
+    if (sLower === activeCompany.name.toLowerCase()) return;
+    if (blacklistWords.has(sLower)) return;
+    
+    let shouldAdd = true;
+    Array.from(extractedFromJD).forEach(existing => {
+      if (existing.includes(sLower) || sLower.includes(existing)) {
+        shouldAdd = false;
+      }
+    });
+    if (shouldAdd) {
+      extractedFromJD.add(sLower);
+    }
+  });
+
+  Array.from(extractedFromJD).forEach(skill => {
+    const sLower = skill.toLowerCase().trim();
+    let isProven = false;
+    provenSkills.forEach(ps => {
+      if (ps.includes(sLower) || sLower.includes(ps)) {
+        isProven = true;
+      }
+    });
+
+    if (!isProven) {
+      const escaped = sLower.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+      const inText = regex.test(resumeText);
+      if (inText) {
+        gaps.push({
+          stableKey: normalizeStableKey(`skill:${sLower}`),
+          category: "JOB_SPECIFIC",
+          gapType: "weak_skill",
+          skillOrProjectName: skill,
+          reason: `The job description requires '${skill}', which is mentioned but not listed as a core skill.`,
+          evidenceMissing: "Project contexts and depth of experience with this skill.",
+          importance: 75,
+          confidence: 50,
+          resumeImpactScore: 80
+        });
+      } else {
+        gaps.push({
+          stableKey: normalizeStableKey(`skill:${sLower}`),
+          category: "JOB_SPECIFIC",
+          gapType: "missing_skill",
+          skillOrProjectName: skill,
+          reason: `The job description requires '${skill}', which is missing from your master resume.`,
+          evidenceMissing: "Proof of training, coursework, or practical project work.",
+          importance: 90,
+          confidence: 0,
+          resumeImpactScore: 85
+        });
+      }
+    }
+  });
+
+  (resumeData.projects || []).forEach((p: any) => {
+    const descLower = (p.description || "").toLowerCase();
+    const hasMetrics = /[0-9]+%?/.test(descLower) || descLower.includes("percent") || descLower.includes("latency") || descLower.includes("scale") || descLower.includes("throughput") || descLower.includes("users");
+    const hasInfra = /aws|gcp|azure|docker|kubernetes|linux|nginx|redis|dockerfile|yaml|deploy|hosting|cloud/.test(descLower) || (p.tech && /aws|gcp|azure|docker|kubernetes|linux|nginx|redis/.test(p.tech.toLowerCase()));
+
+    if (!hasMetrics) {
+      gaps.push({
+        stableKey: normalizeStableKey(`project:${p.title.trim().toLowerCase()}:metrics`),
+        category: "GENERAL",
+        gapType: "missing_metric",
+        skillOrProjectName: p.title,
+        reason: `The project '${p.title}' lacks quantitative metrics or performance gains.`,
+        evidenceMissing: "Scalability stats, latency reductions, requests/sec, or efficiency metrics.",
+        importance: 70,
+        confidence: 20,
+        resumeImpactScore: 90
+      });
+    }
+
+    if (!hasInfra) {
+      gaps.push({
+        stableKey: normalizeStableKey(`project:${p.title.trim().toLowerCase()}:deployment`),
+        category: "GENERAL",
+        gapType: "missing_infrastructure",
+        skillOrProjectName: p.title,
+        reason: `The project '${p.title}' lacks cloud deployment or container hosting context.`,
+        evidenceMissing: "Cloud providers (e.g. AWS, GCP), containers (Docker), Nginx, or Linux details.",
+        importance: 80,
+        confidence: 10,
+        resumeImpactScore: 85
+      });
+    }
+
+    gaps.push({
+      stableKey: normalizeStableKey(`project:${p.title.trim().toLowerCase()}:challenge`),
+      category: "GENERAL",
+      gapType: "enrichment_opportunity",
+      skillOrProjectName: p.title,
+      reason: `Verifying complex technical challenges solved in '${p.title}' can enrich your resume.`,
+      evidenceMissing: "System design tradeoffs, concurrency, data streaming, or concurrency solutions.",
+      importance: 70,
+      confidence: 30,
+      resumeImpactScore: 80
+    });
+  });
+
+  return gaps;
+}
+
+function parseRobustGapsJSON(rawText: string): EvidenceGap[] {
+  let cleanText = rawText.trim();
+  cleanText = cleanText.replace(/```json/gi, "");
+  cleanText = cleanText.replace(/```/g, "");
+
+  const firstBracket = cleanText.indexOf("[");
+  const lastBracket = cleanText.lastIndexOf("]");
+  if (firstBracket !== -1 && lastBracket !== -1) {
+    cleanText = cleanText.substring(firstBracket, lastBracket + 1);
+  } else {
+    throw new Error("No JSON array bounds found.");
+  }
+  
+  cleanText = balanceJSONStack(cleanText);
+
+  try {
+    return JSON.parse(cleanText);
+  } catch (err) {
+    console.warn("JSON parse on gaps LLM output failed, trying regex fallback:", err);
+  }
+
+  const list: EvidenceGap[] = [];
+  const objMatches = cleanText.match(/\{[\s\S]*?\}/g);
+  if (objMatches) {
+    objMatches.forEach(objText => {
+      try {
+        const stableKeyMatch = objText.match(/"stableKey"\s*:\s*"([^"]*)"/i);
+        const categoryMatch = objText.match(/"category"\s*:\s*"([^"]*)"/i);
+        const gapTypeMatch = objText.match(/"gapType"\s*:\s*"([^"]*)"/i);
+        const skillOrProjectNameMatch = objText.match(/"skillOrProjectName"\s*:\s*"([^"]*)"/i);
+        const reasonMatch = objText.match(/"reason"\s*:\s*"([^"]*)"/i);
+        const evidenceMissingMatch = objText.match(/"evidenceMissing"\s*:\s*"([^"]*)"/i);
+        const importanceMatch = objText.match(/"importance"\s*:\s*([0-9]+)/i);
+        const confidenceMatch = objText.match(/"confidence"\s*:\s*([0-9]+)/i);
+        const resumeImpactScoreMatch = objText.match(/"resumeImpactScore"\s*:\s*([0-9]+)/i);
+
+        if (stableKeyMatch && gapTypeMatch) {
+          list.push({
+            stableKey: stableKeyMatch[1],
+            category: (categoryMatch ? categoryMatch[1].toUpperCase() : "JOB_SPECIFIC") as any,
+            gapType: gapTypeMatch[1] as any,
+            skillOrProjectName: skillOrProjectNameMatch ? skillOrProjectNameMatch[1] : "",
+            reason: reasonMatch ? reasonMatch[1] : "",
+            evidenceMissing: evidenceMissingMatch ? evidenceMissingMatch[1] : "",
+            importance: importanceMatch ? parseInt(importanceMatch[1]) : 50,
+            confidence: confidenceMatch ? parseInt(confidenceMatch[1]) : 0,
+            resumeImpactScore: resumeImpactScoreMatch ? parseInt(resumeImpactScoreMatch[1]) : 50
+          });
+        }
+      } catch (e) {
+        console.warn("Regex object extract failed:", e);
+      }
+    });
+  }
+  return list;
 }
 
 function parseRobustLLMJSON(rawText: string): any {
@@ -1169,25 +1601,58 @@ function AIToolkitContent() {
       const existingSummary = (resumeData.summary || "").substring(0, 300);
 
       // 3. Construct verified candidate context
-      const vaultQAs = (masterResume?.context_vault || [])
-        .map((qa: any) => `- Q: ${qa.question}\n  A: ${qa.answer}`)
-        .join("\n");
-      const currentGeneralQAs = copilotQuestions
-        .filter(q => q.type === "general" && q.answer.trim())
-        .map(q => `- Q: ${q.text}\n  A: ${q.answer}`)
-        .join("\n");
-      const currentJobQAs = copilotQuestions
-        .filter(q => q.type === "job_specific" && q.answer.trim())
-        .map(q => `- Q: ${q.text}\n  A: ${q.answer}`)
-        .join("\n");
+      const verifiedEvidenceStore: VerifiedEvidence[] = [];
+      const addedKeys = new Set<string>();
+
+      // Add active copilot questions that have been answered
+      copilotQuestions.forEach(q => {
+        if (q.answer.trim()) {
+          const normKey = normalizeStableKey(q.stableKey);
+          addedKeys.add(normKey);
+          verifiedEvidenceStore.push({
+            stableKey: normKey,
+            category: q.type,
+            confidence: calculateAnswerUsability(q.answer),
+            answer: q.answer.trim(),
+            usableForResume: calculateAnswerUsability(q.answer) >= 40
+          });
+        }
+      });
+
+      // Add vault items that were not answered in the current session
+      const existingVault: VaultQA[] = resumeData.context_vault || [];
+      existingVault.forEach(v => {
+        const normKey = v.stableKey ? normalizeStableKey(v.stableKey) : "";
+        if (normKey && !addedKeys.has(normKey) && v.answer.trim()) {
+          addedKeys.add(normKey);
+          verifiedEvidenceStore.push({
+            stableKey: normKey,
+            category: "vault",
+            confidence: calculateAnswerUsability(v.answer),
+            answer: v.answer.trim(),
+            usableForResume: calculateAnswerUsability(v.answer) >= 40
+          });
+        }
+      });
+
+      const usableEvidence = verifiedEvidenceStore.filter(e => e.usableForResume);
 
       let verifiedContextBlock = "";
-      if (vaultQAs || currentGeneralQAs || currentJobQAs) {
-        verifiedContextBlock = `\nVerified Extra Details & Context from Candidate (use these facts to enrich descriptions, summaries, and verify skills):
-${vaultQAs ? `\n--- Global Candidate Context ---\n${vaultQAs}` : ""}
-${currentGeneralQAs ? `\n--- Additional Project Context ---\n${currentGeneralQAs}` : ""}
-${currentJobQAs ? `\n--- Job Specific Context ---\n${currentJobQAs}` : ""}
-`;
+      if (usableEvidence.length > 0) {
+        verifiedContextBlock = `\nVerified Factual Context from Candidate (Use these verified facts, metrics, and details to enrich the resume): \n` +
+          usableEvidence.map(e => {
+            if (e.stableKey.startsWith("skill:")) {
+              const skillName = e.stableKey.split(":")[1];
+              return `- Verified Skill Fact [${skillName}]: ${e.answer}`;
+            } else if (e.stableKey.startsWith("project:")) {
+              const parts = e.stableKey.split(":");
+              const projName = parts[1];
+              const category = parts[2];
+              return `- Verified Project Fact [${projName} -> ${category}]: ${e.answer}`;
+            } else {
+              return `- Verified Fact: ${e.answer}`;
+            }
+          }).join("\n");
       }
 
       // Simplified few-shot prompt designed for small (0.5B–1B) models to guarantee correct JSON structure
@@ -1196,8 +1661,8 @@ ${currentJobQAs ? `\n--- Job Specific Context ---\n${currentJobQAs}` : ""}
 Task: Optimize the summary, skills, and projects based on the target job keywords and JD snippet.
 Guidelines:
 1. In "optimized_summary", write a tailored professional summary that aligns with the target job role.
-2. In "optimized_skills", keep all original skills, and add new skills from the target job keywords ONLY if they are confirmed or mentioned in the "Verified Extra Details & Context" above. Do NOT add any missing skills that the candidate has not confirmed.
-3. In "optimized_projects", update the project descriptions to incorporate the specific technical libraries, databases, or performance metrics provided in the "Verified Extra Details & Context" above. Keep other projects' descriptions concise but professional.
+2. In "optimized_skills", keep all original skills, and add new skills from the target job keywords ONLY if they are confirmed or mentioned in the "Verified Factual Context" above. Do NOT add any missing skills that the candidate has not confirmed.
+3. In "optimized_projects", update the project descriptions to incorporate the specific technical libraries, databases, or performance metrics provided in the "Verified Factual Context" above. Keep other projects' descriptions concise but professional.
 4. Do NOT fabricate any new experience, job titles, or skills not present in the original resume or verified context.
 
 Target Job: ${company.role} at ${company.name}
@@ -1386,136 +1851,149 @@ Optimize the original resume now and return ONLY the JSON object:`;
         throw new Error("No master resume found. Please ensure you have parsed your master resume first.");
       }
 
-      // 1. Gather all candidate proven skills and resume text
-      const provenSkills = new Set<string>();
-      (resumeData.skills || []).forEach((s: string) => provenSkills.add(s.toLowerCase().trim()));
-      (resumeData.projects || []).forEach((p: any) => {
-        if (p.tech) {
-          p.tech.split(',').forEach((t: string) => provenSkills.add(t.trim().toLowerCase()));
-        }
-      });
+      // 1. Build Evidence Graph
+      const evidenceGraph = buildEvidenceGraph(resumeData);
 
-      const resumeTextParts: string[] = [];
-      if (resumeData.summary) resumeTextParts.push(resumeData.summary.toLowerCase());
-      (resumeData.experience || []).forEach((e: any) => {
-        if (e.role) resumeTextParts.push(e.role.toLowerCase());
-        if (e.company) resumeTextParts.push(e.company.toLowerCase());
-        if (e.description) resumeTextParts.push(e.description.toLowerCase());
-      });
-      (resumeData.projects || []).forEach((p: any) => {
-        if (p.title) resumeTextParts.push(p.title.toLowerCase());
-        if (p.tech) resumeTextParts.push(p.tech.toLowerCase());
-        if (p.description) resumeTextParts.push(p.description.toLowerCase());
-      });
-      const resumeText = resumeTextParts.join(" ");
+      // 2. Discover Gaps (Fallback + LLM if available)
+      let discoveredGaps = buildFallbackGaps(resumeData, company, evidenceGraph);
 
-      // 2. Define standard domain-specific skill lists to match phrases
-      const domainKeywords = [
-        // Air Purification & IAQ
-        "air purification", "indoor air quality", "iaq", "hvac", "biotechnology",
-        "materials science", "nanotechnology", "life sciences", "polymer technology",
-        "chemical engineering", "prototype development", "invention disclosures",
-        "patent-related activities", "technology transfer", "feasibility assessments",
-        "benchmarking",
-        
-        // Security
-        "penetration testing", "pentesting", "adversarial simulation", "ethical hacking",
-        "threat modeling", "vulnerability assessment", "owasp top 10", "sql injection",
-        "xss", "csrf", "ssrf", "idor", "api security", "llm security", "prompt injection",
-        "jailbreaks", "retrieval poisoning", "cryptography", "aes", "rsa", "ssl/tls",
-        "burp suite", "nmap", "wireshark", "metasploit", "owasp zap", "tryhackme",
-        "hack the box", "ctf", "networking", "tcp/ip", "dns", "http/https", "proxies",
-        "sockets", "packet analysis", "cybersecurity", "web security",
-        
-        // DevOps & Cloud
-        "linux", "docker", "kubernetes", "helm charts", "aws", "gcp", "google cloud",
-        "azure", "microsoft azure", "ec2", "s3", "rds", "iam", "lambda", "vpc",
-        "nginx", "redis", "terraform", "ansible", "jenkins", "ci/cd", "github actions",
-        
-        // Software Development & AI
-        "python", "javascript", "typescript", "go", "golang", "java", "c++", "rust",
-        "node.js", "react", "next.js", "fastapi", "flask", "django", "sql", "postgresql",
-        "mongodb", "neo4j", "concurrency", "async streaming", "scaling", "latency",
-        "observability", "microservices", "websockets"
-      ];
+      const gapDiscoveryPrompt = `You are an AI Resume Evidence Discovery Agent.
+Analyze the Master Resume and the target Job Description to identify technical gaps.
+Output ONLY a JSON array of EvidenceGap objects matching this schema:
+interface EvidenceGap {
+  stableKey: string;
+  category: "GENERAL" | "JOB_SPECIFIC";
+  gapType: "missing_skill" | "weak_skill" | "project_depth" | "missing_metric" | "missing_infrastructure" | "enrichment_opportunity";
+  skillOrProjectName: string;
+  reason: string;
+  evidenceMissing: string;
+  importance: number; // 1 to 100
+  confidence: number; // 0 to 100
+  resumeImpactScore: number; // 1 to 100
+}
 
-      // Extract skills from JD text using substring match
-      const jdTextLower = (company.jd_text || "").toLowerCase();
-      const extractedFromJD = new Set<string>();
+Target Job Role: ${company.role}
+Job Description: ${(company.jd_text || "").substring(0, 500)}
 
-      domainKeywords.forEach(keyword => {
-        const escaped = keyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-        // Match with word boundaries
-        const regex = new RegExp(`\\b${escaped}\\b`, 'i');
-        if (regex.test(jdTextLower)) {
-          extractedFromJD.add(keyword);
-        }
-      });
+Resume Summary: ${resumeData.summary || ""}
+Resume Skills: ${(resumeData.skills || []).join(", ")}
+Resume Projects:
+${(resumeData.projects || []).map((p: any) => `- ${p.title}: ${p.description}`).join("\n")}
 
-      // Also merge the database-extracted required skills and ats keywords (from backend)
-      const dbRequired = company.jd_required_skills || [];
-      const dbATS = company.jd_ats_keywords || [];
-      
-      const blacklistWords = new Set([
-        "strong", "active", "excellent", "global", "basic", "solutions", "environment", 
-        "team", "growth", "skills", "details", "attention", "communication", "collaborative",
-        "technologies", "opportunity", "department", "limited", "company", "role", "work",
-        "experience", "interest", "learning", "growth", "development", "product", "lines",
-        "support", "explore", "internal", "external", "business", "units", "activities",
-        "efforts", "methods", "materials", "systems", "processes"
-      ]);
+Rules:
+- For missing skills from the JD: category "JOB_SPECIFIC", gapType "missing_skill", stableKey "skill:<normalized_skill_name>".
+- For weak skills mentioned but not core: category "JOB_SPECIFIC", gapType "weak_skill", stableKey "skill:<normalized_skill_name>".
+- For missing metrics in projects: category "GENERAL", gapType "missing_metric", stableKey "project:<project_name>:metrics".
+- For missing deployment/infra in projects: category "GENERAL", gapType "missing_infrastructure", stableKey "project:<project_name>:deployment".
 
-      [...dbRequired, ...dbATS].forEach(skill => {
-        const sLower = skill.toLowerCase().trim();
-        if (sLower.length <= 2) return;
-        if (sLower === company.name.toLowerCase()) return;
-        if (blacklistWords.has(sLower)) return;
-        
-        // Only add if it doesn't overlap or match a longer phrase already extracted
-        let shouldAdd = true;
-        Array.from(extractedFromJD).forEach(existing => {
-          if (existing.includes(sLower) || sLower.includes(existing)) {
-            shouldAdd = false;
+Return ONLY the JSON array starting with [ and ending with ]:`;
+
+      const isDownloaded = typeof window !== "undefined" && (
+        localStorage.getItem(`model_downloaded_${atsModel}`) === "true" ||
+        localStorage.getItem(`model_downloaded_onnx-community/Llama-3.2-1B-Instruct-ONNX`) === "true"
+      );
+
+      if (geminiAvailable || atsModel !== "qwen-0.5b" || isDownloaded) {
+        try {
+          setLocalStatusMessage("Running Local AI Gap Discovery...");
+          const llmGapsText = await generateInBrowser({
+            modelType: atsModel,
+            prompt: gapDiscoveryPrompt,
+            maxTokens: 1024,
+            onProgress: (p) => {
+              setLocalStatusMessage(`AI analyzing resume gaps: ${Math.round(p * 100)}%`);
+            }
+          });
+          const llmGaps = parseRobustGapsJSON(llmGapsText);
+          if (llmGaps && llmGaps.length > 0) {
+            llmGaps.forEach(g => {
+              g.stableKey = normalizeStableKey(g.stableKey);
+            });
+            const mergedMap = new Map<string, EvidenceGap>();
+            discoveredGaps.forEach(g => mergedMap.set(g.stableKey, g));
+            llmGaps.forEach(g => mergedMap.set(g.stableKey, g));
+            discoveredGaps = Array.from(mergedMap.values());
           }
-        });
-        if (shouldAdd) {
-          extractedFromJD.add(sLower);
+        } catch (llmErr) {
+          console.warn("Local AI Gap Discovery failed, using deterministic fallback:", llmErr);
         }
-      });
+      }
 
-      // 3. Build Gap Matrix
-      const gapMatrix: Array<{ skill: string; status: "PROVEN" | "WEAKLY_PROVEN" | "NOT_PROVEN" }> = [];
-      
-      extractedFromJD.forEach(skill => {
-        const sLower = skill.toLowerCase();
-        
-        // Check if proven
-        let isProven = false;
-        provenSkills.forEach(ps => {
-          if (ps.includes(sLower) || sLower.includes(ps)) {
-            isProven = true;
+      // 3. Vault Coverage Check
+      const existingVault: VaultQA[] = resumeData.context_vault || [];
+      discoveredGaps.forEach(gap => {
+        const normKey = normalizeStableKey(gap.stableKey);
+        const match = existingVault.find(v => {
+          if (v.stableKey) {
+            return normalizeStableKey(v.stableKey) === normKey;
           }
+          return false;
         });
-        
-        if (isProven) {
-          gapMatrix.push({ skill, status: "PROVEN" });
-        } else {
-          // Check if weakly proven (mentioned in resume text)
-          const escaped = sLower.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-          const regex = new RegExp(`\\b${escaped}\\b`, 'i');
-          if (regex.test(resumeText)) {
-            gapMatrix.push({ skill, status: "WEAKLY_PROVEN" });
+
+        if (match) {
+          const usability = calculateAnswerUsability(match.answer);
+          if (usability >= 40) {
+            gap.priority = 0;
+            gap.confidence = 100;
           } else {
-            gapMatrix.push({ skill, status: "NOT_PROVEN" });
+            gap.confidence = Math.max(gap.confidence || 0, 40);
           }
         }
       });
 
-      const missingSkills = gapMatrix.filter(item => item.status !== "PROVEN");
+      // 4. Score & Rank Gaps
+      discoveredGaps.forEach(gap => {
+        if (gap.priority === undefined || gap.priority > 0) {
+          gap.priority = gap.importance * 0.45 + (100 - gap.confidence) * 0.25 + gap.resumeImpactScore * 0.30;
+        }
+      });
 
-      // 4. Mapping of skills to highly concrete questions that can go directly into a resume
+      const activeGaps = discoveredGaps.filter(g => g.priority !== undefined && g.priority > 0);
+
+      // 5. Merge & Deduplicate redundant project details
+      const finalGaps: EvidenceGap[] = [];
+      const projectGapsMap = new Map<string, EvidenceGap[]>();
+
+      activeGaps.forEach(gap => {
+        const normKey = normalizeStableKey(gap.stableKey);
+        if (normKey.startsWith("project:")) {
+          const parts = normKey.split(":");
+          const projName = parts[1];
+          if (!projectGapsMap.has(projName)) {
+            projectGapsMap.set(projName, []);
+          }
+          projectGapsMap.get(projName)!.push(gap);
+        } else {
+          if (!finalGaps.some(g => normalizeStableKey(g.stableKey) === normKey)) {
+            finalGaps.push(gap);
+          }
+        }
+      });
+
+      projectGapsMap.forEach((projGaps, projName) => {
+        if (projGaps.length === 1) {
+          finalGaps.push(projGaps[0]);
+        } else {
+          const highestPriorityGap = projGaps.reduce((prev, current) => (prev.priority || 0) > (current.priority || 0) ? prev : current);
+          const combinedReasons = projGaps.map(g => g.reason).join(" Additionally, ");
+          const combinedEvidenceMissing = projGaps.map(g => g.evidenceMissing).join(", ");
+          const displayProjectName = projGaps[0].skillOrProjectName || projName;
+
+          finalGaps.push({
+            ...highestPriorityGap,
+            stableKey: `project:${projName}:details`,
+            skillOrProjectName: displayProjectName,
+            reason: `Combined project details: ${combinedReasons}`,
+            evidenceMissing: combinedEvidenceMissing,
+            priority: Math.max(...projGaps.map(g => g.priority || 0))
+          });
+        }
+      });
+
+      finalGaps.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+
+      // 6. Question Generation Layer
       const skillQuestionTemplates: Record<string, string> = {
-        // Air Purification & IAQ
         "air purification": "Have you worked with air purification systems, filtration technologies (e.g. HEPA, activated carbon), or aerosol science? Describe your exposure or prototype projects.",
         "indoor air quality": "Have you measured, analyzed, or optimized indoor air quality (IAQ) parameters like CO2, PM2.5, VOCs, temperature, or relative humidity?",
         "iaq": "Have you measured, analyzed, or optimized indoor air quality (IAQ) parameters like CO2, PM2.5, VOCs, temperature, or relative humidity?",
@@ -1533,7 +2011,6 @@ Optimize the original resume now and return ONLY the JSON object:`;
         "feasibility assessments": "Have you conducted preliminary technical calculations, cost-benefit analyses, or technical feasibility studies for a product?",
         "benchmarking": "Have you conducted benchmarking studies to compare product specifications, performance metrics, or technologies against global competitors?",
 
-        // Security
         "penetration testing": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
         "pentesting": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
         "adversarial simulation": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
@@ -1565,7 +2042,6 @@ Optimize the original resume now and return ONLY the JSON object:`;
         "cybersecurity": "Have you completed coursework, labs, or certifications related to cybersecurity, network security, or ethical hacking?",
         "web security": "Have you studied or worked with OWASP Top 10 vulnerabilities (e.g. SQL Injection, XSS, CSRF, SSRF, IDOR, or insecure APIs)? Describe your exposure.",
 
-        // DevOps & Cloud
         "linux": "Have you used Linux extensively for development, server administration, Docker deployments, or shell scripting? Describe your experience.",
         "docker": "Have you packaged, run, or deployed any of your projects using Docker containers?",
         "kubernetes": "Have you worked with Kubernetes, container orchestration, or Helm charts for microservices?",
@@ -1584,7 +2060,6 @@ Optimize the original resume now and return ONLY the JSON object:`;
         "ci/cd": "Have you set up CI/CD pipelines (e.g. Jenkins, GitHub Actions) for automated testing or deployment?",
         "github actions": "Have you set up CI/CD pipelines (e.g. Jenkins, GitHub Actions) for automated testing or deployment?",
 
-        // Software Development & AI
         "python": "Have you written Python code for backend APIs, data processing, machine learning, or automation scripting?",
         "javascript": "Have you built frontend components or backend logic using JavaScript/ES6+?",
         "typescript": "Have you worked with TypeScript for type-safe application development?",
@@ -1612,82 +2087,88 @@ Optimize the original resume now and return ONLY the JSON object:`;
         "websockets": "Have you used WebSockets or socket.io to enable real-time bidirectional communication?"
       };
 
-      const jobQuestions: CopilotQuestion[] = [];
-      const processedTemplates = new Set<string>();
+      const questionsList: CopilotQuestion[] = [];
+      const processedKeys = new Set<string>();
 
-      // Pre-fill answers from Master Vault
-      const existingVault: VaultQA[] = resumeData.context_vault || [];
+      const projectTitles = (resumeData.projects || []).slice(0, 4).map((p: any) => p.title).join(", ");
+      
+      const defaultGeneralQuestions = [
+        {
+          stableKey: "general:projects:infrastructure",
+          text: `Several of your projects involve deployment and real-time systems. Can you describe the infrastructure, cloud services, operating systems, containers, databases, caching systems, or deployment tools (e.g. Linux, Docker, AWS, EC2, Nginx, Redis) used?`,
+        },
+        {
+          stableKey: "general:projects:challenges",
+          text: `For your major projects (${projectTitles || "projects"}), what were the most technically challenging engineering problems you solved (e.g. concurrency, async streaming, scaling, latency, observability)?`,
+        },
+        {
+          stableKey: "general:projects:metrics",
+          text: `Do you have additional quantitative metrics or performance gains (e.g. user count, requests/day, latency improvements, throughput, evaluation scores, or cost reductions) for your projects or internships?`,
+        },
+        {
+          stableKey: "general:skills:additional",
+          text: `Are there any other programming languages, frameworks, databases, security tools, DevOps tools, or AI frameworks you have used but are not listed on your resume?`,
+        }
+      ];
 
-      // Select Job-Specific Questions matching the missing/weakly proven skills
-      missingSkills.forEach(item => {
-        const sLower = item.skill.toLowerCase().trim();
-        const templateKey = Object.keys(skillQuestionTemplates).find(k => sLower === k || sLower.includes(k) || k.includes(sLower));
-        
+      defaultGeneralQuestions.forEach(q => {
+        const match = existingVault.find(v => v.stableKey === q.stableKey || v.question.toLowerCase().trim() === q.text.toLowerCase().trim());
+        questionsList.push({
+          id: `gen_${q.stableKey}`,
+          type: "general",
+          stableKey: q.stableKey,
+          text: q.text,
+          answer: match ? match.answer : ""
+        });
+      });
+
+      finalGaps.forEach(gap => {
+        const normKey = normalizeStableKey(gap.stableKey);
+        if (processedKeys.has(normKey)) return;
+        processedKeys.add(normKey);
+
         let qText = "";
-        if (templateKey) {
-          qText = skillQuestionTemplates[templateKey];
-        } else {
-          // Format skill name for nice sentence presentation
-          const displaySkill = item.skill.split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-          qText = `The job description requires experience with '${displaySkill}'. Have you worked with this tool, framework, or concept in any projects, coursework, or self-learning? Describe your exposure.`;
+        if (normKey.startsWith("skill:")) {
+          const skillName = gap.skillOrProjectName;
+          const templateKey = Object.keys(skillQuestionTemplates).find(k => skillName.toLowerCase() === k || skillName.toLowerCase().includes(k) || k.includes(skillName.toLowerCase()));
+          if (templateKey) {
+            qText = skillQuestionTemplates[templateKey];
+          } else {
+            const displaySkill = skillName.split(" ").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+            qText = `The job description requires experience with '${displaySkill}'. Have you worked with this tool, framework, or concept in any projects, coursework, or self-learning? Describe your exposure.`;
+          }
+        } else if (normKey.startsWith("project:")) {
+          const projName = gap.skillOrProjectName;
+          if (normKey.endsWith(":details")) {
+            qText = `For your project '${projName}', what was the infrastructure, cloud services, databases, or deployment tools used, and what were the most challenging engineering problems or quantitative metrics/performance gains achieved?`;
+          } else if (normKey.endsWith(":metrics")) {
+            qText = `Do you have additional quantitative metrics or performance gains (e.g. user count, latency improvements, throughput, or cost reductions) for your project '${projName}'?`;
+          } else if (normKey.endsWith(":deployment")) {
+            qText = `Can you describe the infrastructure, cloud services, databases, or deployment tools (e.g. Linux, Docker, AWS, EC2, Nginx, Redis) used in your project '${projName}'?`;
+          } else if (normKey.endsWith(":challenge")) {
+            qText = `For your project '${projName}', what were the most technically challenging engineering problems you solved (e.g. concurrency, async streaming, scaling, latency, observability)?`;
+          } else {
+            qText = `Can you provide more technical details or explain the architecture of your project '${projName}'?`;
+          }
         }
 
-        if (!processedTemplates.has(qText)) {
-          processedTemplates.add(qText);
-          const match = existingVault.find(v => v.question.toLowerCase().trim() === qText.toLowerCase().trim());
-          jobQuestions.push({
-            id: Math.random().toString(),
+        if (qText) {
+          const match = existingVault.find(v => v.stableKey === normKey || v.question.toLowerCase().trim() === qText.toLowerCase().trim());
+          questionsList.push({
+            id: `job_${normKey}`,
             type: "job_specific",
+            stableKey: normKey,
             text: qText,
-            answer: match ? match.answer : ""
+            answer: match ? match.answer : "",
+            sourceGapKey: normKey
           });
         }
       });
 
-      // 5. Select General Questions (customized with the candidate's actual projects)
-      const projectTitles = (resumeData.projects || []).slice(0, 4).map((p: any) => p.title).join(", ");
-      const generalQuestions: CopilotQuestion[] = [
-        {
-          id: Math.random().toString(),
-          type: "general",
-          text: `Several of your projects involve deployment and real-time systems. Can you describe the infrastructure, cloud services, operating systems, containers, databases, caching systems, or deployment tools (e.g. Linux, Docker, AWS, EC2, Nginx, Redis) used?`,
-          answer: ""
-        },
-        {
-          id: Math.random().toString(),
-          type: "general",
-          text: `For your major projects (${projectTitles || "projects"}), what were the most technically challenging engineering problems you solved (e.g. concurrency, async streaming, scaling, latency, observability)?`,
-          answer: ""
-        },
-        {
-          id: Math.random().toString(),
-          type: "general",
-          text: `Do you have additional quantitative metrics or performance gains (e.g. user count, requests/day, latency improvements, throughput, evaluation scores, or cost reductions) for your projects or internships?`,
-          answer: ""
-        },
-        {
-          id: Math.random().toString(),
-          type: "general",
-          text: `Are there any other programming languages, frameworks, databases, security tools, DevOps tools, or AI frameworks you have used but are not listed on your resume?`,
-          answer: ""
-        }
-      ];
+      const finalGeneralQuestions = questionsList.filter(q => q.type === "general").slice(0, 4);
+      const finalJobQuestions = questionsList.filter(q => q.type === "job_specific").slice(0, 8);
 
-      const finalGeneral = generalQuestions.map(q => {
-        const match = existingVault.find(v => v.question.toLowerCase().trim() === q.text.toLowerCase().trim());
-        return {
-          ...q,
-          answer: match ? match.answer : ""
-        };
-      });
-
-      // 6. Combine questions (Limit to max 4 general + 8 job_specific, total max 12)
-      const finalGeneralSlice = finalGeneral.slice(0, 4);
-      const finalJobSlice = jobQuestions.slice(0, 8);
-      
-      const parsedQAs: CopilotQuestion[] = [...finalGeneralSlice, ...finalJobSlice];
-
-      setCopilotQuestions(parsedQAs);
+      setCopilotQuestions([...finalGeneralQuestions, ...finalJobQuestions]);
       showSuccess("Copilot questions generated successfully! Answer them below to personalize your resume.");
     } catch (err: any) {
       console.error("Failed to generate copilot questions:", err);
@@ -1705,16 +2186,17 @@ Optimize the original resume now and return ONLY the JSON object:`;
     }
     setSavingVault(true);
     try {
-      const generalQAs: VaultQA[] = copilotQuestions
-        .filter(q => q.type === "general" && q.answer.trim().length > 0)
+      const answeredQAs: VaultQA[] = copilotQuestions
+        .filter(q => q.answer.trim().length > 0)
         .map(q => ({
+          stableKey: normalizeStableKey(q.stableKey),
           question: q.text,
           answer: q.answer.trim(),
           timestamp: new Date().toISOString()
         }));
 
-      if (generalQAs.length === 0) {
-        showSuccess("No general answers to save.");
+      if (answeredQAs.length === 0) {
+        showSuccess("No answers to save.");
         setSavingVault(false);
         return;
       }
@@ -1722,8 +2204,14 @@ Optimize the original resume now and return ONLY the JSON object:`;
       const existingVault: VaultQA[] = masterResume.context_vault || [];
       const updatedVault = [...existingVault];
 
-      generalQAs.forEach(newQA => {
-        const idx = updatedVault.findIndex(q => q.question.toLowerCase() === newQA.question.toLowerCase());
+      answeredQAs.forEach(newQA => {
+        const idx = updatedVault.findIndex(q => {
+          if (q.stableKey && newQA.stableKey) {
+            return normalizeStableKey(q.stableKey) === normalizeStableKey(newQA.stableKey);
+          }
+          return q.question.toLowerCase().trim() === newQA.question.toLowerCase().trim();
+        });
+        
         if (idx !== -1) {
           updatedVault[idx] = newQA;
         } else {
@@ -1742,7 +2230,7 @@ Optimize the original resume now and return ONLY the JSON object:`;
       };
       await api.put("/resumes/me", payload);
       setMasterResume(updatedMaster);
-      showSuccess("Saved general answers to your Master Vault successfully!");
+      showSuccess("Saved answers to your Master Vault successfully!");
     } catch (err: any) {
       console.error("Failed to save to vault", err);
       setErrorMsg(err.response?.data?.detail || "Failed to save answers to secure vault.");
@@ -2557,6 +3045,9 @@ Optimize the original resume now and return ONLY the JSON object:`;
                               <p className="text-[10px] text-zinc-500 uppercase mt-1 leading-normal">
                                 Provide verified facts and confirm details so the AI optimizer matches your resume to this role without fabricating skills.
                               </p>
+                              <p className="text-[10px] text-accent/80 font-mono uppercase mt-1.5 leading-normal">
+                                Note: The Copilot is not attempting to assess your qualifications. It is discovering verifiable evidence that may already exist but is missing from your resume.
+                              </p>
                             </div>
                             {copilotQuestions.length === 0 ? (
                               <button
@@ -2599,41 +3090,54 @@ Optimize the original resume now and return ONLY the JSON object:`;
                           {copilotQuestions.length > 0 ? (
                             <div className="space-y-4">
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {copilotQuestions.map((q) => (
-                                  <div key={q.id} className="border border-border bg-background p-4 space-y-3 relative flex flex-col justify-between">
-                                    <div className="space-y-2">
-                                      <div className="flex justify-between items-center">
-                                        <span className={`px-2 py-0.5 text-[8px] font-black border ${
-                                          q.type === "general" ? "border-blue-500/55 text-blue-400 bg-blue-500/5" : "border-amber-500/55 text-amber-400 bg-amber-500/5"
-                                        }`}>
-                                          {q.type === "general" ? "🔄 PERSISTED TO MASTER VAULT" : "🎯 JOB-SPECIFIC (THIS APP ONLY)"}
-                                        </span>
+                                {copilotQuestions.map((q) => {
+                                  const feedback = getAnswerFeedback(q.answer);
+                                  return (
+                                    <div key={q.id} className="border border-border bg-background p-4 space-y-3 relative flex flex-col justify-between">
+                                      <div className="space-y-2">
+                                        <div className="flex justify-between items-center">
+                                          <span className={`px-2 py-0.5 text-[8px] font-black border ${
+                                            q.type === "general" ? "border-blue-500/55 text-blue-400 bg-blue-500/5" : "border-amber-500/55 text-amber-400 bg-amber-500/5"
+                                          }`}>
+                                            {q.type === "general" ? "🔄 PERSISTED TO MASTER VAULT" : "🎯 JOB-SPECIFIC (THIS APP ONLY)"}
+                                          </span>
+                                        </div>
+                                        <p className="text-xs font-bold text-foreground leading-normal">{q.text}</p>
                                       </div>
-                                      <p className="text-xs font-bold text-foreground leading-normal">{q.text}</p>
+                                      <div className="space-y-2">
+                                        <textarea
+                                          value={q.answer}
+                                          onChange={(e) => updateCopilotAnswer(q.id, e.target.value)}
+                                          placeholder={q.type === "general" 
+                                            ? "Describe technical details, databases, libraries used, or metrics..." 
+                                            : "Enter details (e.g. Yes, I have worked with this tool in...)"}
+                                          rows={2}
+                                          className="w-full border border-border bg-background text-xs p-2.5 focus:border-accent focus:outline-none font-bold"
+                                        />
+                                        <div className={`text-[10px] font-bold ${
+                                          feedback.status === "strong" ? "text-green-500" : feedback.status === "weak" ? "text-yellow-500" : "text-zinc-500"
+                                        }`}>
+                                          {feedback.feedback}
+                                        </div>
+                                      </div>
                                     </div>
-                                    <textarea
-                                      value={q.answer}
-                                      onChange={(e) => updateCopilotAnswer(q.id, e.target.value)}
-                                      placeholder={q.type === "general" 
-                                        ? "Describe technical details, databases, libraries used, or metrics..." 
-                                        : "Enter details (e.g. Yes, I have worked with this tool in...)"}
-                                      rows={2}
-                                      className="w-full mt-2 border border-border bg-background text-xs p-2.5 focus:border-accent focus:outline-none font-bold"
-                                    />
-                                  </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                               <div className="border-t border-border pt-4 flex justify-between items-center">
                                 <span className="text-[9px] text-zinc-500 uppercase leading-snug">
-                                  {copilotQuestions.some(q => q.type === "general" && q.answer.trim()) && "🔄 Unsaved changes in Persisted Vault questions. Click 'Save to Master Vault' to persist."}
+                                  {copilotQuestions.some(q => q.type === "general" && q.answer.trim()) && "🔄 Answers to Persisted Vault questions will be saved. Click 'Save to Master Vault' to persist manually."}
                                 </span>
                                 <button
-                                  onClick={runLocalATS}
+                                  onClick={async () => {
+                                    await handleSaveToVault();
+                                    await runLocalATS();
+                                  }}
                                   disabled={calculatingATS}
                                   className="h-10 px-5 border-2 border-accent bg-accent text-black hover:bg-black hover:text-accent hover:border-accent text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all"
                                 >
                                   <Sparkles size={13} />
-                                  <span>Tailor Resume using verified context</span>
+                                  <span>{calculatingATS ? "Tailoring..." : "Tailor Resume using verified context"}</span>
                                 </button>
                               </div>
                             </div>
