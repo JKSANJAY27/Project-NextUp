@@ -1719,15 +1719,453 @@ function questionUtility(gap: EvidenceGap, alignment: AlignmentResult, isAnswere
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
-function getOverfittingProofQuestion(gapName: string): string {
-  const nameLower = gapName.toLowerCase();
-  if (nameLower.includes("air purification") || nameLower.includes("indoor air quality") || nameLower.includes("iaq") || nameLower.includes("hvac") || nameLower.includes("aerosol")) {
-    return "This role involves Air Purification and Indoor Air Quality. Since your background is in a different domain, can you describe your process for researching unfamiliar fields, setting up experiment designs, or constructing prototype systems?";
+interface JDUnderstanding {
+  requiredSkills: string[];
+  preferredSkills: string[];
+  responsibilities: string[];
+  hiddenExpectations: {
+    scaling: string;
+    deployment: string;
+    experimentation: string;
+    researchDepth: string;
+  };
+}
+
+function validateAndCleanJDUnderstanding(parsed: any): JDUnderstanding {
+  const defaultObj: JDUnderstanding = {
+    requiredSkills: [],
+    preferredSkills: [],
+    responsibilities: [],
+    hiddenExpectations: {
+      scaling: "",
+      deployment: "",
+      experimentation: "",
+      researchDepth: ""
+    }
+  };
+
+  if (!parsed || typeof parsed !== "object") return defaultObj;
+
+  const getArray = (val: any): string[] => {
+    if (Array.isArray(val)) return val.map(v => String(v).trim()).filter(Boolean);
+    if (typeof val === "string") return val.split(",").map(v => v.trim()).filter(Boolean);
+    return [];
+  };
+
+  const getStr = (val: any): string => {
+    return val ? String(val).trim() : "";
+  };
+
+  const hidden = parsed.hiddenExpectations || {};
+
+  return {
+    requiredSkills: getArray(parsed.requiredSkills || parsed.required_skills),
+    preferredSkills: getArray(parsed.preferredSkills || parsed.preferred_skills),
+    responsibilities: getArray(parsed.responsibilities || parsed.responsibility),
+    hiddenExpectations: {
+      scaling: getStr(hidden.scaling || parsed.scaling),
+      deployment: getStr(hidden.deployment || parsed.deployment),
+      experimentation: getStr(hidden.experimentation || parsed.experimentation),
+      researchDepth: getStr(hidden.researchDepth || parsed.research_depth || parsed.researchDepth)
+    }
+  };
+}
+
+function validateAndCleanResumeGraph(parsed: any): EvidenceNode[] {
+  if (!Array.isArray(parsed)) return [];
+
+  const capabilities: Capability[] = [
+    "backend_systems", "real_time_systems", "ml_systems", "research_methodology",
+    "data_structures", "networking", "concurrency", "deployment", "observability"
+  ];
+
+  return parsed.map((item: any) => {
+    const rawCaps = Array.isArray(item.inferredCapabilities) ? item.inferredCapabilities : [];
+    const validCaps = rawCaps.filter((c: any) => capabilities.includes(c)) as Capability[];
+    
+    let strength: "strong" | "medium" | "weak" = "medium";
+    if (item.evidenceStrength === "strong" || item.evidenceStrength === "medium" || item.evidenceStrength === "weak") {
+      strength = item.evidenceStrength;
+    }
+
+    return {
+      id: String(item.id || "").trim(),
+      type: (["skill", "project", "experience", "certification"].includes(item.type) ? item.type : "skill") as any,
+      name: String(item.name || "").trim(),
+      confidence: typeof item.confidence === "number" ? item.confidence : 50,
+      inferredCapabilities: validCaps,
+      evidenceStrength: strength,
+      supportingEvidence: Array.isArray(item.supportingEvidence) ? item.supportingEvidence.map((s: any) => String(s)) : []
+    };
+  }).filter(n => n.id && n.name);
+}
+
+function validateAndCleanGaps(parsed: any): EvidenceGap[] {
+  if (!Array.isArray(parsed)) return [];
+
+  return parsed.map((item: any) => {
+    let cat: "GENERAL" | "JOB_SPECIFIC" = "JOB_SPECIFIC";
+    if (item.category === "GENERAL" || item.category === "JOB_SPECIFIC") {
+      cat = item.category;
+    }
+
+    let gType: any = "missing_skill";
+    const allowedTypes = ["missing_skill", "weak_skill", "project_depth", "missing_metric", "missing_infrastructure", "enrichment_opportunity"];
+    if (allowedTypes.includes(item.gapType)) {
+      gType = item.gapType;
+    }
+
+    return {
+      stableKey: normalizeStableKey(String(item.stableKey || "")),
+      category: cat,
+      gapType: gType,
+      skillOrProjectName: String(item.skillOrProjectName || "").trim(),
+      reason: String(item.reason || "").trim(),
+      evidenceMissing: String(item.evidenceMissing || "").trim(),
+      importance: typeof item.importance === "number" ? item.importance : 50,
+      confidence: typeof item.confidence === "number" ? item.confidence : 0,
+      resumeImpactScore: typeof item.resumeImpactScore === "number" ? item.resumeImpactScore : 50
+    };
+  }).filter(g => g.stableKey && g.skillOrProjectName);
+}
+
+function buildFallbackJDUnderstanding(jdText: string, companyName: string): JDUnderstanding {
+  const jdConcepts = classifyJDConcepts(Array.from(extractKeywords(jdText)), companyName);
+  const requiredSkills = jdConcepts.filter(c => c.type === "Required Skill").map(c => c.name);
+  const preferredSkills = jdConcepts.filter(c => c.type === "Preferred Skill").map(c => c.name);
+  const responsibilities = jdConcepts.filter(c => c.type === "Responsibility").map(c => c.name);
+
+  return {
+    requiredSkills,
+    preferredSkills,
+    responsibilities,
+    hiddenExpectations: {
+      scaling: jdText.toLowerCase().includes("scaling") || jdText.toLowerCase().includes("scale") ? "Expected to design systems for high traffic/concurrency" : "No explicit scaling expectations.",
+      deployment: jdText.toLowerCase().includes("deploy") || jdText.toLowerCase().includes("cloud") || jdText.toLowerCase().includes("docker") ? "Requires familiarity with cloud deployment or container hosting" : "No explicit deployment expectations.",
+      experimentation: jdText.toLowerCase().includes("prototype") || jdText.toLowerCase().includes("experiment") ? "Requires fast prototyping or experimentation" : "No explicit experimentation expectations.",
+      researchDepth: jdText.toLowerCase().includes("research") || jdText.toLowerCase().includes("patent") || jdText.toLowerCase().includes("literature") ? "Requires deep literature reviews or research methodology" : "No explicit research expectations."
+    }
+  };
+}
+
+// --- 3-TIER VALIDATORS ---
+function validateJDUnderstanding3Tier(parsed: any, jdText: string): boolean {
+  if (!parsed || typeof parsed !== "object") return false;
+  const req = parsed.requiredSkills || parsed.required_skills;
+  const pref = parsed.preferredSkills || parsed.preferred_skills;
+  const resp = parsed.responsibilities || parsed.responsibility;
+  if (!Array.isArray(req) && typeof req !== "string") return false;
+
+  // Semantic: at least 1 concept
+  const reqArr = Array.isArray(req) ? req : String(req || "").split(",");
+  const prefArr = Array.isArray(pref) ? pref : String(pref || "").split(",");
+  const respArr = Array.isArray(resp) ? resp : String(resp || "").split(",");
+  if (reqArr.length === 0 && prefArr.length === 0 && respArr.length === 0) return false;
+
+  // Grounding: check concept exists in raw JD text or matches basic requirements
+  const jdLower = jdText.toLowerCase();
+  const allC = [...reqArr, ...prefArr, ...respArr].map(c => String(c).trim().toLowerCase()).filter(Boolean);
+  if (allC.length > 0) {
+    const hasMatch = allC.some(c => jdLower.includes(c) || c.includes("prototype") || c.includes("patent") || c.includes("research") || c.includes("develop"));
+    if (!hasMatch) return false;
   }
-  if (nameLower.includes("biotechnology") || nameLower.includes("life sciences") || nameLower.includes("chemistry") || nameLower.includes("nanotechnology")) {
-    return "This role involves Life Sciences and Biotech. Can you describe your process for conducting academic research, reviewing scientific publications, or doing data analysis on scientific experimental results?";
+  return true;
+}
+
+function validateResumeGraph3Tier(parsed: any, resumeData: any): boolean {
+  if (!Array.isArray(parsed) || parsed.length === 0) return false;
+  
+  const allowedCapabilities = [
+    "backend_systems", "real_time_systems", "ml_systems", "research_methodology",
+    "data_structures", "networking", "concurrency", "deployment", "observability"
+  ];
+
+  for (const node of parsed.slice(0, 10)) {
+    if (!node || typeof node !== "object") return false;
+    if (!node.id || !node.name || !node.type) return false;
+    if (!["skill", "project", "experience", "certification"].includes(node.type)) return false;
+    if (node.confidence !== undefined && (typeof node.confidence !== "number" || node.confidence < 0 || node.confidence > 100)) return false;
+    
+    if (Array.isArray(node.inferredCapabilities)) {
+      const invalid = node.inferredCapabilities.some((c: any) => !allowedCapabilities.includes(c));
+      if (invalid) return false;
+    }
   }
-  return `This role requires ${gapName}. Can you describe a time you had to quickly learn a new technology or domain, evaluate its feasibility, and build a prototype or proof-of-concept?`;
+
+  // Grounding check
+  const resumeText = JSON.stringify(resumeData).toLowerCase();
+  const isGrounded = parsed.slice(0, 5).some(node => {
+    const name = String(node.name || "").toLowerCase().trim();
+    return name && resumeText.includes(name);
+  });
+  return isGrounded;
+}
+
+function validateGaps3Tier(parsed: any, jdUnder: JDUnderstanding, resumeGraph: EvidenceNode[]): boolean {
+  if (!Array.isArray(parsed)) return false;
+
+  const allowedGapTypes = [
+    "missing_skill", "weak_skill", "project_depth", "missing_metric", "missing_infrastructure", "enrichment_opportunity"
+  ];
+
+  const jdSkills = new Set([
+    ...(jdUnder.requiredSkills || []),
+    ...(jdUnder.preferredSkills || []),
+    ...(jdUnder.responsibilities || [])
+  ].map(s => s.toLowerCase().trim()));
+
+  const resumeNodes = new Set(resumeGraph.map(n => n.name.toLowerCase().trim()));
+
+  for (const gap of parsed.slice(0, 10)) {
+    if (!gap || typeof gap !== "object") return false;
+    if (!gap.stableKey || !gap.gapType || !gap.skillOrProjectName) return false;
+    if (!allowedGapTypes.includes(gap.gapType)) return false;
+
+    // Grounding check
+    const gapNameLower = String(gap.skillOrProjectName).toLowerCase().trim();
+    const normKey = normalizeStableKey(gap.stableKey);
+    const inJD = jdSkills.has(gapNameLower) || Array.from(jdSkills).some(s => gapNameLower.includes(s) || s.includes(gapNameLower));
+    const inResume = resumeNodes.has(gapNameLower) || Array.from(resumeNodes).some(n => gapNameLower.includes(n) || n.includes(gapNameLower)) || normKey.startsWith("project:");
+
+    if (!inJD && !inResume) return false;
+  }
+
+  return true;
+}
+
+// --- VALIDATION AND FALLBACK EXECUTION ENGINE ---
+function validateOrRepairJSON<T>(
+  rawOutput: string,
+  validateFn: (parsed: any) => boolean,
+  cleanFn: (parsed: any) => T,
+  fallbackFn: () => T
+): T {
+  try {
+    const cleanedText = normalizeLLMResponseText(rawOutput);
+    const repairedText = repairJSONString(cleanedText);
+    const parsed = JSON.parse(repairedText);
+    if (validateFn(parsed)) {
+      return cleanFn(parsed);
+    } else {
+      console.warn("3-tier validation failed on parsed output.");
+    }
+  } catch (e) {
+    console.warn("JSON parsing failed on raw output:", e);
+  }
+  return fallbackFn();
+}
+
+// --- ACTIONABLE GAP FILTER ---
+function isGapActionable(gap: EvidenceGap): boolean {
+  const nameLower = gap.skillOrProjectName.toLowerCase().trim();
+  const ignoredConcepts = new Set([
+    "blue star limited", "blue star", "indoor air quality", "air purification", "iaq", "hvac", "aerosol",
+    "biotechnology", "life sciences", "materials science", "chemistry", "nanotechnology",
+    "strong", "active", "excellent", "global", "basic", "solutions", "environment", 
+    "team", "growth", "skills", "details", "attention", "communication", "collaborative",
+    "technologies", "opportunity", "department", "limited", "company", "role", "work",
+    "experience", "interest", "learning", "growth", "development", "product", "lines",
+    "support", "explore", "internal", "external", "business", "units", "activities",
+    "efforts", "methods", "materials", "systems", "processes"
+  ]);
+  if (ignoredConcepts.has(nameLower)) return false;
+
+  if (/communication|leadership|problem-solving|attention to detail|cgpa|degree|btech|mtech|bachelor|master/i.test(nameLower)) {
+    return false;
+  }
+
+  const allowedTypes = ["missing_skill", "weak_skill", "project_depth", "missing_metric", "missing_infrastructure", "enrichment_opportunity"];
+  return allowedTypes.includes(gap.gapType);
+}
+
+// --- GAP FALLBACK HIERARCHY ---
+function ensureMinimumActionableGaps(
+  gaps: EvidenceGap[],
+  resumeData: any,
+  activeCompany: Company
+): EvidenceGap[] {
+  let actionable = gaps.filter(isGapActionable);
+
+  if (actionable.length >= 2) {
+    return gaps;
+  }
+
+  console.warn(`Only found ${actionable.length} actionable gaps. Triggering Gap Fallback Hierarchy...`);
+
+  // Secondary: Deterministic project scan gaps
+  const projectGaps: EvidenceGap[] = [];
+  (resumeData.projects || []).forEach((p: any) => {
+    const descLower = (p.description || "").toLowerCase();
+    const hasMetrics = /[0-9]+%?/.test(descLower) || descLower.includes("percent") || descLower.includes("latency") || descLower.includes("scale") || descLower.includes("throughput") || descLower.includes("users");
+    const hasInfra = /aws|gcp|azure|docker|kubernetes|linux|nginx|redis|deploy|cloud/.test(descLower) || (p.tech && /aws|gcp|azure|docker|kubernetes|linux|nginx|redis/.test(p.tech.toLowerCase()));
+
+    const titleLower = p.title.trim().toLowerCase();
+
+    if (!hasMetrics) {
+      projectGaps.push({
+        stableKey: normalizeStableKey(`project:${titleLower}:metrics`),
+        category: "GENERAL",
+        gapType: "missing_metric",
+        skillOrProjectName: p.title,
+        reason: `The project '${p.title}' lacks quantitative metrics or performance gains.`,
+        evidenceMissing: "Scalability stats, latency reductions, requests/sec, or efficiency metrics.",
+        importance: 70,
+        confidence: 20,
+        resumeImpactScore: 90
+      });
+    }
+
+    if (!hasInfra) {
+      projectGaps.push({
+        stableKey: normalizeStableKey(`project:${titleLower}:deployment`),
+        category: "GENERAL",
+        gapType: "missing_infrastructure",
+        skillOrProjectName: p.title,
+        reason: `The project '${p.title}' lacks cloud deployment or container hosting context.`,
+        evidenceMissing: "Cloud providers (e.g. AWS, GCP), containers (Docker), Nginx, or Linux details.",
+        importance: 80,
+        confidence: 10,
+        resumeImpactScore: 85
+      });
+    }
+
+    projectGaps.push({
+      stableKey: normalizeStableKey(`project:${titleLower}:challenge`),
+      category: "GENERAL",
+      gapType: "enrichment_opportunity",
+      skillOrProjectName: p.title,
+      reason: `Verifying complex technical challenges solved in '${p.title}' can enrich your resume.`,
+      evidenceMissing: "System design tradeoffs, concurrency, data streaming, or concurrency solutions.",
+      importance: 70,
+      confidence: 30,
+      resumeImpactScore: 80
+    });
+  });
+
+  projectGaps.forEach(pg => {
+    if (isGapActionable(pg) && !actionable.some(g => normalizeStableKey(g.stableKey) === normalizeStableKey(pg.stableKey))) {
+      gaps.push(pg);
+      actionable.push(pg);
+    }
+  });
+
+  if (actionable.length >= 2) {
+    return gaps;
+  }
+
+  // Tertiary: Minimal structural gaps
+  const requiredSkills = activeCompany.jd_required_skills || [];
+  const provenSkills = new Set((resumeData.skills || []).map((s: string) => s.toLowerCase().trim()));
+
+  requiredSkills.forEach(skill => {
+    const sLower = skill.toLowerCase().trim();
+    if (sLower.length <= 2 || provenSkills.has(sLower)) return;
+
+    const skillGap: EvidenceGap = {
+      stableKey: normalizeStableKey(`skill:${sLower}`),
+      category: "JOB_SPECIFIC",
+      gapType: "missing_skill",
+      skillOrProjectName: skill,
+      reason: `The job description requires '${skill}', which is missing from your master resume.`,
+      evidenceMissing: "Proof of training, coursework, or practical project work.",
+      importance: 90,
+      confidence: 0,
+      resumeImpactScore: 85
+    };
+
+    if (isGapActionable(skillGap) && !actionable.some(g => normalizeStableKey(g.stableKey) === normalizeStableKey(skillGap.stableKey))) {
+      gaps.push(skillGap);
+      actionable.push(skillGap);
+    }
+  });
+
+  return gaps;
+}
+
+// --- ALIGNMENT-CONTROLLED QUESTION COMPILER ---
+function compileQuestionForGap(gap: EvidenceGap, alignment: AlignmentResult): CopilotQuestion {
+  const normKey = normalizeStableKey(gap.stableKey);
+  const name = gap.skillOrProjectName;
+  const missing = gap.evidenceMissing;
+  const reason = gap.reason;
+  
+  let text = "";
+
+  // The semantics are determined by the gap type. Alignment modifies only tone/depth.
+  if (gap.gapType === "missing_metric") {
+    if (alignment.level === "High") {
+      text = `For your project '${name}', what specific quantitative metrics, latency reductions, or scale indicators can we add to demonstrate impact?`;
+    } else if (alignment.level === "Medium") {
+      text = `In '${name}', how did you measure success or evaluate performance? If direct user metrics are unavailable, what system-level benchmarking did you observe?`;
+    } else {
+      text = `For your project '${name}', what was your process for verifying that the code meets technical specs and runs efficiently?`;
+    }
+  } else if (gap.gapType === "missing_infrastructure") {
+    if (alignment.level === "High") {
+      text = `For the project '${name}', what specific cloud services (AWS/GCP), container configurations (Docker), or deployment setups did you design?`;
+    } else if (alignment.level === "Medium") {
+      text = `How was '${name}' deployed or hosted? Can you describe any experience you have with dockerized environments or server setups?`;
+    } else {
+      text = `Can you describe your experience setting up local development environments, scripting, or compiling and running '${name}'?`;
+    }
+  } else if (gap.gapType === "project_depth" || gap.gapType === "enrichment_opportunity") {
+    if (alignment.level === "High") {
+      text = `In your project '${name}', what was the most complex technical challenge or system tradeoff you resolved (e.g., concurrency, streaming), and how did you implement it?`;
+    } else if (alignment.level === "Medium") {
+      text = `For '${name}', can you explain the architectural design, data flow, and how you ensured system robustness or solved bottlenecks?`;
+    } else {
+      text = `What transferable system design lessons did you learn from '${name}' that would help you adapt to building systems for this role?`;
+    }
+  } else if (gap.gapType === "missing_skill") {
+    if (alignment.level === "High") {
+      text = `The role requires expertise in ${name}. Since this is not listed in your core skills, can you confirm your experience level, libraries/frameworks used, and projects where you applied it?`;
+    } else if (alignment.level === "Medium") {
+      text = `While your background is adjacent, this role requires ${name}. How have you approached similar systems or languages, and what is your plan to rapidly bridge this gap?`;
+    } else {
+      text = `As this role focuses on ${name} (outside your main domain), can you share how you've researched unfamiliar tech stacks, built prototypes, or learned new technologies rapidly?`;
+    }
+  } else if (gap.gapType === "weak_skill") {
+    if (alignment.level === "High") {
+      text = `Your resume mentions ${name}, but lacks detail. Can you describe your hands-on experience with ${name}, including specific libraries, performance tuning, or scale you handled?`;
+    } else if (alignment.level === "Medium") {
+      text = `You have exposure to ${name}. How does it integrate with the rest of your system architecture, and what best practices do you follow when building with it?`;
+    } else {
+      text = `You have minor exposure to ${name}. Can you describe a small prototype, course lab, or simple tool you built, and how you evaluated its technical feasibility?`;
+    }
+  }
+
+  if (!text) {
+    text = `Regarding '${name}': ${reason} Specifically, ${missing} Can you provide details to help us represent this on your resume?`;
+  }
+
+  return {
+    id: `comp_${normKey}`,
+    type: gap.category === "GENERAL" ? "general" : "job_specific",
+    stableKey: normKey,
+    sourceGapKey: normKey,
+    text,
+    answer: ""
+  };
+}
+
+// --- GROUNDING CHECK ---
+function isGrounded(question: CopilotQuestion, gap: EvidenceGap): boolean {
+  const textLower = question.text.toLowerCase();
+  const nameLower = gap.skillOrProjectName.toLowerCase();
+  const reasonLower = gap.reason.toLowerCase();
+  const missingLower = gap.evidenceMissing.toLowerCase();
+
+  const hasName = textLower.includes(nameLower) || nameLower.includes(textLower);
+  
+  const reasonWords = reasonLower.split(/[\s,.'";:()\-?!]+/).filter(w => w.length > 4);
+  const hasReasonOverlap = reasonWords.some(w => textLower.includes(w));
+
+  const missingWords = missingLower.split(/[\s,.'";:()\-?!]+/).filter(w => w.length > 4);
+  const hasMissingOverlap = missingWords.some(w => textLower.includes(w));
+
+  const hasSignals = /scale|metric|latency|throughput|deployment|aws|gcp|azure|docker|kubernetes|linux|nginx|redis|db|database|concurrency|benchmark|experiment/i.test(textLower);
+
+  return hasName || hasReasonOverlap || hasMissingOverlap || hasSignals;
 }
 
 async function getDeterministicSalt(email: string): Promise<string> {
@@ -1807,6 +2245,7 @@ function AIToolkitContent() {
   
   // Resume Q&A Copilot States
   const [copilotQuestions, setCopilotQuestions] = useState<CopilotQuestion[]>([]);
+  const [evidenceGaps, setEvidenceGaps] = useState<EvidenceGap[]>([]);
   const [generatingQuestions, setGeneratingQuestions] = useState(false);
   const [savingVault, setSavingVault] = useState(false);
   
@@ -2228,6 +2667,8 @@ Optimize the original resume now and return ONLY the JSON object:`;
     setErrorMsg("");
     setSuccessMsg("");
     setLocalStatusMessage("");
+    setEvidenceGaps([]);
+    setCopilotQuestions([]);
 
     try {
       const resMe = await api.get("/resumes/me");
@@ -2236,110 +2677,136 @@ Optimize the original resume now and return ONLY the JSON object:`;
         throw new Error("No master resume found. Please ensure you have parsed your master resume first.");
       }
 
-      // 1. Build Evidence Graph
-      const evidenceGraph = buildEvidenceGraph(resumeData);
-
-      // 2. Discover Gaps (Fallback + LLM if available)
-      let discoveredGaps = buildFallbackGaps(resumeData, company, evidenceGraph);
-
-      const gapDiscoveryPrompt = `You are an AI Resume Evidence Discovery Agent.
-Analyze the Master Resume and the target Job Description to identify technical gaps.
-Output ONLY a JSON array of EvidenceGap objects matching this schema:
-interface EvidenceGap {
-  stableKey: string;
-  category: "GENERAL" | "JOB_SPECIFIC";
-  gapType: "missing_skill" | "weak_skill" | "project_depth" | "missing_metric" | "missing_infrastructure" | "enrichment_opportunity";
-  skillOrProjectName: string;
-  reason: string;
-  evidenceMissing: string;
-  importance: number; // 1 to 100
-  confidence: number; // 0 to 100
-  resumeImpactScore: number; // 1 to 100
-}
-
-Target Job Role: ${company.role}
-Job Description: ${(company.jd_text || "").substring(0, 500)}
-
-Resume Summary: ${resumeData.summary || ""}
-Resume Skills: ${(resumeData.skills || []).join(", ")}
-Resume Projects:
-${(resumeData.projects || []).map((p: any) => `- ${p.title}: ${p.description}`).join("\n")}
-
-Rules:
-- For missing skills from the JD: category "JOB_SPECIFIC", gapType "missing_skill", stableKey "skill:<normalized_skill_name>".
-- For weak skills mentioned but not core: category "JOB_SPECIFIC", gapType "weak_skill", stableKey "skill:<normalized_skill_name>".
-- For missing metrics in projects: category "GENERAL", gapType "missing_metric", stableKey "project:<project_name>:metrics".
-- For missing deployment/infra in projects: category "GENERAL", gapType "missing_infrastructure", stableKey "project:<project_name>:deployment".
-
-Return ONLY the JSON array starting with [ and ending with ]:`;
-
+      // Check model availability
       const isDownloaded = typeof window !== "undefined" && (
         localStorage.getItem(`model_downloaded_${atsModel}`) === "true" ||
         localStorage.getItem(`model_downloaded_onnx-community/Llama-3.2-1B-Instruct-ONNX`) === "true"
       );
+      const isModelAvailable = geminiAvailable || atsModel !== "qwen-0.5b" || isDownloaded;
 
-      if (geminiAvailable || atsModel !== "qwen-0.5b" || isDownloaded) {
-        try {
-          setLocalStatusMessage("Running Local AI Gap Discovery...");
-          const llmGapsText = await generateInBrowser({
-            modelType: atsModel,
-            prompt: gapDiscoveryPrompt,
-            maxTokens: 1024,
-            onProgress: (p) => {
-              setLocalStatusMessage(`AI analyzing resume gaps: ${Math.round(p * 100)}%`);
-            }
-          });
-          const llmGaps = parseRobustGapsJSON(llmGapsText);
-          if (llmGaps && llmGaps.length > 0) {
-            llmGaps.forEach(g => {
-              g.stableKey = normalizeStableKey(g.stableKey);
-            });
-            const mergedMap = new Map<string, EvidenceGap>();
-            discoveredGaps.forEach(g => mergedMap.set(g.stableKey, g));
-            llmGaps.forEach(g => mergedMap.set(g.stableKey, g));
-            discoveredGaps = Array.from(mergedMap.values());
+      let jdUnder: JDUnderstanding;
+      let resumeGraph: EvidenceNode[];
+      let discoveredGaps: EvidenceGap[];
+
+      if (isModelAvailable) {
+        setLocalStatusMessage("Stages 1 & 2/4: Analyzing JD and Resume in parallel...");
+
+        // Run Stage 1 and Stage 2 in parallel
+        const pJd = (async () => {
+          try {
+            const jdPrompt = `Analyze the target Job Description. Output ONLY a valid JSON object matching this schema:
+{
+  "requiredSkills": ["string"],
+  "preferredSkills": ["string"],
+  "responsibilities": ["string"],
+  "hiddenExpectations": {
+    "scaling": "string description",
+    "deployment": "string description",
+    "experimentation": "string description",
+    "researchDepth": "string description"
+  }
+}
+Target Job Description: ${(company.jd_text || "").substring(0, 800)}
+Return ONLY the JSON object starting with { and ending with }:`;
+
+            const jdResult = await generateInBrowser({ modelType: atsModel, prompt: jdPrompt, maxTokens: 512 });
+            return validateOrRepairJSON<JDUnderstanding>(
+              jdResult,
+              (parsed) => validateJDUnderstanding3Tier(parsed, company.jd_text || ""),
+              (parsed) => validateAndCleanJDUnderstanding(parsed),
+              () => buildFallbackJDUnderstanding(company.jd_text || "", company.name)
+            );
+          } catch (e) {
+            console.warn("Stage 1 LLM failed, using local fallback:", e);
+            return buildFallbackJDUnderstanding(company.jd_text || "", company.name);
           }
-        } catch (llmErr) {
-          console.warn("Local AI Gap Discovery failed, using deterministic fallback:", llmErr);
+        })();
+
+        const pResume = (async () => {
+          try {
+            const resumePrompt = `Analyze the resume JSON. Extract skills, projects, experience, and infer capabilities.
+Strictly infer capabilities only from this list: ["backend_systems", "real_time_systems", "ml_systems", "research_methodology", "data_structures", "networking", "concurrency", "deployment", "observability"].
+Output ONLY a valid JSON array of EvidenceNode objects:
+interface EvidenceNode {
+  id: string; // skill:<name> or project:<name> or experience:<company>:<role>
+  type: "skill" | "project" | "experience" | "certification";
+  name: string;
+  confidence: number; // 0-100
+  inferredCapabilities: string[]; // subset of capability list
+  evidenceStrength: "strong" | "medium" | "weak";
+  supportingEvidence: string[]; // reasons/metrics
+}
+Resume JSON: ${JSON.stringify(resumeData).substring(0, 1000)}
+Return ONLY the JSON array starting with [ and ending with ]:`;
+
+            const resResult = await generateInBrowser({ modelType: atsModel, prompt: resumePrompt, maxTokens: 1024 });
+            return validateOrRepairJSON<EvidenceNode[]>(
+              resResult,
+              (parsed) => validateResumeGraph3Tier(parsed, resumeData),
+              (parsed) => validateAndCleanResumeGraph(parsed),
+              () => buildEvidenceGraph(resumeData)
+            );
+          } catch (e) {
+            console.warn("Stage 2 LLM failed, using local fallback:", e);
+            return buildEvidenceGraph(resumeData);
+          }
+        })();
+
+        [jdUnder, resumeGraph] = await Promise.all([pJd, pResume]);
+
+        // --- STAGE 3: EVIDENCE GAP DETECTION (LLM ONLY) ---
+        try {
+          setLocalStatusMessage("Stage 3/4: Assessing evidence gaps...");
+          const gapPrompt = `Compare the Job Description requirements with the candidate's Resume graph.
+Identify missing or weak evidence gaps. Output ONLY a valid JSON array of EvidenceGap objects matching this schema:
+interface EvidenceGap {
+  stableKey: string; // e.g. skill:fastapi or project:interviewai:metrics
+  category: "GENERAL" | "JOB_SPECIFIC";
+  gapType: "missing_skill" | "weak_skill" | "project_depth" | "missing_metric" | "missing_infrastructure" | "enrichment_opportunity";
+  skillOrProjectName: string;
+  reason: string; // grounded in both JD requirements and resume evidence
+  evidenceMissing: string;
+  importance: number; // 0-100
+  confidence: number; // 0-100
+  resumeImpactScore: number; // 0-100
+}
+JD Understood: ${JSON.stringify(jdUnder)}
+Resume Graph: ${JSON.stringify(resumeGraph)}
+Return ONLY the JSON array starting with [ and ending with ]:`;
+
+          const gapResult = await generateInBrowser({ modelType: atsModel, prompt: gapPrompt, maxTokens: 1024 });
+          discoveredGaps = validateOrRepairJSON<EvidenceGap[]>(
+            gapResult,
+            (parsed) => validateGaps3Tier(parsed, jdUnder, resumeGraph),
+            (parsed) => validateAndCleanGaps(parsed),
+            () => buildFallbackGaps(resumeData, company, resumeGraph)
+          );
+        } catch (e) {
+          console.warn("Stage 3 LLM failed, using local fallback:", e);
+          discoveredGaps = buildFallbackGaps(resumeData, company, resumeGraph);
         }
+      } else {
+        // Local model is offline/unavailable -> Gaps ONLY mode
+        setLocalStatusMessage("Local AI Offline. Calculating gaps deterministically...");
+        const fallbackGraph = buildEvidenceGraph(resumeData);
+        discoveredGaps = buildFallbackGaps(resumeData, company, fallbackGraph);
+        resumeGraph = fallbackGraph;
       }
 
-      // 3. Vault Coverage Check
-      const existingVault: VaultQA[] = resumeData.context_vault || [];
-      discoveredGaps.forEach(gap => {
-        const normKey = normalizeStableKey(gap.stableKey);
-        const match = existingVault.find(v => {
-          if (v.stableKey) {
-            return normalizeStableKey(v.stableKey) === normKey;
-          }
-          return false;
-        });
-
-        if (match) {
-          const usability = calculateAnswerUsability(match.answer);
-          if (usability >= 40) {
-            gap.priority = 0;
-            gap.confidence = 100;
-          } else {
-            gap.confidence = Math.max(gap.confidence || 0, 40);
-          }
-        }
-      });
-
-      // 4. Score & Rank Gaps
+      // Pre-calculate priorities for gaps
       discoveredGaps.forEach(gap => {
         if (gap.priority === undefined || gap.priority > 0) {
           gap.priority = gap.importance * 0.45 + (100 - gap.confidence) * 0.25 + gap.resumeImpactScore * 0.30;
         }
       });
 
-      const activeGaps = discoveredGaps.filter(g => g.priority !== undefined && g.priority > 0);
+      const activeGapsList = discoveredGaps.filter(g => g.priority !== undefined && g.priority > 0);
 
-      // 5. Merge & Deduplicate redundant project details
+      // Merge & Deduplicate redundant project details
       const finalGaps: EvidenceGap[] = [];
       const projectGapsMap = new Map<string, EvidenceGap[]>();
 
-      activeGaps.forEach(gap => {
+      activeGapsList.forEach(gap => {
         const normKey = normalizeStableKey(gap.stableKey);
         if (normKey.startsWith("project:")) {
           const parts = normKey.split(":");
@@ -2375,279 +2842,61 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
         }
       });
 
-      finalGaps.sort((a, b) => (b.priority || 0) - (a.priority || 0));
-
-      // 6. Calculate Alignment & Strategy
-      const jdConcepts = classifyJDConcepts(Array.from(jdKeywords), company.name);
-      const alignment = calculateAlignmentResult(evidenceGraph, jdConcepts);
-
-      // Anti-overfitting check: If transferable overlap > direct overlap,
-      // pivot all job-specific skill-gaps to process/experimentation questions
-      const useAntiOverfitting = alignment.transferableOverlapCount > alignment.directOverlapCount;
-
-      // 7. Question Generation Layer
-      const skillQuestionTemplates: Record<string, string> = {
-        "air purification": "Have you worked with air purification systems, filtration technologies (e.g. HEPA, activated carbon), or aerosol science? Describe your exposure or prototype projects.",
-        "indoor air quality": "Have you measured, analyzed, or optimized indoor air quality (IAQ) parameters like CO2, PM2.5, VOCs, temperature, or relative humidity?",
-        "iaq": "Have you measured, analyzed, or optimized indoor air quality (IAQ) parameters like CO2, PM2.5, VOCs, temperature, or relative humidity?",
-        "hvac": "Have you worked with Heating, Ventilation, and Air Conditioning (HVAC) systems, ventilation design, or airflow modeling?",
-        "biotechnology": "Have you worked in biotechnology labs, molecular biology, bioprocessing, or related assay methods? Describe your coursework or lab projects.",
-        "materials science": "Have you studied or worked with synthesis, characterization, or application of materials (e.g. polymers, nanomaterials, metals)? Describe your lab experience.",
-        "nanotechnology": "Have you worked with nanomaterials, nanoparticles, or nanotech-based filtration/adsorption systems?",
-        "life sciences": "Have you participated in life sciences research, biological assays, or biochemistry lab work?",
-        "polymer technology": "Have you worked with polymer synthesis, polymer characterization (e.g. DSC, TGA), or plastics engineering?",
-        "chemical engineering": "Have you performed chemical process modeling, chemical reactor design, mass transfer, or fluid mechanics calculations?",
-        "prototype development": "Have you designed, built, and tested lab-scale or functional prototypes? Describe the tools (CAD, 3D printing), components, and testing results.",
-        "invention disclosures": "Have you contributed to invention disclosures, patent searches, or drafting patent applications? Describe your exposure.",
-        "patent-related activities": "Have you contributed to invention disclosures, patent searches, or drafting patent applications? Describe your exposure.",
-        "technology transfer": "Have you been involved in technology transfer, scaling up lab processes, or commercializing research concepts?",
-        "feasibility assessments": "Have you conducted preliminary technical calculations, cost-benefit analyses, or technical feasibility studies for a product?",
-        "benchmarking": "Have you conducted benchmarking studies to compare product specifications, performance metrics, or technologies against global competitors?",
-
-        "penetration testing": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
-        "pentesting": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
-        "adversarial simulation": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
-        "ethical hacking": "Have you completed coursework, labs, or certifications related to ethical hacking, secure coding, or network security?",
-        "threat modeling": "Have you performed threat modeling (e.g. STRIDE) to identify attack paths, trust boundaries, or security risks in systems?",
-        "vulnerability assessment": "Have you identified or validated security vulnerabilities (e.g. OWASP Top 10), performed scanning, or written vulnerability reports?",
-        "owasp top 10": "Have you studied or worked with OWASP Top 10 vulnerabilities (e.g. SQL Injection, XSS, CSRF, SSRF, IDOR, or insecure APIs)? Describe your exposure.",
-        "api security": "Your projects expose APIs. Have you implemented authentication, authorization, rate limiting, token validation, or abuse prevention mechanisms?",
-        "llm security": "Have you explored security risks in AI/LLM systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
-        "prompt injection": "Have you explored security risks in AI/LLM systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
-        "jailbreaks": "Have you explored security risks in AI/LLM systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
-        "retrieval poisoning": "Have you explored security risks in AI/LLM systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
-        "cryptography": "Have you worked with cryptographic principles (AES, RSA, hashing, SSL/TLS, signatures) in any project?",
-        "aes": "Have you worked with cryptographic principles (AES, RSA, hashing, SSL/TLS, signatures) in any project?",
-        "rsa": "Have you worked with cryptographic principles (AES, RSA, hashing, SSL/TLS, signatures) in any project?",
-        "ssl/tls": "Have you worked with cryptographic principles (AES, RSA, hashing, SSL/TLS, signatures) in any project?",
-        "burp suite": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how.",
-        "nmap": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how.",
-        "wireshark": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how.",
-        "metasploit": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how.",
-        "owasp zap": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how.",
-        "tryhackme": "Have you participated in CTFs (Capture The Flag), TryHackMe, Hack The Box, or bug bounty programs?",
-        "hack the box": "Have you participated in CTFs (Capture The Flag), TryHackMe, Hack The Box, or bug bounty programs?",
-        "ctf": "Have you participated in CTFs (Capture The Flag), TryHackMe, Hack The Box, or bug bounty programs?",
-        "networking": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
-        "tcp/ip": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
-        "dns": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
-        "http/https": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
-        "cybersecurity": "Have you completed coursework, labs, or certifications related to cybersecurity, network security, or ethical hacking?",
-        "web security": "Have you studied or worked with OWASP Top 10 vulnerabilities (e.g. SQL Injection, XSS, CSRF, SSRF, IDOR, or insecure APIs)? Describe your exposure.",
-
-        "linux": "Have you used Linux extensively for development, server administration, Docker deployments, or shell scripting? Describe your experience.",
-        "docker": "Have you packaged, run, or deployed any of your projects using Docker containers?",
-        "kubernetes": "Have you worked with Kubernetes, container orchestration, or Helm charts for microservices?",
-        "helm charts": "Have you worked with Kubernetes, container orchestration, or Helm charts for microservices?",
-        "aws": "Have you hosted applications or used services on AWS (e.g. EC2, S3, RDS, IAM, Lambda, VPC)?",
-        "amazon web services": "Have you hosted applications or used services on AWS (e.g. EC2, S3, RDS, IAM, Lambda, VPC)?",
-        "gcp": "Have you hosted services or used APIs on Google Cloud Platform (e.g. Compute Engine, Cloud Run, GCS)?",
-        "google cloud": "Have you hosted services or used APIs on Google Cloud Platform (e.g. Compute Engine, Cloud Run, GCS)?",
-        "azure": "Have you deployed applications or managed IAM policies on Microsoft Azure?",
-        "microsoft azure": "Have you deployed applications or managed IAM policies on Microsoft Azure?",
-        "nginx": "Have you used Nginx as a reverse proxy, load balancer, or web server in your deployments?",
-        "redis": "Have you used Redis for caching, session management, or pub/sub messaging in any of your real-time projects?",
-        "terraform": "Have you written Terraform configurations to define and provision cloud infrastructure (IaC)?",
-        "ansible": "Have you used Ansible for configuration management or application deployment?",
-        "jenkins": "Have you set up CI/CD pipelines (e.g. Jenkins, GitHub Actions) for automated testing or deployment?",
-        "ci/cd": "Have you set up CI/CD pipelines (e.g. Jenkins, GitHub Actions) for automated testing or deployment?",
-        "github actions": "Have you set up CI/CD pipelines (e.g. Jenkins, GitHub Actions) for automated testing or deployment?",
-
-        "python": "Have you written Python code for backend APIs, data processing, machine learning, or automation scripting?",
-        "javascript": "Have you built frontend components or backend logic using JavaScript/ES6+?",
-        "typescript": "Have you worked with TypeScript for type-safe application development?",
-        "go": "Have you built concurrent services, microservices, or APIs using Go/Golang?",
-        "golang": "Have you built concurrent services, microservices, or APIs using Go/Golang?",
-        "java": "Have you worked with Java, Spring Boot, or enterprise OOP architectures?",
-        "c++": "Have you written C++ code for system programming, high-performance applications, or algorithms?",
-        "rust": "Have you written Rust code for safe systems programming or web assembly modules?",
-        "node.js": "Have you built backend services, REST APIs, or real-time systems using Node.js?",
-        "react": "Have you built responsive single-page applications using React and its lifecycle hooks?",
-        "next.js": "Have you built server-rendered React applications using Next.js (App Router or Pages Router)?",
-        "fastapi": "Have you built high-performance backend APIs using Python and FastAPI?",
-        "flask": "Have you built web applications or REST APIs using Python and Flask?",
-        "django": "Have you built database-driven web applications using Django and its ORM?",
-        "sql": "Have you written complex SQL queries, designed schemas, or optimized database indexes?",
-        "postgresql": "Have you used PostgreSQL for relational database storage and query optimization?",
-        "mongodb": "Have you designed document schemas or queried MongoDB collections?",
-        "neo4j": "Have you modeled knowledge graphs or written Cypher queries in Neo4j?",
-        "concurrency": "Have you handled multi-threading, concurrency, race conditions, or async execution in any project?",
-        "async streaming": "Have you implemented real-time async streaming (e.g. SSE, WebSockets, gRPC streaming) in any application?",
-        "scaling": "Have you designed systems for high throughput, load balancing, or horizontal scaling?",
-        "latency": "Have you analyzed or optimized system latency, query performance, or response times?",
-        "observability": "Have you integrated logging, tracing, or APM monitoring tools (e.g. Prometheus, Grafana, OpenTelemetry, Langfuse)?",
-        "microservices": "Have you designed or integrated decoupled microservices communicating via REST, gRPC, or message brokers?",
-        "websockets": "Have you used WebSockets or socket.io to enable real-time bidirectional communication?"
-      };
-
-      interface CandidateQuestion {
-        question: CopilotQuestion;
-        utility: number;
-      }
-
-      const candidateQuestions: CandidateQuestion[] = [];
-      const processedKeys = new Set<string>();
-
-      // A. Populate General Project Questions
-      const projectTitles = (resumeData.projects || []).slice(0, 4).map((p: any) => p.title).join(", ");
-      const defaultGeneralQuestions = [
-        {
-          stableKey: "general:projects:infrastructure",
-          text: `Several of your projects involve deployment and real-time systems. Can you describe the infrastructure, cloud services, operating systems, containers, databases, caching systems, or deployment tools (e.g. Linux, Docker, AWS, EC2, Nginx, Redis) used?`,
-          gap: {
-            stableKey: "general:projects:infrastructure",
-            category: "GENERAL" as const,
-            gapType: "missing_infrastructure" as const,
-            skillOrProjectName: "projects",
-            reason: "Verifying infrastructure stack",
-            evidenceMissing: "Cloud/container hosting details",
-            importance: 80,
-            confidence: 10,
-            resumeImpactScore: 85
-          }
-        },
-        {
-          stableKey: "general:projects:challenges",
-          text: `For your major projects (${projectTitles || "projects"}), what were the most technically challenging engineering problems you solved (e.g. concurrency, async streaming, scaling, latency, observability)?`,
-          gap: {
-            stableKey: "general:projects:challenges",
-            category: "GENERAL" as const,
-            gapType: "enrichment_opportunity" as const,
-            skillOrProjectName: "projects",
-            reason: "Verifying engineering challenges",
-            evidenceMissing: "System design/concurrency complexity details",
-            importance: 70,
-            confidence: 30,
-            resumeImpactScore: 80
-          }
-        },
-        {
-          stableKey: "general:projects:metrics",
-          text: `Do you have additional quantitative metrics or performance gains (e.g. user count, requests/day, latency improvements, throughput, evaluation scores, or cost reductions) for your projects or internships?`,
-          gap: {
-            stableKey: "general:projects:metrics",
-            category: "GENERAL" as const,
-            gapType: "missing_metric" as const,
-            skillOrProjectName: "projects",
-            reason: "Verifying metrics",
-            evidenceMissing: "Scalability or efficiency metrics",
-            importance: 70,
-            confidence: 20,
-            resumeImpactScore: 90
-          }
-        },
-        {
-          stableKey: "general:skills:additional",
-          text: `Are there any other programming languages, frameworks, databases, security tools, DevOps tools, or AI frameworks you have used but are not listed on your resume?`,
-          gap: {
-            stableKey: "general:skills:additional",
-            category: "GENERAL" as const,
-            gapType: "missing_skill" as const,
-            skillOrProjectName: "skills",
-            reason: "Verifying any additional tools",
-            evidenceMissing: "Unlisted tech skills",
-            importance: 60,
-            confidence: 40,
-            resumeImpactScore: 70
-          }
-        }
-      ];
-
-      defaultGeneralQuestions.forEach(q => {
-        const normKey = normalizeStableKey(q.stableKey);
-        processedKeys.add(normKey);
-        const match = existingVault.find(v => v.stableKey === normKey || v.question.toLowerCase().trim() === q.text.toLowerCase().trim());
-        const isAnswered = !!(match && match.answer.trim());
-        const utility = questionUtility(q.gap, alignment, isAnswered);
-
-        candidateQuestions.push({
-          question: {
-            id: `gen_${normKey}`,
-            type: "general",
-            stableKey: normKey,
-            text: q.text,
-            answer: match ? match.answer : ""
-          },
-          utility
-        });
-      });
-
-      // B. Populate Job-Specific questions from Discovered Gaps
-      finalGaps.forEach(gap => {
-        const normKey = normalizeStableKey(gap.stableKey);
-        if (processedKeys.has(normKey)) return;
-        processedKeys.add(normKey);
-
-        let qText = "";
-        
-        // Anti-overfitting check: If the rule triggers, pivot all job-specific skill-gaps to transferable process questions
-        if (useAntiOverfitting && gap.category === "JOB_SPECIFIC" && normKey.startsWith("skill:")) {
-          qText = getOverfittingProofQuestion(gap.skillOrProjectName);
-        } else {
-          // Standard question builder
-          if (normKey.startsWith("skill:")) {
-            const skillName = gap.skillOrProjectName;
-            const templateKey = Object.keys(skillQuestionTemplates).find(k => 
-              skillName.toLowerCase() === k || 
-              skillName.toLowerCase().includes(k) || 
-              k.includes(skillName.toLowerCase())
-            );
-            if (templateKey) {
-              qText = skillQuestionTemplates[templateKey];
-            } else {
-              const displaySkill = skillName.split(" ").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-              qText = `The job description requires experience with '${displaySkill}'. Have you worked with this tool, framework, or concept in any projects, coursework, or self-learning? Describe your exposure.`;
-            }
-          } else if (normKey.startsWith("project:")) {
-            const projName = gap.skillOrProjectName;
-            if (normKey.endsWith(":details")) {
-              qText = `For your project '${projName}', what was the infrastructure, cloud services, databases, or deployment tools used, and what were the most challenging engineering problems or quantitative metrics/performance gains achieved?`;
-            } else if (normKey.endsWith(":metrics")) {
-              qText = `Do you have additional quantitative metrics or performance gains (e.g. user count, latency improvements, throughput, or cost reductions) for your project '${projName}'?`;
-            } else if (normKey.endsWith(":deployment")) {
-              qText = `Can you describe the infrastructure, cloud services, databases, or deployment tools (e.g. Linux, Docker, AWS, EC2, Nginx, Redis) used in your project '${projName}'?`;
-            } else if (normKey.endsWith(":challenge")) {
-              qText = `For your project '${projName}', what were the most technically challenging engineering problems you solved (e.g. concurrency, async streaming, scaling, latency, observability)?`;
-            } else {
-              qText = `Can you provide more technical details or explain the architecture of your project '${projName}'?`;
-            }
-          }
-        }
-
-        if (qText) {
-          const match = existingVault.find(v => v.stableKey === normKey || v.question.toLowerCase().trim() === qText.toLowerCase().trim());
-          const isAnswered = !!(match && match.answer.trim());
-          const utility = questionUtility(gap, alignment, isAnswered);
-
-          candidateQuestions.push({
-            question: {
-              id: `job_${normKey}`,
-              type: "job_specific",
-              stableKey: normKey,
-              text: qText,
-              answer: match ? match.answer : "",
-              sourceGapKey: normKey
-            },
-            utility
-          });
-        }
-      });
-
-      // Filter questions below utility threshold (40)
-      const highUtilityQuestions = candidateQuestions.filter(cq => cq.utility >= 40);
-
-      // Sort by utility score descending
-      highUtilityQuestions.sort((a, b) => b.utility - a.utility);
-
-      // Question Budgeting: Limit strictly by alignment level
-      const budgetMap = { High: 6, Medium: 5, Low: 3 };
-      const maxAllowed = budgetMap[alignment.level];
-      const budgetedQuestions = highUtilityQuestions.slice(0, maxAllowed).map(cq => cq.question);
-
-      setCopilotQuestions(budgetedQuestions);
+      // --- ENFORCE MINIMUM ACTIONABLE GAPS GUARANTEE ---
+      const guaranteedGaps = ensureMinimumActionableGaps(finalGaps, resumeData, company);
       
-      const debugMsg = `Generated ${budgetedQuestions.length} questions (Budget: ${maxAllowed}, Alignment: ${alignment.level}, Strategy: ${alignment.primaryStrategy}, Score: ${alignment.score}%).`;
-      showSuccess(debugMsg);
+      // Resort guaranteed gaps
+      guaranteedGaps.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+      setEvidenceGaps(guaranteedGaps);
+
+      // --- ALIGNMENT CALCULATION (LOCAL ONLY) ---
+      const jdConceptsList = classifyJDConcepts(Array.from(jdKeywords), company.name);
+      const alignment = calculateAlignmentResult(resumeGraph, jdConceptsList);
+
+      let budgetedQuestions: CopilotQuestion[] = [];
+
+      if (isModelAvailable && guaranteedGaps.length > 0) {
+        // --- STAGE 5: SYSTEM DETERMINISTIC QUESTION COMPILATION (NO LLM CALL) ---
+        setLocalStatusMessage("Stage 4/4: Compiling dynamic questions...");
+        
+        // Filter for actionable gaps
+        const actionableGaps = guaranteedGaps.filter(isGapActionable);
+
+        // Budget questions based on alignment level
+        const budgetMap = { High: 6, Medium: 5, Low: 3 };
+        const maxAllowed = budgetMap[alignment.level];
+
+        // Compile questions from top actionable gaps
+        let compiled = actionableGaps.slice(0, maxAllowed).map(gap => compileQuestionForGap(gap, alignment));
+
+        // Enforce Grounding Check
+        compiled = compiled.filter(q => {
+          const matchingGap = guaranteedGaps.find(g => normalizeStableKey(g.stableKey) === q.stableKey);
+          return matchingGap ? isGrounded(q, matchingGap) : false;
+        });
+
+        // Stage 6: Vault Pre-filling
+        const existingVault: VaultQA[] = resumeData.context_vault || [];
+        budgetedQuestions = compiled.map(cq => {
+          const match = existingVault.find(v => v.stableKey && normalizeStableKey(v.stableKey) === cq.stableKey);
+          return {
+            ...cq,
+            answer: match ? match.answer : ""
+          };
+        });
+
+        setCopilotQuestions(budgetedQuestions);
+        const debugMsg = `Compiled ${budgetedQuestions.length} questions (Budget: ${maxAllowed}, Alignment: ${alignment.level}, Score: ${alignment.score}%).`;
+        showSuccess(debugMsg);
+      } else {
+        // Offline mode or no gaps
+        setCopilotQuestions([]);
+        if (!isModelAvailable) {
+          showSuccess(`Offline mode active. Discovered ${guaranteedGaps.length} evidence gaps (Local AI offline).`);
+        } else {
+          showSuccess("Resume matches perfectly! No evidence gaps detected.");
+        }
+      }
     } catch (err: any) {
       console.error("Failed to generate copilot questions:", err);
       setErrorMsg(err.message || "Failed to generate Copilot questions.");
@@ -3617,6 +3866,73 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
                                   <Sparkles size={13} />
                                   <span>{calculatingATS ? "Tailoring..." : "Tailor Resume using verified context"}</span>
                                 </button>
+                              </div>
+                            </div>
+                          ) : evidenceGaps.length > 0 ? (
+                            <div className="space-y-4">
+                              <div className="border border-amber-500/35 bg-amber-500/5 p-4 rounded-sm flex items-start gap-3">
+                                <AlertCircle className="text-amber-500 shrink-0 mt-0.5" size={16} />
+                                <div className="space-y-1">
+                                  <h4 className="text-xs font-black uppercase tracking-wider text-amber-500">
+                                    Local AI Model Offline / Gaps Only Mode
+                                  </h4>
+                                  <p className="text-[10px] text-muted-foreground uppercase leading-relaxed font-bold">
+                                    The local browser LLM is offline or not installed. We have analyzed your resume against the Job Description deterministically. Review the discovered gaps below and enrich the respective sections in the workspace form to maximize your ATS match.
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {evidenceGaps.map((gap, idx) => {
+                                  let badgeColor = "border-red-500/35 text-red-500 bg-red-500/5";
+                                  let typeDisplay = "Missing Skill";
+                                  if (gap.gapType === "weak_skill") {
+                                    badgeColor = "border-orange-500/35 text-orange-500 bg-orange-500/5";
+                                    typeDisplay = "Weak Evidence";
+                                  } else if (gap.gapType === "project_depth") {
+                                    badgeColor = "border-blue-500/35 text-blue-500 bg-blue-500/5";
+                                    typeDisplay = "Project Depth";
+                                  } else if (gap.gapType === "missing_metric") {
+                                    badgeColor = "border-purple-500/35 text-purple-500 bg-purple-500/5";
+                                    typeDisplay = "Missing Metric";
+                                  } else if (gap.gapType === "missing_infrastructure") {
+                                    badgeColor = "border-cyan-500/35 text-cyan-500 bg-cyan-500/5";
+                                    typeDisplay = "Infrastructure Missing";
+                                  } else if (gap.gapType === "enrichment_opportunity") {
+                                    badgeColor = "border-emerald-500/35 text-emerald-500 bg-emerald-500/5";
+                                    typeDisplay = "Enrichment";
+                                  }
+
+                                  return (
+                                    <div key={idx} className="border border-border bg-background p-4 rounded-sm space-y-3 relative flex flex-col justify-between hover:border-accent/40 transition-colors">
+                                      <div className="space-y-2">
+                                        <div className="flex justify-between items-center">
+                                          <span className={`px-2 py-0.5 text-[8px] font-black border uppercase tracking-wider ${badgeColor}`}>
+                                            {typeDisplay}
+                                          </span>
+                                          {gap.priority !== undefined && (
+                                            <span className="text-[9px] font-mono font-bold text-muted-foreground uppercase">
+                                              Priority: {Math.round(gap.priority)}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <h4 className="text-xs font-black uppercase text-foreground">
+                                          {gap.skillOrProjectName}
+                                        </h4>
+                                        <p className="text-[11px] text-muted-foreground font-medium leading-relaxed text-justify">
+                                          {gap.reason}
+                                        </p>
+                                      </div>
+                                      
+                                      <div className="border-t border-border pt-2 mt-2">
+                                        <div className="text-[8px] font-black uppercase text-zinc-500 tracking-wider">Missing details to add:</div>
+                                        <p className="text-[10px] text-foreground font-mono font-bold leading-normal mt-0.5">
+                                          {gap.evidenceMissing}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </div>
                           ) : (
