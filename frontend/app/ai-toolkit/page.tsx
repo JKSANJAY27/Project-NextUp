@@ -1491,7 +1491,7 @@ function AIToolkitContent() {
   
   // Local AI State
   const [geminiAvailable, setGeminiAvailable] = useState(false);
-  const [localDownloadProgress, _setLocalDownloadProgress] = useState<number | null>(null);
+  const [localDownloadProgress] = useState<number | null>(null);
   const [localStatusMessage, setLocalStatusMessage] = useState("");
 
   const jdKeywords = React.useMemo(() => {
