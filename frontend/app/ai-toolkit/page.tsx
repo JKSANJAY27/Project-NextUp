@@ -71,6 +71,7 @@ interface CopilotQuestion {
   text: string;
   answer: string;
   sourceGapKey?: string;
+  placeholder?: string;
 }
 
 interface VaultQA {
@@ -2084,6 +2085,106 @@ async function getDeterministicSalt(email: string): Promise<string> {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function buildResumeFromAnswers({
+  masterResume,
+  jobDescription,
+  gaps,
+  questions,
+  answers
+}: {
+  masterResume: any;
+  jobDescription: string;
+  gaps: EvidenceGap[];
+  questions: CopilotQuestion[];
+  answers: Record<string, string>;
+}): any {
+  if (!masterResume) return null;
+  const tailored = JSON.parse(JSON.stringify(masterResume));
+
+  if (!tailored.skills) tailored.skills = [];
+  if (!tailored.projects) tailored.projects = [];
+  if (!tailored.experience) tailored.experience = [];
+
+  const addedSkills = new Set(tailored.skills.map((s: string) => s.toLowerCase().trim()));
+
+  Object.entries(answers).forEach(([questionId, answerText]) => {
+    const cleanAnswer = answerText.trim();
+    if (!cleanAnswer) return;
+
+    const q = questions.find(question => question.id === questionId);
+    if (!q) return;
+
+    const key = normalizeStableKey(q.stableKey);
+
+    // 1. Skill Gap
+    if (key.startsWith("skill:")) {
+      const skillName = q.stableKey.split(":")[1]?.trim();
+      if (skillName) {
+        if (!addedSkills.has(skillName.toLowerCase())) {
+          const cleanSkillName = skillName.charAt(0).toUpperCase() + skillName.slice(1);
+          tailored.skills.push(cleanSkillName);
+          addedSkills.add(skillName.toLowerCase());
+        }
+        
+        let projectMapped = false;
+        tailored.projects.forEach((proj: any) => {
+          const techLower = (proj.tech || "").toLowerCase();
+          if (techLower.includes(skillName.toLowerCase()) && cleanAnswer.length > 20) {
+            if (!proj.description.toLowerCase().includes(cleanAnswer.toLowerCase().substring(0, 15))) {
+              proj.description = `${proj.description.trim()} In addition, ${cleanAnswer}`;
+            }
+            projectMapped = true;
+          }
+        });
+
+        if (!projectMapped && cleanAnswer.length > 30 && tailored.projects.length > 0) {
+          const firstProj = tailored.projects[0];
+          if (!firstProj.description.toLowerCase().includes(cleanAnswer.toLowerCase().substring(0, 15))) {
+            firstProj.description = `${firstProj.description.trim()} Worked on ${skillName}: ${cleanAnswer}`;
+          }
+        }
+      }
+    }
+
+    // 2. Project Gap
+    if (key.startsWith("project:")) {
+      const parts = key.split(":");
+      const projName = parts[1];
+      const project = tailored.projects.find((p: any) => 
+        p.title.trim().toLowerCase() === projName.toLowerCase()
+      );
+
+      if (project) {
+        const alreadyContains = project.description.toLowerCase().includes(cleanAnswer.toLowerCase().substring(0, 15));
+        if (!alreadyContains) {
+          project.description = `${project.description.trim()} ${cleanAnswer}`;
+        }
+      }
+    }
+
+    // 3. Experience Gap
+    if (key.startsWith("experience:")) {
+      const parts = key.split(":");
+      const company = parts[1];
+      const role = parts[2];
+
+      const exp = tailored.experience.find((e: any) => 
+        e.company.trim().toLowerCase().includes(company.toLowerCase()) ||
+        (role && e.role.trim().toLowerCase().includes(role.toLowerCase()))
+      );
+
+      if (exp) {
+        const alreadyContains = exp.description.toLowerCase().includes(cleanAnswer.toLowerCase().substring(0, 15));
+        if (!alreadyContains) {
+          exp.description = `${exp.description.trim()} ${cleanAnswer}`;
+        }
+      }
+    }
+  });
+
+  return tailored;
+}
+
 function AIToolkitContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -2156,6 +2257,8 @@ function AIToolkitContent() {
   const [evidenceGaps, setEvidenceGaps] = useState<EvidenceGap[]>([]);
   const [generatingQuestions, setGeneratingQuestions] = useState(false);
   const [savingVault, setSavingVault] = useState(false);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [copilotTab, setCopilotTab] = useState<"gaps" | "questions">("gaps");
   
   // Helpers inside editor
   const [newCert, setNewCert] = useState("");
@@ -2577,6 +2680,8 @@ Optimize the original resume now and return ONLY the JSON object:`;
     setLocalStatusMessage("");
     setEvidenceGaps([]);
     setCopilotQuestions([]);
+    setAnswers({});
+    setCopilotTab("gaps");
 
     try {
       const resMe = await api.get("/resumes/me");
@@ -2763,7 +2868,7 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
 
       let budgetedQuestions: CopilotQuestion[] = [];
 
-      if (isModelAvailable && guaranteedGaps.length > 0) {
+      if (guaranteedGaps.length > 0) {
         // --- STAGE 5: SYSTEM DETERMINISTIC QUESTION COMPILATION (NO LLM CALL) ---
         setLocalStatusMessage("Stage 4/4: Compiling dynamic questions...");
         
@@ -2793,17 +2898,24 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
           };
         });
 
+        // Populate stateful answers map
+        const initialAnswers: Record<string, string> = {};
+        budgetedQuestions.forEach(q => {
+          initialAnswers[q.id] = q.answer || "";
+        });
+        setAnswers(initialAnswers);
+
         setCopilotQuestions(budgetedQuestions);
+        setCopilotTab("questions");
+
         const debugMsg = `Compiled ${budgetedQuestions.length} questions (Budget: ${maxAllowed}, Alignment: ${alignment.level}, Score: ${alignment.score}%).`;
         showSuccess(debugMsg);
       } else {
-        // Offline mode or no gaps
+        // No gaps
         setCopilotQuestions([]);
-        if (!isModelAvailable) {
-          showSuccess(`Offline mode active. Discovered ${guaranteedGaps.length} evidence gaps (Local AI offline).`);
-        } else {
-          showSuccess("Resume matches perfectly! No evidence gaps detected.");
-        }
+        setAnswers({});
+        setCopilotTab("gaps");
+        showSuccess("Resume matches perfectly! No evidence gaps detected.");
       }
     } catch (err: any) {
       console.error("Failed to generate copilot questions:", err);
@@ -2875,7 +2987,85 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
   };
 
   const updateCopilotAnswer = (id: string, val: string) => {
+    setAnswers(prev => ({ ...prev, [id]: val }));
     setCopilotQuestions(prev => prev.map(q => q.id === id ? { ...q, answer: val } : q));
+  };
+
+  const handleGenerateTailoredResume = async () => {
+    if (!masterResume) {
+      setErrorMsg("No master resume found. Cannot generate tailored resume.");
+      return;
+    }
+    setCalculatingATS(true);
+    setErrorMsg("");
+    setSuccessMsg("");
+    try {
+      const resultResume = buildResumeFromAnswers({
+        masterResume,
+        jobDescription: company?.jd_text || "",
+        gaps: evidenceGaps,
+        questions: copilotQuestions,
+        answers
+      });
+      setTailoredResumeData(resultResume);
+      
+      // Re-calculate the ATS score and match stats locally
+      const resumeTextForMatch = [
+        resultResume.personal?.name || "",
+        resultResume.personal?.location || "",
+        resultResume.summary || "",
+        ...(resultResume.skills || []),
+        ...(resultResume.education || []).map((e: any) => `${e.degree} ${e.institution}`),
+        ...(resultResume.experience || []).map((e: any) => `${e.role} ${e.company} ${e.description}`),
+        ...(resultResume.projects || []).map((e: any) => `${e.title} ${e.tech} ${e.description}`),
+      ].join(" ");
+      
+      const deterministicMatch = calculateMatchStats(resumeTextForMatch, jdKeywords);
+      const missingKeywordsVal = Array.from(jdKeywords).filter(k => !deterministicMatch.matchedKeywords.has(k.toLowerCase().trim()));
+      const atsScoreVal = deterministicMatch.matchPercentage;
+      
+      setAtsResult({
+        ats_score: atsScoreVal,
+        missing_keywords: missingKeywordsVal,
+        tailored_resume: {
+          optimized_skills: resultResume.skills || [],
+          optimized_projects: resultResume.projects || [],
+          optimized_summary: resultResume.summary || ""
+        }
+      });
+
+      // Encrypt and save to backend if key exists
+      if (encryptionKey && company) {
+        try {
+          const encResume = await encryptData(JSON.stringify(resultResume), encryptionKey);
+          if (activeApplication) {
+            const res = await api.patch(`/applications/${activeApplication.id}`, {
+              tailored_resume_enc: encResume
+            });
+            setActiveApplication(res.data);
+          } else {
+            const res = await api.post("/applications", {
+              company_id: company.id,
+              status: "Applied",
+              tailored_resume_enc: encResume,
+              recruitment_state: "Registration"
+            });
+            setActiveApplication(res.data);
+          }
+        } catch (saveErr) {
+          console.error("Auto-save tailored resume failed:", saveErr);
+        }
+      }
+
+      showSuccess("Resume tailored and optimized successfully from your Q&A answers!");
+      setCompareWithMaster(true);
+      setOptimizerSubView("preview");
+    } catch (err: any) {
+      console.error("Resume tailoring failed:", err);
+      setErrorMsg(err.message || "Failed to generate tailored resume.");
+    } finally {
+      setCalculatingATS(false);
+    }
   };
 
   const jdKeywords = React.useMemo(() => {
@@ -3520,7 +3710,7 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
                       </button>
                     ) : (
                       <button
-                        onClick={runLocalATS}
+                        onClick={handleGenerateTailoredResume}
                         disabled={calculatingATS}
                         className="w-full h-10 border-2 border-accent bg-accent text-black hover:bg-black hover:text-accent hover:border-accent font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50 font-mono"
                       >
@@ -3684,7 +3874,7 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
                                 Note: The Copilot is not attempting to assess your qualifications. It is discovering verifiable evidence that may already exist but is missing from your resume.
                               </p>
                             </div>
-                            {copilotQuestions.length === 0 ? (
+                            {copilotQuestions.length === 0 && evidenceGaps.length === 0 ? (
                               <button
                                 onClick={generateCopilotQuestions}
                                 disabled={generatingQuestions}
@@ -3713,7 +3903,12 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
                                   {savingVault ? "Saving..." : "Save to Master Vault"}
                                 </button>
                                 <button
-                                  onClick={() => setCopilotQuestions([])}
+                                  onClick={() => {
+                                    setCopilotQuestions([]);
+                                    setEvidenceGaps([]);
+                                    setAnswers({});
+                                    setCopilotTab("gaps");
+                                  }}
                                   className="h-9 px-3 border border-red-500/30 text-red-500 hover:bg-red-500/10 text-[10px] font-black uppercase transition-all"
                                 >
                                   Clear Questions
@@ -3722,73 +3917,45 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
                             )}
                           </div>
 
-                          {copilotQuestions.length > 0 ? (
-                            <div className="space-y-4">
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {copilotQuestions.map((q) => {
-                                  const feedback = getAnswerFeedback(q.answer);
-                                  return (
-                                    <div key={q.id} className="border border-border bg-background p-4 space-y-3 relative flex flex-col justify-between">
-                                      <div className="space-y-2">
-                                        <div className="flex justify-between items-center">
-                                          <span className={`px-2 py-0.5 text-[8px] font-black border ${
-                                            q.type === "general" ? "border-blue-500/55 text-blue-400 bg-blue-500/5" : "border-amber-500/55 text-amber-400 bg-amber-500/5"
-                                          }`}>
-                                            {q.type === "general" ? "🔄 PERSISTED TO MASTER VAULT" : "🎯 JOB-SPECIFIC (THIS APP ONLY)"}
-                                          </span>
-                                        </div>
-                                        <p className="text-xs font-bold text-foreground leading-normal">{q.text}</p>
-                                      </div>
-                                      <div className="space-y-2">
-                                        <textarea
-                                          value={q.answer}
-                                          onChange={(e) => updateCopilotAnswer(q.id, e.target.value)}
-                                          placeholder={q.type === "general" 
-                                            ? "Describe technical details, databases, libraries used, or metrics..." 
-                                            : "Enter details (e.g. Yes, I have worked with this tool in...)"}
-                                          rows={2}
-                                          className="w-full border border-border bg-background text-xs p-2.5 focus:border-accent focus:outline-none font-bold"
-                                        />
-                                        <div className={`text-[10px] font-bold ${
-                                          feedback.status === "strong" ? "text-green-500" : feedback.status === "weak" ? "text-yellow-500" : "text-zinc-500"
-                                        }`}>
-                                          {feedback.feedback}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                              <div className="border-t border-border pt-4 flex justify-between items-center">
-                                <span className="text-[9px] text-zinc-500 uppercase leading-snug">
-                                  {copilotQuestions.some(q => q.type === "general" && q.answer.trim()) && "🔄 Answers to Persisted Vault questions will be saved. Click 'Save to Master Vault' to persist manually."}
-                                </span>
-                                <button
-                                  onClick={async () => {
-                                    await handleSaveToVault();
-                                    await runLocalATS();
-                                  }}
-                                  disabled={calculatingATS}
-                                  className="h-10 px-5 border-2 border-accent bg-accent text-black hover:bg-black hover:text-accent hover:border-accent text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all"
-                                >
-                                  <Sparkles size={13} />
-                                  <span>{calculatingATS ? "Tailoring..." : "Tailor Resume using verified context"}</span>
-                                </button>
-                              </div>
+                          {(evidenceGaps.length > 0 || copilotQuestions.length > 0) && (
+                            <div className="flex border-b border-border gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setCopilotTab("gaps")}
+                                className={`pb-2 px-4 text-xs font-black tracking-wider uppercase border-b-2 transition-all ${
+                                  copilotTab === "gaps" ? "border-accent text-accent" : "border-transparent text-muted-foreground hover:text-foreground"
+                                }`}
+                              >
+                                🔍 Evidence Gaps ({evidenceGaps.length})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setCopilotTab("questions")}
+                                className={`pb-2 px-4 text-xs font-black tracking-wider uppercase border-b-2 transition-all ${
+                                  copilotTab === "questions" ? "border-accent text-accent" : "border-transparent text-muted-foreground hover:text-foreground"
+                                }`}
+                              >
+                                ❓ Interview Questions ({copilotQuestions.length})
+                              </button>
                             </div>
-                          ) : evidenceGaps.length > 0 ? (
+                          )}
+
+                          {copilotTab === "gaps" && evidenceGaps.length > 0 ? (
                             <div className="space-y-4">
-                              <div className="border border-amber-500/35 bg-amber-500/5 p-4 rounded-sm flex items-start gap-3">
-                                <AlertCircle className="text-amber-500 shrink-0 mt-0.5" size={16} />
-                                <div className="space-y-1">
-                                  <h4 className="text-xs font-black uppercase tracking-wider text-amber-500">
-                                    Local AI Model Offline / Gaps Only Mode
-                                  </h4>
-                                  <p className="text-[10px] text-muted-foreground uppercase leading-relaxed font-bold">
-                                    The local browser LLM is offline or not installed. We have analyzed your resume against the Job Description deterministically. Review the discovered gaps below and enrich the respective sections in the workspace form to maximize your ATS match.
-                                  </p>
+                              {/* Check model availability to show appropriate banner */}
+                              {!(geminiAvailable || atsModel !== "qwen-0.5b" || (typeof window !== "undefined" && (localStorage.getItem(`model_downloaded_${atsModel}`) === "true" || localStorage.getItem(`model_downloaded_onnx-community/Llama-3.2-1B-Instruct-ONNX`) === "true"))) && (
+                                <div className="border border-amber-500/35 bg-amber-500/5 p-4 rounded-sm flex items-start gap-3">
+                                  <AlertCircle className="text-amber-500 shrink-0 mt-0.5" size={16} />
+                                  <div className="space-y-1">
+                                    <h4 className="text-xs font-black uppercase tracking-wider text-amber-500">
+                                      Local AI Model Offline / Gaps Only Mode
+                                    </h4>
+                                    <p className="text-[10px] text-muted-foreground uppercase leading-relaxed font-bold">
+                                      The local browser LLM is offline or not installed. We have analyzed your resume against the Job Description deterministically. Review the discovered gaps below and enrich the respective sections in the workspace form to maximize your ATS match.
+                                    </p>
+                                  </div>
                                 </div>
-                              </div>
+                              )}
 
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 {evidenceGaps.map((gap, idx) => {
@@ -3843,10 +4010,64 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
                                 })}
                               </div>
                             </div>
+                          ) : copilotTab === "questions" && copilotQuestions.length > 0 ? (
+                            <div className="space-y-4">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {copilotQuestions.map((q) => {
+                                  const feedback = getAnswerFeedback(answers[q.id] || "");
+                                  return (
+                                    <div key={q.id} className="border border-border bg-background p-4 space-y-3 relative flex flex-col justify-between">
+                                      <div className="space-y-2">
+                                        <div className="flex justify-between items-center">
+                                          <span className={`px-2 py-0.5 text-[8px] font-black border ${
+                                            q.type === "general" ? "border-blue-500/55 text-blue-400 bg-blue-500/5" : "border-amber-500/55 text-amber-400 bg-amber-500/5"
+                                          }`}>
+                                            {q.type === "general" ? "🔄 PERSISTED TO MASTER VAULT" : "🎯 JOB-SPECIFIC (THIS APP ONLY)"}
+                                          </span>
+                                        </div>
+                                        <p className="text-xs font-bold text-foreground leading-normal">{q.text}</p>
+                                      </div>
+                                      <div className="space-y-2">
+                                        <textarea
+                                          value={answers[q.id] || ""}
+                                          onChange={(e) => updateCopilotAnswer(q.id, e.target.value)}
+                                          placeholder={q.placeholder || (q.type === "general" 
+                                            ? "Describe technical details, databases, libraries used, or metrics..." 
+                                            : "Enter details (e.g. Yes, I have worked with this tool in...)")}
+                                          rows={2}
+                                          className="w-full border border-border bg-background text-xs p-2.5 focus:border-accent focus:outline-none font-bold"
+                                        />
+                                        <div className={`text-[10px] font-bold ${
+                                          feedback.status === "strong" ? "text-green-500" : feedback.status === "weak" ? "text-yellow-500" : "text-zinc-500"
+                                        }`}>
+                                          {feedback.feedback}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div className="border-t border-border pt-4 flex justify-between items-center">
+                                <span className="text-[9px] text-zinc-500 uppercase leading-snug">
+                                  {copilotQuestions.some(q => q.type === "general" && (answers[q.id] || "").trim()) && "🔄 Answers to Persisted Vault questions will be saved. Click 'Save to Master Vault' to persist manually."}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={handleGenerateTailoredResume}
+                                  disabled={calculatingATS}
+                                  className="h-10 px-5 border-2 border-accent bg-accent text-black hover:bg-black hover:text-accent hover:border-accent text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all"
+                                >
+                                  <Sparkles size={13} />
+                                  <span>{calculatingATS ? "Tailoring..." : "Generate Tailored Resume"}</span>
+                                </button>
+                              </div>
+                            </div>
                           ) : (
                             <div className="border border-dashed border-border p-6 text-center">
                               <p className="text-xs text-muted-foreground uppercase leading-relaxed font-bold">
-                                Want a highly optimized, accurate resume tailoring? Let the Copilot analyze the Job Description and your resume to generate targeted verification questions.
+                                {copilotQuestions.length === 0 && evidenceGaps.length === 0
+                                  ? "Want a highly optimized, accurate resume tailoring? Let the Copilot analyze the Job Description and your resume to generate targeted verification questions."
+                                  : "No items to show in this tab."}
                               </p>
                             </div>
                           )}
