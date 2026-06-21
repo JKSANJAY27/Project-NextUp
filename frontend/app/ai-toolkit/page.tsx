@@ -747,63 +747,6 @@ function buildFallbackGaps(resumeData: any, activeCompany: Company, evidenceGrap
   return gaps;
 }
 
-function parseRobustGapsJSON(rawText: string): EvidenceGap[] {
-  let cleanText = rawText.trim();
-  cleanText = cleanText.replace(/```json/gi, "");
-  cleanText = cleanText.replace(/```/g, "");
-
-  const firstBracket = cleanText.indexOf("[");
-  const lastBracket = cleanText.lastIndexOf("]");
-  if (firstBracket !== -1 && lastBracket !== -1) {
-    cleanText = cleanText.substring(firstBracket, lastBracket + 1);
-  } else {
-    throw new Error("No JSON array bounds found.");
-  }
-  
-  cleanText = balanceJSONStack(cleanText);
-
-  try {
-    return JSON.parse(cleanText);
-  } catch (err) {
-    console.warn("JSON parse on gaps LLM output failed, trying regex fallback:", err);
-  }
-
-  const list: EvidenceGap[] = [];
-  const objMatches = cleanText.match(/\{[\s\S]*?\}/g);
-  if (objMatches) {
-    objMatches.forEach(objText => {
-      try {
-        const stableKeyMatch = objText.match(/"stableKey"\s*:\s*"([^"]*)"/i);
-        const categoryMatch = objText.match(/"category"\s*:\s*"([^"]*)"/i);
-        const gapTypeMatch = objText.match(/"gapType"\s*:\s*"([^"]*)"/i);
-        const skillOrProjectNameMatch = objText.match(/"skillOrProjectName"\s*:\s*"([^"]*)"/i);
-        const reasonMatch = objText.match(/"reason"\s*:\s*"([^"]*)"/i);
-        const evidenceMissingMatch = objText.match(/"evidenceMissing"\s*:\s*"([^"]*)"/i);
-        const importanceMatch = objText.match(/"importance"\s*:\s*([0-9]+)/i);
-        const confidenceMatch = objText.match(/"confidence"\s*:\s*([0-9]+)/i);
-        const resumeImpactScoreMatch = objText.match(/"resumeImpactScore"\s*:\s*([0-9]+)/i);
-
-        if (stableKeyMatch && gapTypeMatch) {
-          list.push({
-            stableKey: stableKeyMatch[1],
-            category: (categoryMatch ? categoryMatch[1].toUpperCase() : "JOB_SPECIFIC") as any,
-            gapType: gapTypeMatch[1] as any,
-            skillOrProjectName: skillOrProjectNameMatch ? skillOrProjectNameMatch[1] : "",
-            reason: reasonMatch ? reasonMatch[1] : "",
-            evidenceMissing: evidenceMissingMatch ? evidenceMissingMatch[1] : "",
-            importance: importanceMatch ? parseInt(importanceMatch[1]) : 50,
-            confidence: confidenceMatch ? parseInt(confidenceMatch[1]) : 0,
-            resumeImpactScore: resumeImpactScoreMatch ? parseInt(resumeImpactScoreMatch[1]) : 50
-          });
-        }
-      } catch (e) {
-        console.warn("Regex object extract failed:", e);
-      }
-    });
-  }
-  return list;
-}
-
 function parseRobustLLMJSON(rawText: string): any {
   let cleanText = normalizeLLMResponseText(rawText);
   
@@ -1684,41 +1627,6 @@ function calculateAlignmentResult(
   };
 }
 
-function questionUtility(gap: EvidenceGap, alignment: AlignmentResult, isAnswered: boolean): number {
-  if (isAnswered) return 0;
-
-  let score = 50;
-  score += (gap.importance - 50) * 0.4;
-  score += (gap.resumeImpactScore - 50) * 0.4;
-  score += (100 - gap.confidence) * 0.3;
-
-  if (alignment.primaryStrategy === "experience_enrichment") {
-    if (gap.gapType === "missing_metric" || gap.gapType === "enrichment_opportunity" || gap.gapType === "project_depth") {
-      score += 15;
-    }
-  } else if (alignment.primaryStrategy === "skill_verification") {
-    if (gap.gapType === "missing_skill" || gap.gapType === "weak_skill") {
-      score += 15;
-    }
-  } else if (alignment.primaryStrategy === "transferable_exploration") {
-    if (gap.gapType === "enrichment_opportunity" || gap.gapType === "project_depth") {
-      score += 10;
-    }
-  } else if (alignment.primaryStrategy === "minimal_jd_targeting") {
-    if (gap.importance > 80) {
-      score += 10;
-    } else {
-      score -= 20;
-    }
-  }
-
-  if (gap.category === "GENERAL" && alignment.level === "Low") {
-    score -= 15;
-  }
-
-  return Math.max(0, Math.min(100, Math.round(score)));
-}
-
 interface JDUnderstanding {
   requiredSkills: string[];
   preferredSkills: string[];
@@ -1984,7 +1892,7 @@ function ensureMinimumActionableGaps(
   resumeData: any,
   activeCompany: Company
 ): EvidenceGap[] {
-  let actionable = gaps.filter(isGapActionable);
+  const actionable = gaps.filter(isGapActionable);
 
   if (actionable.length >= 2) {
     return gaps;
