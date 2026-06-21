@@ -80,11 +80,38 @@ interface VaultQA {
   timestamp: string;
 }
 
+type Capability =
+  | "backend_systems"
+  | "real_time_systems"
+  | "ml_systems"
+  | "research_methodology"
+  | "data_structures"
+  | "networking"
+  | "concurrency"
+  | "deployment"
+  | "observability";
+
+type AlignmentStrategy =
+  | "skill_verification"
+  | "experience_enrichment"
+  | "transferable_exploration"
+  | "minimal_jd_targeting";
+
+interface AlignmentResult {
+  score: number;
+  level: "High" | "Medium" | "Low";
+  directOverlapCount: number;
+  transferableOverlapCount: number;
+  primaryStrategy: AlignmentStrategy;
+}
+
 interface EvidenceNode {
   id: string;
   type: "skill" | "project" | "experience" | "certification";
   name: string;
   confidence: number; // 0-100
+  inferredCapabilities: Capability[];
+  evidenceStrength: "strong" | "medium" | "weak";
   supportingEvidence: string[];
 }
 
@@ -329,6 +356,70 @@ function normalizeStableKey(key: string): string {
 function buildEvidenceGraph(resumeData: any): EvidenceNode[] {
   const nodes: EvidenceNode[] = [];
 
+  const inferNodeCapabilities = (name: string, description: string, tech: string): Capability[] => {
+    const capabilities = new Set<Capability>();
+    const combined = `${name} ${description} ${tech}`.toLowerCase();
+    if (/backend|fastapi|flask|django|express|spring|node|nest|api|rest|graphql|sql|postgres|mongo|neo4j|redis|database|server/i.test(combined)) {
+      capabilities.add("backend_systems");
+    }
+    if (/real-time|websocket|socket\.io|sse|event-driven|pub\/sub|real time|stream|audio|voice|chat/i.test(combined)) {
+      capabilities.add("real_time_systems");
+    }
+    if (/ml|ai|machine learning|llm|rag|nlp|gpt|gemini|transformer|deep learning|tensorflow|pytorch|model|inference|knowledge graph/i.test(combined)) {
+      capabilities.add("ml_systems");
+    }
+    if (/research|paper|publication|experiment|methodology|benchmarking|feasibility|patent/i.test(combined)) {
+      capabilities.add("research_methodology");
+    }
+    if (/algorithm|data structures|tree|graph|complexity|optimization|parse|search|sorting/i.test(combined)) {
+      capabilities.add("data_structures");
+    }
+    if (/network|tcp|ip|dns|http|tls|ssl|socket|proxy|packet|wireshark|vpn|security/i.test(combined)) {
+      capabilities.add("networking");
+    }
+    if (/concurrency|async|parallel|multithread|thread|goroutine|coroutine|race condition/i.test(combined)) {
+      capabilities.add("concurrency");
+    }
+    if (/deploy|host|cloud|aws|gcp|azure|docker|kubernetes|helm|terraform|ansible|ci\/cd|github actions|jenkins|linux/i.test(combined)) {
+      capabilities.add("deployment");
+    }
+    if (/observability|monitoring|logging|tracing|prometheus|grafana|langfuse|opentelemetry/i.test(combined)) {
+      capabilities.add("observability");
+    }
+    return Array.from(capabilities);
+  };
+
+  const getStrength = (type: any, name: string, description: string, tech: string, supCount: number, hasGit: boolean = false): "strong" | "medium" | "weak" => {
+    const combined = `${name} ${description} ${tech}`.toLowerCase();
+    if (type === "skill") {
+      if (supCount >= 2) return "strong";
+      if (supCount === 1) return "medium";
+      return "weak";
+    }
+    if (type === "project") {
+      const hasMetrics = /[0-9]+%?/.test(description) || /latency|throughput|users|requests|percent|scale/i.test(combined);
+      const hasInfra = /aws|gcp|azure|docker|kubernetes|linux|nginx|redis|deploy|host/i.test(combined);
+      if ((hasMetrics && hasInfra) || (hasMetrics && hasGit) || description.length > 250) {
+        return "strong";
+      }
+      if (description.length > 80 || hasGit || hasInfra || hasMetrics) {
+        return "medium";
+      }
+      return "weak";
+    }
+    if (type === "experience") {
+      const hasMetrics = /[0-9]+%?/.test(description) || /latency|throughput|users|requests|percent|scale/i.test(combined);
+      if (description.length > 200 && hasMetrics) {
+        return "strong";
+      }
+      if (description.length > 50) {
+        return "medium";
+      }
+      return "weak";
+    }
+    return "strong";
+  };
+
   // 1. Add skill nodes
   (resumeData.skills || []).forEach((s: string) => {
     nodes.push({
@@ -336,6 +427,8 @@ function buildEvidenceGraph(resumeData: any): EvidenceNode[] {
       type: "skill",
       name: s.trim(),
       confidence: 100,
+      inferredCapabilities: inferNodeCapabilities(s, "", ""),
+      evidenceStrength: "medium",
       supportingEvidence: ["Listed explicitly in core skills section of the master resume."]
     });
   });
@@ -361,6 +454,8 @@ function buildEvidenceGraph(resumeData: any): EvidenceNode[] {
             type: "skill",
             name: tTrim,
             confidence: 90,
+            inferredCapabilities: inferNodeCapabilities(tTrim, "", ""),
+            evidenceStrength: "medium",
             supportingEvidence: [`Found in tech stack of project '${p.title}'.`]
           });
         }
@@ -372,6 +467,8 @@ function buildEvidenceGraph(resumeData: any): EvidenceNode[] {
       type: "project",
       name: p.title,
       confidence: 100,
+      inferredCapabilities: inferNodeCapabilities(p.title, p.description || "", p.tech || ""),
+      evidenceStrength: getStrength("project", p.title, p.description || "", p.tech || "", 0, !!p.github_url),
       supportingEvidence: supporting
     });
   });
@@ -404,6 +501,8 @@ function buildEvidenceGraph(resumeData: any): EvidenceNode[] {
       type: "experience",
       name: `${e.role} at ${e.company}`,
       confidence: 100,
+      inferredCapabilities: inferNodeCapabilities(e.role, e.description || "", ""),
+      evidenceStrength: getStrength("experience", `${e.role} at ${e.company}`, e.description || "", "", 0),
       supportingEvidence: supporting
     });
   });
@@ -415,8 +514,17 @@ function buildEvidenceGraph(resumeData: any): EvidenceNode[] {
       type: "certification",
       name: c.trim(),
       confidence: 100,
+      inferredCapabilities: inferNodeCapabilities(c, "", ""),
+      evidenceStrength: "strong",
       supportingEvidence: ["Listed explicitly in certifications section of the master resume."]
     });
+  });
+
+  // 5. Re-evaluate skill evidence strength based on collected supporting evidence
+  nodes.forEach(n => {
+    if (n.type === "skill") {
+      n.evidenceStrength = getStrength("skill", n.name, "", "", n.supportingEvidence.length);
+    }
   });
 
   return nodes;
@@ -1345,6 +1453,283 @@ function ResumeTemplatePreview({ data, template }: { data: any; template: string
   }
 }
 
+interface JDConcept {
+  name: string;
+  type:
+    | "Required Skill"
+    | "Preferred Skill"
+    | "Responsibility"
+    | "Domain Knowledge"
+    | "Industry Context"
+    | "Company Name"
+    | "Product Name"
+    | "Soft Skill"
+    | "Educational Requirement"
+    | "Ignore";
+}
+
+function classifyJDConcepts(concepts: string[], companyName: string): JDConcept[] {
+  const result: JDConcept[] = [];
+  const coNameLower = companyName.toLowerCase();
+
+  const softSkills = new Set([
+    "communication", "teamwork", "leadership", "collaborative", "problem-solving",
+    "interpersonal", "written", "verbal", "attention to detail", "presentation",
+    "analytical", "creativity", "strong", "excellent", "active", "interpersonal skills",
+    "verbal skills", "written skills", "communication skills", "problem solving",
+    "team player", "motivation", "motivated", "detail-oriented"
+  ]);
+
+  const eduTerms = new Set([
+    "b.tech", "m.tech", "degree", "computer science", "bachelor", "master", "phd",
+    "gpa", "undergraduate", "graduate", "cgpa", "bachelors", "masters", "education"
+  ]);
+
+  const domainKnowledge = new Set([
+    "indoor air quality", "air purification", "iaq", "aerosol", "hvac", "ventilation",
+    "biotechnology", "life sciences", "materials science", "chemistry", "nanotechnology",
+    "polymer technology", "aerosol science", "filtration", "carbon footprint", "sustainability",
+    "threat landscape", "cybersecurity", "web security", "network security", "information security",
+    "cryptographic protocols", "cryptography", "aes", "rsa", "ssl/tls", "signatures", "owasp top 10"
+  ]);
+
+  const productNames = new Set([
+    "burp suite", "wireshark", "nmap", "metasploit", "owasp zap", "tryhackme", "hack the box",
+    "gobuster", "nikto", "github", "git", "gitlab"
+  ]);
+
+  const responsibilities = new Set([
+    "prototype development", "invention disclosures", "patent-related activities",
+    "technology transfer", "feasibility assessments", "benchmarking", "threat modeling",
+    "adversarial simulation", "vulnerability assessment", "system design", "requirements analysis",
+    "technical feasibility assessment", "code review", "refactoring", "debugging",
+    "testing", "documentation"
+  ]);
+
+  const requiredSkills = new Set([
+    "python", "javascript", "typescript", "go", "golang", "java", "c++", "rust",
+    "node.js", "react", "next.js", "fastapi", "flask", "django", "sql", "postgresql",
+    "mongodb", "neo4j", "redis", "concurrency", "async streaming", "scaling", "latency",
+    "observability", "microservices", "websockets", "docker", "kubernetes", "helm", "helm charts",
+    "aws", "gcp", "google cloud", "azure", "microsoft azure", "nginx", "terraform", "ansible",
+    "jenkins", "ci/cd", "github actions", "penetration testing", "pentesting", "ethical hacking",
+    "rest", "api", "graphql", "routing", "linux"
+  ]);
+
+  concepts.forEach(concept => {
+    const cLower = concept.trim().toLowerCase();
+    if (!cLower) return;
+
+    if (cLower.includes(coNameLower) || coNameLower.includes(cLower) || cLower === "blue star limited" || cLower === "blue star") {
+      result.push({ name: concept, type: "Company Name" });
+      return;
+    }
+
+    if (softSkills.has(cLower) || cLower.includes("communication") || cLower.includes("interpersonal") || cLower.includes("collaborative")) {
+      result.push({ name: concept, type: "Soft Skill" });
+      return;
+    }
+
+    if (eduTerms.has(cLower) || cLower.includes("degree") || cLower.includes("computer science") || cLower.includes("bachelor") || cLower.includes("master")) {
+      result.push({ name: concept, type: "Educational Requirement" });
+      return;
+    }
+
+    if (responsibilities.has(cLower) || cLower.includes("development") || cLower.includes("assessment") || cLower.includes("benchmarking") || cLower.includes("modeling")) {
+      result.push({ name: concept, type: "Responsibility" });
+      return;
+    }
+
+    if (requiredSkills.has(cLower) || requiredSkills.has(cLower.replace(".js", "")) || /python|react|docker|aws|kubernetes|security|testing|hacking|sql|postgres|mongodb|fastapi|django|flask|networking|concurrency/i.test(cLower)) {
+      result.push({ name: concept, type: "Required Skill" });
+      return;
+    }
+
+    if (domainKnowledge.has(cLower) || /air|quality|purification|hvac|bio|nano|chemical|poly|environmental/i.test(cLower)) {
+      result.push({ name: concept, type: "Domain Knowledge" });
+      return;
+    }
+
+    if (productNames.has(cLower)) {
+      result.push({ name: concept, type: "Product Name" });
+      return;
+    }
+
+    result.push({ name: concept, type: "Preferred Skill" });
+  });
+
+  return result;
+}
+
+function getJDConceptCapabilities(concept: string): Capability[] {
+  const cLower = concept.toLowerCase();
+  const caps: Capability[] = [];
+  if (/python|javascript|typescript|go|golang|java|c\+\+|rust|node|fastapi|flask|django|backend|express|api|rest|graphql|sql|postgres|mongodb|neo4j|redis/i.test(cLower)) {
+    caps.push("backend_systems");
+  }
+  if (/real-time|websocket|socket\.io|sse|stream|audio|voice|chat/i.test(cLower)) {
+    caps.push("real_time_systems");
+  }
+  if (/ml|ai|machine learning|llm|rag|nlp|gpt|gemini|transformer|deep learning|tensorflow|pytorch|model|inference/i.test(cLower)) {
+    caps.push("ml_systems");
+  }
+  if (/research|paper|publication|experiment|methodology|benchmarking|feasibility|patent/i.test(cLower)) {
+    caps.push("research_methodology");
+  }
+  if (/algorithm|data structures|tree|graph|complexity|optimization|sorting/i.test(cLower)) {
+    caps.push("data_structures");
+  }
+  if (/network|tcp|ip|dns|http|tls|ssl|socket|proxy|packet/i.test(cLower)) {
+    caps.push("networking");
+  }
+  if (/concurrency|async|parallel|multithread|thread|goroutine|coroutine/i.test(cLower)) {
+    caps.push("concurrency");
+  }
+  if (/deploy|host|cloud|aws|gcp|azure|docker|kubernetes|helm|terraform|ansible|ci\/cd/i.test(cLower)) {
+    caps.push("deployment");
+  }
+  if (/observability|monitoring|logging|tracing|prometheus|grafana|langfuse/i.test(cLower)) {
+    caps.push("observability");
+  }
+  return caps;
+}
+
+function calculateAlignmentResult(
+  evidenceGraph: EvidenceNode[],
+  jdConcepts: JDConcept[]
+): AlignmentResult {
+  const eligibleJDConcepts = jdConcepts.filter(c => 
+    c.type === "Required Skill" || 
+    c.type === "Preferred Skill" || 
+    c.type === "Responsibility"
+  );
+
+  if (eligibleJDConcepts.length === 0) {
+    return {
+      score: 50,
+      level: "Medium",
+      directOverlapCount: 0,
+      transferableOverlapCount: 0,
+      primaryStrategy: "minimal_jd_targeting"
+    };
+  }
+
+  let directOverlap = 0;
+  let transferableOverlap = 0;
+
+  const candidateSkills = new Set<string>();
+  const candidateCapabilities = new Set<Capability>();
+
+  evidenceGraph.forEach(n => {
+    if (n.type === "skill" && n.confidence >= 80) {
+      candidateSkills.add(n.name.toLowerCase().trim());
+    }
+    n.inferredCapabilities.forEach(cap => candidateCapabilities.add(cap));
+  });
+
+  eligibleJDConcepts.forEach(jc => {
+    const jcLower = jc.name.toLowerCase().trim();
+    let isDirect = false;
+    candidateSkills.forEach(cs => {
+      if (cs === jcLower || cs.includes(jcLower) || jcLower.includes(cs)) {
+        isDirect = true;
+      }
+    });
+
+    if (isDirect) {
+      directOverlap++;
+    } else {
+      const conceptCaps = getJDConceptCapabilities(jc.name);
+      const isTransferable = conceptCaps.some(cap => candidateCapabilities.has(cap));
+      if (isTransferable) {
+        transferableOverlap++;
+      }
+    }
+  });
+
+  const totalEligible = eligibleJDConcepts.length;
+  const rawScore = ((directOverlap * 1.0) + (transferableOverlap * 0.5)) / totalEligible * 100;
+  const score = Math.min(100, Math.round(rawScore));
+
+  let level: "High" | "Medium" | "Low" = "Low";
+  if (score >= 70) {
+    level = "High";
+  } else if (score >= 40) {
+    level = "Medium";
+  }
+
+  let primaryStrategy: AlignmentStrategy = "minimal_jd_targeting";
+  if (level === "High") {
+    primaryStrategy = "experience_enrichment";
+  } else if (level === "Medium") {
+    if (directOverlap > 0) {
+      primaryStrategy = "skill_verification";
+    } else {
+      primaryStrategy = "transferable_exploration";
+    }
+  } else {
+    if (transferableOverlap > directOverlap) {
+      primaryStrategy = "transferable_exploration";
+    } else {
+      primaryStrategy = "minimal_jd_targeting";
+    }
+  }
+
+  return {
+    score,
+    level,
+    directOverlapCount: directOverlap,
+    transferableOverlapCount: transferableOverlap,
+    primaryStrategy
+  };
+}
+
+function questionUtility(gap: EvidenceGap, alignment: AlignmentResult, isAnswered: boolean): number {
+  if (isAnswered) return 0;
+
+  let score = 50;
+  score += (gap.importance - 50) * 0.4;
+  score += (gap.resumeImpactScore - 50) * 0.4;
+  score += (100 - gap.confidence) * 0.3;
+
+  if (alignment.primaryStrategy === "experience_enrichment") {
+    if (gap.gapType === "missing_metric" || gap.gapType === "enrichment_opportunity" || gap.gapType === "project_depth") {
+      score += 15;
+    }
+  } else if (alignment.primaryStrategy === "skill_verification") {
+    if (gap.gapType === "missing_skill" || gap.gapType === "weak_skill") {
+      score += 15;
+    }
+  } else if (alignment.primaryStrategy === "transferable_exploration") {
+    if (gap.gapType === "enrichment_opportunity" || gap.gapType === "project_depth") {
+      score += 10;
+    }
+  } else if (alignment.primaryStrategy === "minimal_jd_targeting") {
+    if (gap.importance > 80) {
+      score += 10;
+    } else {
+      score -= 20;
+    }
+  }
+
+  if (gap.category === "GENERAL" && alignment.level === "Low") {
+    score -= 15;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function getOverfittingProofQuestion(gapName: string): string {
+  const nameLower = gapName.toLowerCase();
+  if (nameLower.includes("air purification") || nameLower.includes("indoor air quality") || nameLower.includes("iaq") || nameLower.includes("hvac") || nameLower.includes("aerosol")) {
+    return "This role involves Air Purification and Indoor Air Quality. Since your background is in a different domain, can you describe your process for researching unfamiliar fields, setting up experiment designs, or constructing prototype systems?";
+  }
+  if (nameLower.includes("biotechnology") || nameLower.includes("life sciences") || nameLower.includes("chemistry") || nameLower.includes("nanotechnology")) {
+    return "This role involves Life Sciences and Biotech. Can you describe your process for conducting academic research, reviewing scientific publications, or doing data analysis on scientific experimental results?";
+  }
+  return `This role requires ${gapName}. Can you describe a time you had to quickly learn a new technology or domain, evaluate its feasibility, and build a prototype or proof-of-concept?`;
+}
+
 async function getDeterministicSalt(email: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(email.trim().toLowerCase());
@@ -1992,7 +2377,15 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
 
       finalGaps.sort((a, b) => (b.priority || 0) - (a.priority || 0));
 
-      // 6. Question Generation Layer
+      // 6. Calculate Alignment & Strategy
+      const jdConcepts = classifyJDConcepts(Array.from(jdKeywords), company.name);
+      const alignment = calculateAlignmentResult(evidenceGraph, jdConcepts);
+
+      // Anti-overfitting check: If transferable overlap > direct overlap,
+      // pivot all job-specific skill-gaps to process/experimentation questions
+      const useAntiOverfitting = alignment.transferableOverlapCount > alignment.directOverlapCount;
+
+      // 7. Question Generation Layer
       const skillQuestionTemplates: Record<string, string> = {
         "air purification": "Have you worked with air purification systems, filtration technologies (e.g. HEPA, activated carbon), or aerosol science? Describe your exposure or prototype projects.",
         "indoor air quality": "Have you measured, analyzed, or optimized indoor air quality (IAQ) parameters like CO2, PM2.5, VOCs, temperature, or relative humidity?",
@@ -2087,89 +2480,174 @@ Return ONLY the JSON array starting with [ and ending with ]:`;
         "websockets": "Have you used WebSockets or socket.io to enable real-time bidirectional communication?"
       };
 
-      const questionsList: CopilotQuestion[] = [];
+      interface CandidateQuestion {
+        question: CopilotQuestion;
+        utility: number;
+      }
+
+      const candidateQuestions: CandidateQuestion[] = [];
       const processedKeys = new Set<string>();
 
+      // A. Populate General Project Questions
       const projectTitles = (resumeData.projects || []).slice(0, 4).map((p: any) => p.title).join(", ");
-      
       const defaultGeneralQuestions = [
         {
           stableKey: "general:projects:infrastructure",
           text: `Several of your projects involve deployment and real-time systems. Can you describe the infrastructure, cloud services, operating systems, containers, databases, caching systems, or deployment tools (e.g. Linux, Docker, AWS, EC2, Nginx, Redis) used?`,
+          gap: {
+            stableKey: "general:projects:infrastructure",
+            category: "GENERAL" as const,
+            gapType: "missing_infrastructure" as const,
+            skillOrProjectName: "projects",
+            reason: "Verifying infrastructure stack",
+            evidenceMissing: "Cloud/container hosting details",
+            importance: 80,
+            confidence: 10,
+            resumeImpactScore: 85
+          }
         },
         {
           stableKey: "general:projects:challenges",
           text: `For your major projects (${projectTitles || "projects"}), what were the most technically challenging engineering problems you solved (e.g. concurrency, async streaming, scaling, latency, observability)?`,
+          gap: {
+            stableKey: "general:projects:challenges",
+            category: "GENERAL" as const,
+            gapType: "enrichment_opportunity" as const,
+            skillOrProjectName: "projects",
+            reason: "Verifying engineering challenges",
+            evidenceMissing: "System design/concurrency complexity details",
+            importance: 70,
+            confidence: 30,
+            resumeImpactScore: 80
+          }
         },
         {
           stableKey: "general:projects:metrics",
           text: `Do you have additional quantitative metrics or performance gains (e.g. user count, requests/day, latency improvements, throughput, evaluation scores, or cost reductions) for your projects or internships?`,
+          gap: {
+            stableKey: "general:projects:metrics",
+            category: "GENERAL" as const,
+            gapType: "missing_metric" as const,
+            skillOrProjectName: "projects",
+            reason: "Verifying metrics",
+            evidenceMissing: "Scalability or efficiency metrics",
+            importance: 70,
+            confidence: 20,
+            resumeImpactScore: 90
+          }
         },
         {
           stableKey: "general:skills:additional",
           text: `Are there any other programming languages, frameworks, databases, security tools, DevOps tools, or AI frameworks you have used but are not listed on your resume?`,
+          gap: {
+            stableKey: "general:skills:additional",
+            category: "GENERAL" as const,
+            gapType: "missing_skill" as const,
+            skillOrProjectName: "skills",
+            reason: "Verifying any additional tools",
+            evidenceMissing: "Unlisted tech skills",
+            importance: 60,
+            confidence: 40,
+            resumeImpactScore: 70
+          }
         }
       ];
 
       defaultGeneralQuestions.forEach(q => {
-        const match = existingVault.find(v => v.stableKey === q.stableKey || v.question.toLowerCase().trim() === q.text.toLowerCase().trim());
-        questionsList.push({
-          id: `gen_${q.stableKey}`,
-          type: "general",
-          stableKey: q.stableKey,
-          text: q.text,
-          answer: match ? match.answer : ""
+        const normKey = normalizeStableKey(q.stableKey);
+        processedKeys.add(normKey);
+        const match = existingVault.find(v => v.stableKey === normKey || v.question.toLowerCase().trim() === q.text.toLowerCase().trim());
+        const isAnswered = !!(match && match.answer.trim());
+        const utility = questionUtility(q.gap, alignment, isAnswered);
+
+        candidateQuestions.push({
+          question: {
+            id: `gen_${normKey}`,
+            type: "general",
+            stableKey: normKey,
+            text: q.text,
+            answer: match ? match.answer : ""
+          },
+          utility
         });
       });
 
+      // B. Populate Job-Specific questions from Discovered Gaps
       finalGaps.forEach(gap => {
         const normKey = normalizeStableKey(gap.stableKey);
         if (processedKeys.has(normKey)) return;
         processedKeys.add(normKey);
 
         let qText = "";
-        if (normKey.startsWith("skill:")) {
-          const skillName = gap.skillOrProjectName;
-          const templateKey = Object.keys(skillQuestionTemplates).find(k => skillName.toLowerCase() === k || skillName.toLowerCase().includes(k) || k.includes(skillName.toLowerCase()));
-          if (templateKey) {
-            qText = skillQuestionTemplates[templateKey];
-          } else {
-            const displaySkill = skillName.split(" ").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-            qText = `The job description requires experience with '${displaySkill}'. Have you worked with this tool, framework, or concept in any projects, coursework, or self-learning? Describe your exposure.`;
-          }
-        } else if (normKey.startsWith("project:")) {
-          const projName = gap.skillOrProjectName;
-          if (normKey.endsWith(":details")) {
-            qText = `For your project '${projName}', what was the infrastructure, cloud services, databases, or deployment tools used, and what were the most challenging engineering problems or quantitative metrics/performance gains achieved?`;
-          } else if (normKey.endsWith(":metrics")) {
-            qText = `Do you have additional quantitative metrics or performance gains (e.g. user count, latency improvements, throughput, or cost reductions) for your project '${projName}'?`;
-          } else if (normKey.endsWith(":deployment")) {
-            qText = `Can you describe the infrastructure, cloud services, databases, or deployment tools (e.g. Linux, Docker, AWS, EC2, Nginx, Redis) used in your project '${projName}'?`;
-          } else if (normKey.endsWith(":challenge")) {
-            qText = `For your project '${projName}', what were the most technically challenging engineering problems you solved (e.g. concurrency, async streaming, scaling, latency, observability)?`;
-          } else {
-            qText = `Can you provide more technical details or explain the architecture of your project '${projName}'?`;
+        
+        // Anti-overfitting check: If the rule triggers, pivot all job-specific skill-gaps to transferable process questions
+        if (useAntiOverfitting && gap.category === "JOB_SPECIFIC" && normKey.startsWith("skill:")) {
+          qText = getOverfittingProofQuestion(gap.skillOrProjectName);
+        } else {
+          // Standard question builder
+          if (normKey.startsWith("skill:")) {
+            const skillName = gap.skillOrProjectName;
+            const templateKey = Object.keys(skillQuestionTemplates).find(k => 
+              skillName.toLowerCase() === k || 
+              skillName.toLowerCase().includes(k) || 
+              k.includes(skillName.toLowerCase())
+            );
+            if (templateKey) {
+              qText = skillQuestionTemplates[templateKey];
+            } else {
+              const displaySkill = skillName.split(" ").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+              qText = `The job description requires experience with '${displaySkill}'. Have you worked with this tool, framework, or concept in any projects, coursework, or self-learning? Describe your exposure.`;
+            }
+          } else if (normKey.startsWith("project:")) {
+            const projName = gap.skillOrProjectName;
+            if (normKey.endsWith(":details")) {
+              qText = `For your project '${projName}', what was the infrastructure, cloud services, databases, or deployment tools used, and what were the most challenging engineering problems or quantitative metrics/performance gains achieved?`;
+            } else if (normKey.endsWith(":metrics")) {
+              qText = `Do you have additional quantitative metrics or performance gains (e.g. user count, latency improvements, throughput, or cost reductions) for your project '${projName}'?`;
+            } else if (normKey.endsWith(":deployment")) {
+              qText = `Can you describe the infrastructure, cloud services, databases, or deployment tools (e.g. Linux, Docker, AWS, EC2, Nginx, Redis) used in your project '${projName}'?`;
+            } else if (normKey.endsWith(":challenge")) {
+              qText = `For your project '${projName}', what were the most technically challenging engineering problems you solved (e.g. concurrency, async streaming, scaling, latency, observability)?`;
+            } else {
+              qText = `Can you provide more technical details or explain the architecture of your project '${projName}'?`;
+            }
           }
         }
 
         if (qText) {
           const match = existingVault.find(v => v.stableKey === normKey || v.question.toLowerCase().trim() === qText.toLowerCase().trim());
-          questionsList.push({
-            id: `job_${normKey}`,
-            type: "job_specific",
-            stableKey: normKey,
-            text: qText,
-            answer: match ? match.answer : "",
-            sourceGapKey: normKey
+          const isAnswered = !!(match && match.answer.trim());
+          const utility = questionUtility(gap, alignment, isAnswered);
+
+          candidateQuestions.push({
+            question: {
+              id: `job_${normKey}`,
+              type: "job_specific",
+              stableKey: normKey,
+              text: qText,
+              answer: match ? match.answer : "",
+              sourceGapKey: normKey
+            },
+            utility
           });
         }
       });
 
-      const finalGeneralQuestions = questionsList.filter(q => q.type === "general").slice(0, 4);
-      const finalJobQuestions = questionsList.filter(q => q.type === "job_specific").slice(0, 8);
+      // Filter questions below utility threshold (40)
+      const highUtilityQuestions = candidateQuestions.filter(cq => cq.utility >= 40);
 
-      setCopilotQuestions([...finalGeneralQuestions, ...finalJobQuestions]);
-      showSuccess("Copilot questions generated successfully! Answer them below to personalize your resume.");
+      // Sort by utility score descending
+      highUtilityQuestions.sort((a, b) => b.utility - a.utility);
+
+      // Question Budgeting: Limit strictly by alignment level
+      const budgetMap = { High: 6, Medium: 5, Low: 3 };
+      const maxAllowed = budgetMap[alignment.level];
+      const budgetedQuestions = highUtilityQuestions.slice(0, maxAllowed).map(cq => cq.question);
+
+      setCopilotQuestions(budgetedQuestions);
+      
+      const debugMsg = `Generated ${budgetedQuestions.length} questions (Budget: ${maxAllowed}, Alignment: ${alignment.level}, Strategy: ${alignment.primaryStrategy}, Score: ${alignment.score}%).`;
+      showSuccess(debugMsg);
     } catch (err: any) {
       console.error("Failed to generate copilot questions:", err);
       setErrorMsg(err.message || "Failed to generate Copilot questions.");
