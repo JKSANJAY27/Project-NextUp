@@ -594,6 +594,29 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
         else:
             achievements[-1] += " " + clean_text
 
+    # Extract personal links
+    github_link = ""
+    linkedin_link = ""
+    website_link = ""
+    
+    github_match = re.search(r'(https?://)?(www\.)?github\.com/[\w\.-]+(/?[\w\.-]+)*', text, re.IGNORECASE)
+    if github_match:
+        github_link = github_match.group(0).strip()
+        
+    linkedin_match = re.search(r'(https?://)?(www\.)?linkedin\.com/in/[\w\.-]+', text, re.IGNORECASE)
+    if linkedin_match:
+        linkedin_link = linkedin_match.group(0).strip()
+        
+    portfolio_match = re.search(r'portfolio\s*(?:\([^)]*\))?\s*[:\-–\s]*\s*(https?://[^\s|()]+)', text, re.IGNORECASE)
+    if portfolio_match:
+        website_link = portfolio_match.group(1).strip()
+    else:
+        urls = re.findall(r'https?://[^\s|()]+', text)
+        for u in urls:
+            if "github.com" not in u and "linkedin.com" not in u:
+                website_link = u
+                break
+
     # Build resume_data structure
     data["resume_data"] = {
         "personal": {
@@ -602,9 +625,9 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
             "phone": phone,
             "location": location,
             "title": "",
-            "github": "",
-            "linkedin": "",
-            "website": ""
+            "github": github_link,
+            "linkedin": linkedin_link,
+            "website": website_link
         },
         "summary": summary,
         "education": education_entries,
@@ -724,4 +747,77 @@ def parse_resume_pdf(file_bytes: bytes) -> Dict[str, Any]:
     if "has_arrears" not in parsed:
         parsed["has_arrears"] = False
         
+    # Post-process parsed links (e.g. project repository URLs)
+    parsed = post_process_parsed_links(parsed, text)
+        
+    return parsed
+
+def slugify(s: str) -> str:
+    return re.sub(r'[^a-z0-9]', '', s.lower())
+
+def post_process_parsed_links(parsed: Dict[str, Any], text: str) -> Dict[str, Any]:
+    if not parsed or "resume_data" not in parsed:
+        return parsed
+        
+    rd = parsed["resume_data"]
+    pers = rd.get("personal", {})
+    
+    # 1. Fill in personal links from text if missing
+    if not pers.get("github"):
+        github_match = re.search(r'(https?://)?(www\.)?github\.com/[\w\.-]+(/?[\w\.-]+)*', text, re.IGNORECASE)
+        if github_match:
+            pers["github"] = github_match.group(0).strip()
+            
+    if not pers.get("linkedin"):
+        linkedin_match = re.search(r'(https?://)?(www\.)?linkedin\.com/in/[\w\.-]+', text, re.IGNORECASE)
+        if linkedin_match:
+            pers["linkedin"] = linkedin_match.group(0).strip()
+            
+    if not pers.get("website"):
+        portfolio_match = re.search(r'portfolio\s*(?:\([^)]*\))?\s*[:\-–\s]*\s*(https?://[^\s|()]+)', text, re.IGNORECASE)
+        if portfolio_match:
+            pers["website"] = portfolio_match.group(1).strip()
+        else:
+            urls = re.findall(r'https?://[^\s|()]+', text)
+            for u in urls:
+                if "github.com" not in u and "linkedin.com" not in u:
+                    pers["website"] = u
+                    break
+
+    # 2. Match GitHub project repository URLs
+    all_github_urls = list(set(re.findall(r'https?://github\.com/[^\s|()]+', text)))
+    clean_github_urls = []
+    for u in all_github_urls:
+        clean_github_urls.append(u.rstrip('.,;:)'))
+        
+    for proj in rd.get("projects", []):
+        title = proj.get("title", "")
+        desc = proj.get("description", "")
+        
+        # Check if title has a URL in it (due to link inlining)
+        url_match = re.search(r'(https?://[^\s|()]+)', title)
+        if url_match:
+            url = url_match.group(1).rstrip('.,;:)')
+            new_title = title.replace(url_match.group(1), "").strip("() ")
+            proj["title"] = new_title
+            # Add to description if not already there
+            if url not in desc:
+                separator = "\n" if desc else ""
+                proj["description"] = f"{desc}{separator}GitHub Repository: {url}"
+                desc = proj["description"]
+                
+        # Fuzzy match project title with github repository urls
+        proj_title = proj.get("title", "")
+        proj_slug = slugify(proj_title)
+        if proj_title and proj_slug and "github.com" not in desc.lower():
+            for url in clean_github_urls:
+                parts = url.rstrip('/').split('/')
+                if len(parts) >= 5:
+                    repo_name = parts[-1]
+                    repo_slug = slugify(repo_name)
+                    if (proj_slug in repo_slug) or (repo_slug in proj_slug) or (len(proj_slug) > 3 and proj_slug[:5] in repo_slug):
+                        separator = "\n" if desc else ""
+                        proj["description"] = f"{desc}{separator}GitHub Repository: {url}"
+                        break
+                        
     return parsed

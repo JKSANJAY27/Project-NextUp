@@ -117,6 +117,8 @@ async function generateWithTransformers(
   let formattedPrompt = prompt;
   if (modelName.includes("Qwen")) {
     formattedPrompt = `<|im_start|>system\nYou are a professional placement assistant. Write high-quality, professional job application documents in English only. Do NOT output any Chinese words, characters, or keys under any circumstances.<|im_end|>\n<|im_start|>user\n${prompt}<|im_end|>\n<|im_start|>assistant\n`;
+  } else if (modelName.includes("Llama")) {
+    formattedPrompt = `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are a professional placement assistant. Write high-quality, professional job application documents in English only.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n${prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n`;
   }
 
   const output = await cachedGenerator(formattedPrompt, {
@@ -138,12 +140,47 @@ async function generateWithTransformers(
 
   let result = Array.isArray(output) ? output[0].generated_text : output.generated_text;
   
-  // Clean prompt output prefix if any
-  if (result.startsWith(formattedPrompt)) {
-    result = result.substring(formattedPrompt.length);
-  }
+  // Clean prompt output prefix using a robust extraction helper
+  result = extractAssistantResponse(result, formattedPrompt);
   
-  return result.trim();
+  return result;
+}
+
+/**
+ * Extracts only the assistant response from chat template wrappers.
+ */
+function extractAssistantResponse(result: string, formattedPrompt: string): string {
+  const trimmedResult = result.trim();
+  
+  // List of markers representing the start of assistant response in chat templates
+  const assistantMarkers = [
+    "<|start_header_id|>assistant<|end_header_id|>\n\n",
+    "<|start_header_id|>assistant<|end_header_id|>",
+    "<|im_start|>assistant\n",
+    "<|im_start|>assistant",
+    "assistant\n",
+    "assistant:"
+  ];
+
+  for (const marker of assistantMarkers) {
+    const idx = trimmedResult.lastIndexOf(marker);
+    if (idx !== -1) {
+      return trimmedResult.substring(idx + marker.length).trim();
+    }
+  }
+
+  // If the formattedPrompt is explicitly found at the beginning, strip it
+  if (trimmedResult.startsWith(formattedPrompt)) {
+    return trimmedResult.substring(formattedPrompt.length).trim();
+  }
+
+  // Fallback to substring after the formattedPrompt if there's any small spacing difference
+  const promptIndex = trimmedResult.indexOf(formattedPrompt.trim());
+  if (promptIndex !== -1) {
+    return trimmedResult.substring(promptIndex + formattedPrompt.trim().length).trim();
+  }
+
+  return trimmedResult;
 }
 
 /**

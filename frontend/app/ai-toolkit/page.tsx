@@ -127,7 +127,7 @@ function normalizeLLMResponseText(text: string): string {
   s = s.replace(/\b技能\s*:/g, '"optimized_skills":');
 
   // 3. Fix unquoted words in arrays (e.g. ["Python", Java] -> ["Python", "Java"])
-  s = s.replace(/:\s*\[([^\]]*?)\]/g, (match, arrayContent) => {
+  s = s.replace(/:\s*\[([^{}[\]]*?)\]/g, (match, arrayContent) => {
     const items = arrayContent.split(",");
     const quotedItems = items.map((item: string) => {
       const trimmed = item.trim();
@@ -428,32 +428,35 @@ function ResumeTemplatePreview({ data, template }: { data: any; template: string
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-4 text-xs">
-        {certifications.length > 0 && (
-          <div>
-            <h3 className="font-bold text-zinc-800 border-b pb-0.5 mb-1.5 uppercase tracking-wide text-[10px]">Certifications</h3>
-            <ul className="list-disc pl-4 space-y-0.5 text-zinc-700 text-[11px]">
-              {certifications.map((c: string, idx: number) => <li key={idx}>{c}</li>)}
-            </ul>
-          </div>
-        )}
-        {languages.length > 0 && (
-          <div>
-            <h3 className="font-bold text-zinc-800 border-b pb-0.5 mb-1.5 uppercase tracking-wide text-[10px]">Languages</h3>
-            <ul className="list-disc pl-4 space-y-0.5 text-zinc-700 text-[11px]">
-              {languages.map((l: string, idx: number) => <li key={idx}>{l}</li>)}
-            </ul>
-          </div>
-        )}
-        {awards.length > 0 && (
-          <div>
-            <h3 className="font-bold text-zinc-800 border-b pb-0.5 mb-1.5 uppercase tracking-wide text-[10px]">Awards & Honors</h3>
-            <ul className="list-disc pl-4 space-y-0.5 text-zinc-700 text-[11px]">
-              {awards.map((a: string, idx: number) => <li key={idx}>{a}</li>)}
-            </ul>
-          </div>
-        )}
-      </div>
+      {awards.length > 0 && (
+        <div className="space-y-1.5 mb-5">
+          <h2 className="text-xs font-bold tracking-widest text-zinc-800 uppercase border-b border-zinc-300 pb-0.5">Awards & Honors</h2>
+          <ul className="list-disc pl-4 space-y-1 text-xs text-zinc-700">
+            {awards.map((a: string, idx: number) => <li key={idx} className="leading-relaxed text-justify">{a}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {(certifications.length > 0 || languages.length > 0) && (
+        <div className="grid grid-cols-2 gap-4 text-xs">
+          {certifications.length > 0 && (
+            <div>
+              <h3 className="font-bold text-zinc-800 border-b pb-0.5 mb-1.5 uppercase tracking-wide text-[10px]">Certifications</h3>
+              <ul className="list-disc pl-4 space-y-0.5 text-zinc-700 text-[11px]">
+                {certifications.map((c: string, idx: number) => <li key={idx}>{c}</li>)}
+              </ul>
+            </div>
+          )}
+          {languages.length > 0 && (
+            <div>
+              <h3 className="font-bold text-zinc-800 border-b pb-0.5 mb-1.5 uppercase tracking-wide text-[10px]">Languages</h3>
+              <ul className="list-disc pl-4 space-y-0.5 text-zinc-700 text-[11px]">
+                {languages.map((l: string, idx: number) => <li key={idx}>{l}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 
@@ -540,8 +543,17 @@ function ResumeTemplatePreview({ data, template }: { data: any; template: string
         </div>
       )}
 
-      {(certifications.length > 0 || languages.length > 0 || awards.length > 0) && (
-        <div className="grid grid-cols-3 gap-6 pt-4 border-t border-slate-100 text-xs">
+      {awards.length > 0 && (
+        <div className="space-y-1.5 mb-6 pt-4 border-t border-slate-100">
+          <h2 className="text-xs font-black tracking-wider text-yellow-600 uppercase pb-1">Awards & Honors</h2>
+          <ul className="space-y-1 text-slate-700 text-xs">
+            {awards.map((a: string, idx: number) => <li key={idx} className="flex gap-1.5 items-start text-justify leading-relaxed"><span className="text-yellow-500 mt-1">▪</span>{a}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {(certifications.length > 0 || languages.length > 0) && (
+        <div className="grid grid-cols-2 gap-6 pt-4 border-t border-slate-100 text-xs">
           {certifications.length > 0 && (
             <div className="space-y-1.5">
               <h3 className="font-black text-slate-800 uppercase tracking-widest text-[9px]">Certifications</h3>
@@ -555,14 +567,6 @@ function ResumeTemplatePreview({ data, template }: { data: any; template: string
               <h3 className="font-black text-slate-800 uppercase tracking-widest text-[9px]">Languages</h3>
               <ul className="space-y-1 text-slate-600 text-[11px]">
                 {languages.map((l: string, idx: number) => <li key={idx} className="flex gap-1 items-start"><span className="text-yellow-500">▪</span>{l}</li>)}
-              </ul>
-            </div>
-          )}
-          {awards.length > 0 && (
-            <div className="space-y-1.5">
-              <h3 className="font-black text-slate-800 uppercase tracking-widest text-[9px]">Awards</h3>
-              <ul className="space-y-1 text-slate-600 text-[11px]">
-                {awards.map((a: string, idx: number) => <li key={idx} className="flex gap-1 items-start"><span className="text-yellow-500">▪</span>{a}</li>)}
               </ul>
             </div>
           )}
@@ -648,32 +652,35 @@ function ResumeTemplatePreview({ data, template }: { data: any; template: string
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-4 border-t border-neutral-200 pt-3">
-        {certifications.length > 0 && (
-          <div>
-            <h3 className="font-bold text-neutral-900 uppercase text-[9px] mb-1">Certifications</h3>
-            <ul className="list-disc pl-4 space-y-0.5 text-neutral-600 text-[10px]">
-              {certifications.map((c: string, idx: number) => <li key={idx}>{c}</li>)}
-            </ul>
-          </div>
-        )}
-        {languages.length > 0 && (
-          <div>
-            <h3 className="font-bold text-neutral-900 uppercase text-[9px] mb-1">Languages</h3>
-            <ul className="list-disc pl-4 space-y-0.5 text-neutral-600 text-[10px]">
-              {languages.map((l: string, idx: number) => <li key={idx}>{l}</li>)}
-            </ul>
-          </div>
-        )}
-        {awards.length > 0 && (
-          <div>
-            <h3 className="font-bold text-neutral-900 uppercase text-[9px] mb-1">Awards</h3>
-            <ul className="list-disc pl-4 space-y-0.5 text-neutral-600 text-[10px]">
-              {awards.map((a: string, idx: number) => <li key={idx}>{a}</li>)}
-            </ul>
-          </div>
-        )}
-      </div>
+      {awards.length > 0 && (
+        <div className="space-y-1 mb-4 border-t border-neutral-200 pt-3">
+          <h2 className="text-[10px] font-bold tracking-wider text-neutral-900 uppercase pb-0.5">Awards & Honors</h2>
+          <ul className="list-disc pl-4 space-y-1 text-neutral-600 text-xs">
+            {awards.map((a: string, idx: number) => <li key={idx} className="leading-relaxed text-justify">{a}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {(certifications.length > 0 || languages.length > 0) && (
+        <div className="grid grid-cols-2 gap-4 border-t border-neutral-200 pt-3">
+          {certifications.length > 0 && (
+            <div>
+              <h3 className="font-bold text-neutral-900 uppercase text-[9px] mb-1">Certifications</h3>
+              <ul className="list-disc pl-4 space-y-0.5 text-neutral-600 text-[10px]">
+                {certifications.map((c: string, idx: number) => <li key={idx}>{c}</li>)}
+              </ul>
+            </div>
+          )}
+          {languages.length > 0 && (
+            <div>
+              <h3 className="font-bold text-neutral-900 uppercase text-[9px] mb-1">Languages</h3>
+              <ul className="list-disc pl-4 space-y-0.5 text-neutral-600 text-[10px]">
+                {languages.map((l: string, idx: number) => <li key={idx}>{l}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 
@@ -885,6 +892,7 @@ function AIToolkitContent() {
   const [activeApplication, setActiveApplication] = useState<any>(null);
   const [tailoredResumeData, setTailoredResumeData] = useState<any>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("Classic");
+  const [compareWithMaster, setCompareWithMaster] = useState(false);
   
   // Helpers inside editor
   const [newCert, setNewCert] = useState("");
@@ -1078,6 +1086,11 @@ ${(company.jd_required_skills || []).join(", ")}
 Original Student Resume details:
 ${JSON.stringify(compactResumeData)}
 
+Guidelines:
+1. Maintain strict truthfulness and originality: DO NOT invent new projects, certifications, degrees, or experiences out of thin air.
+2. Tailor the wording of existing project descriptions and the summary to highlight relevant keywords from the Job Description and required skills.
+3. The optimized_skills list must be a subset of the candidate's existing skills combined with those technical skills from the JD that the candidate actually possesses (or are strongly related to their existing projects and experiences). Do not add unrelated skills.
+
 Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in conversational intro/outro, start directly with the JSON):
 {
   "optimized_skills": ["Skill1", "Skill2"],
@@ -1135,7 +1148,51 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
         };
 
         setAtsResult(mergedATSResult);
-        showSuccess("Local Browser AI tailoring completed successfully.");
+
+        // Auto-apply optimized values to tailoredResumeData
+        setTailoredResumeData((prev: any) => {
+          if (!prev) return prev;
+          const updatedData = JSON.parse(JSON.stringify(prev));
+          if (optSummary) {
+            updatedData.summary = optSummary;
+          }
+          if (optSkills && optSkills.length > 0) {
+            updatedData.skills = Array.from(new Set([
+              ...optSkills,
+              ...(updatedData.skills || [])
+            ]));
+          }
+          if (optProjects && optProjects.length > 0) {
+            const projects = updatedData.projects || [];
+            optProjects.forEach((optProj: any) => {
+              // Try to find project by title match
+              const match = projects.find((p: any) => 
+                p.title.trim().toLowerCase() === optProj.title.trim().toLowerCase()
+              );
+              if (match) {
+                match.description = optProj.description;
+              } else {
+                // If title doesn't match perfectly, fallback to fuzzy/index-based match or single project override
+                if (projects.length > 0) {
+                  if (projects.length === 1 && optProjects.length === 1) {
+                    projects[0].description = optProjects[0].description;
+                  } else {
+                    const idx = optProjects.indexOf(optProj);
+                    if (idx !== -1 && projects[idx]) {
+                      projects[idx].description = optProj.description;
+                      if (optProj.title) {
+                        projects[idx].title = optProj.title;
+                      }
+                    }
+                  }
+                }
+              }
+            });
+          }
+          return updatedData;
+        });
+
+        showSuccess("Local Browser AI tailoring completed and applied successfully. Click Save to lock it in!");
       } catch (parseErr) {
         console.error("Local LLM JSON parse/regex error:", parseErr, "Raw output:", result);
         throw new Error("Local model returned invalid JSON structure. Please try generating again.");
@@ -2432,6 +2489,16 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
 
                       <div className="flex items-center gap-2">
                         <button
+                          onClick={() => setCompareWithMaster(prev => !prev)}
+                          className={`h-10 px-4 border text-[10px] font-black uppercase flex items-center gap-2 transition-all ${
+                            compareWithMaster 
+                              ? "bg-accent border-accent text-black hover:bg-black hover:text-accent hover:border-black"
+                              : "bg-background border-border text-foreground hover:bg-muted"
+                          }`}
+                        >
+                          <span>{compareWithMaster ? "Hide Comparison" : "Compare with Master"}</span>
+                        </button>
+                        <button
                           onClick={() => window.print()}
                           className="h-10 px-4 bg-accent text-black border border-accent hover:bg-black hover:text-accent hover:border-black text-[10px] font-black uppercase flex items-center gap-2 transition-all"
                         >
@@ -2443,9 +2510,26 @@ Return ONLY a valid JSON object matching this schema exactly (do NOT wrap in con
 
                     {/* Paper layout wrapper */}
                     <div className="w-full overflow-x-auto py-4 bg-zinc-950/10 border-2 border-dashed border-border">
-                      <div className="print-area shadow-2xl bg-white max-w-[800px] mx-auto">
-                        <ResumeTemplatePreview data={tailoredResumeData} template={selectedTemplate} />
-                      </div>
+                      {compareWithMaster ? (
+                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 max-w-[1680px] mx-auto px-4">
+                          <div className="space-y-2">
+                            <span className="text-[10px] font-black text-muted-foreground uppercase tracking-widest block text-center no-print">Master Resume</span>
+                            <div className="shadow-2xl bg-white">
+                              <ResumeTemplatePreview data={masterResume} template={selectedTemplate} />
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <span className="text-[10px] font-black text-accent uppercase tracking-widest block text-center no-print">Tailored Resume (Optimized)</span>
+                            <div className="print-area shadow-2xl bg-white">
+                              <ResumeTemplatePreview data={tailoredResumeData} template={selectedTemplate} />
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="print-area shadow-2xl bg-white max-w-[800px] mx-auto">
+                          <ResumeTemplatePreview data={tailoredResumeData} template={selectedTemplate} />
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

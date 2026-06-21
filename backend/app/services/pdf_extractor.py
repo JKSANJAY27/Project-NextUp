@@ -20,22 +20,112 @@ except Exception as e:
     logger.error(f"Failed to load skills dictionary from {SKILLS_FILE}: {str(e)}")
     SKILLS_LIST = []
 
+def extract_text_with_links_fitz(file_bytes: bytes) -> str:
+    text = ""
+    try:
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            
+            # Get links and words
+            links = page.get_links()
+            words = page.get_text("words")
+            
+            if not words:
+                # Fallback to standard text extraction if no word positions
+                page_text = page.get_text("text")
+                if page_text:
+                    text += page_text + "\n"
+                continue
+                
+            rect_links = []
+            for l in links:
+                if "uri" in l and "from" in l:
+                    rect_links.append((fitz.Rect(l["from"]), l["uri"]))
+            
+            # Group words by block and line
+            lines_dict = {}
+            for w in words:
+                x0, y0, x1, y1, word, block_no, line_no, word_no = w
+                key = (block_no, line_no)
+                if key not in lines_dict:
+                    lines_dict[key] = []
+                lines_dict[key].append(w)
+                
+            sorted_keys = sorted(lines_dict.keys(), key=lambda k: (lines_dict[k][0][1], lines_dict[k][0][0]))
+            
+            page_text_lines = []
+            for key in sorted_keys:
+                line_words = sorted(lines_dict[key], key=lambda w: w[0])
+                line_text = ""
+                i = 0
+                while i < len(line_words):
+                    w = line_words[i]
+                    x0, y0, x1, y1, word, _, _, _ = w
+                    word_rect = fitz.Rect(x0, y0, x1, y1)
+                    
+                    matched_uri = None
+                    matched_rect = None
+                    for l_rect, uri in rect_links:
+                        # Check intersection
+                        if word_rect.intersects(l_rect) or l_rect.contains(word_rect):
+                            matched_uri = uri
+                            matched_rect = l_rect
+                            break
+                            
+                    if matched_uri:
+                        linked_words = [word]
+                        j = i + 1
+                        while j < len(line_words):
+                            nw = line_words[j]
+                            nx0, ny0, nx1, ny1, nword, _, _, _ = nw
+                            nword_rect = fitz.Rect(nx0, ny0, nx1, ny1)
+                            if nword_rect.intersects(matched_rect) or matched_rect.contains(nword_rect):
+                                linked_words.append(nword)
+                                j += 1
+                            else:
+                                break
+                        
+                        phrase = " ".join(linked_words)
+                        clean_uri = matched_uri.strip()
+                        # Avoid duplicating if the text is already the URL
+                        if phrase.strip().lower() == clean_uri.lower() or phrase.strip().lower() in clean_uri.lower():
+                            line_text += f"{phrase} "
+                        else:
+                            line_text += f"{phrase} ({clean_uri}) "
+                        i = j
+                    else:
+                        line_text += f"{word} "
+                        i += 1
+                page_text_lines.append(line_text.strip())
+            text += "\n".join(page_text_lines) + "\n"
+        doc.close()
+    except Exception as e:
+        logger.warning(f"fitz text+links extraction failed: {str(e)}")
+    return text
+
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     """
     Extracts text from PDF bytes.
-    First tries pdfplumber (text-based PDF).
+    First tries PyMuPDF (fitz) with link inlining.
+    If that returns empty/no text, falls back to pdfplumber.
     If extracted text length is < 100 characters, falls back to PyMuPDF + pytesseract OCR (scanned PDF).
     """
     text = ""
-    try:
-        # Try pdfplumber
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-    except Exception as e:
-        logger.warning(f"pdfplumber text extraction failed: {str(e)}")
+    # Try fitz with link inlining first
+    text = extract_text_with_links_fitz(file_bytes)
+    
+    # Fallback to pdfplumber if fitz returned nothing
+    if not text.strip():
+        logger.info("fitz extraction returned empty text. Falling back to pdfplumber...")
+        try:
+            with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
+        except Exception as e:
+            logger.warning(f"pdfplumber text extraction failed: {str(e)}")
 
     # OCR Fallback if text is empty or too short (scanned PDF)
     if len(text.strip()) < 100:
