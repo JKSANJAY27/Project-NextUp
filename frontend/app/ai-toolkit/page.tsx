@@ -510,7 +510,7 @@ function extractResumeEvidence(resumeData: any): UserEvidence[] {
 
   // Projects — scan tech + description
   const projects: any[] = resumeData.projects || [];
-  projects.forEach((p, idx) => {
+  projects.forEach((p) => {
     const combined = `${p.title || ""} ${p.tech || ""} ${p.description || ""}`.toLowerCase();
     ONTOLOGY_ALIAS_MAP.forEach(entry => {
       const escaped = entry.pattern.replace(/[-\/\\^$*+?.()|[\\\]{}]/g, "\\$&");
@@ -614,7 +614,7 @@ Current Evidence Status: ${coverage.state} — ${coverage.reasoning}`;
 // STAGE 5: Evidence Structurer — browser LLM converts answer → vault entry
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function structureAnswer(question: EvidenceQuestion, rawAnswer: string, modelType: BrowserModelType): Promise<{ evidence: UserEvidence; verification: CapabilityVerification }> {
+async function structureAnswer(question: EvidenceQuestion, rawAnswer: string): Promise<{ evidence: UserEvidence; verification: CapabilityVerification }> {
   const verification: CapabilityVerification = {
     capabilityId: question.capabilityId,
     verified: rawAnswer.trim().length > 20,
@@ -670,7 +670,7 @@ Return ONLY JSON: {"enhancement": "..."} or {"enhancement": null}`;
       if (parsed?.enhancement && typeof parsed.enhancement === "string") {
         patches.push({ section: `project_${i}`, action: "enhance", content: parsed.enhancement, reasoning: `Grounded in vault evidence for project "${p.title}"` });
       }
-    } catch (e) { /* skip this project */ }
+    } catch { /* skip this project */ }
   }
 
   return patches;
@@ -1390,20 +1390,7 @@ function ResumeTemplatePreview({ data, template }: { data: any; template: string
   }
 }
 
-interface JDConcept {
-  name: string;
-  type:
-    | "Required Skill"
-    | "Preferred Skill"
-    | "Responsibility"
-    | "Domain Knowledge"
-    | "Industry Context"
-    | "Company Name"
-    | "Product Name"
-    | "Soft Skill"
-    | "Educational Requirement"
-    | "Ignore";
-}
+
 
 
 async function getDeterministicSalt(email: string): Promise<string> {
@@ -1504,7 +1491,7 @@ function AIToolkitContent() {
   
   // Local AI State
   const [geminiAvailable, setGeminiAvailable] = useState(false);
-  const [localDownloadProgress, setLocalDownloadProgress] = useState<number | null>(null);
+  const [localDownloadProgress, _setLocalDownloadProgress] = useState<number | null>(null);
   const [localStatusMessage, setLocalStatusMessage] = useState("");
 
   const jdKeywords = React.useMemo(() => {
@@ -1775,7 +1762,7 @@ function AIToolkitContent() {
       const structuredResults = await Promise.all(
         evidenceQuestions
           .filter(q => (answers[q.id] || "").trim().length > 0)
-          .map(q => structureAnswer(q, answers[q.id] || "", atsModel))
+          .map(q => structureAnswer(q, answers[q.id] || ""))
       );
 
       const newVerifications = structuredResults.map(r => r.verification);
