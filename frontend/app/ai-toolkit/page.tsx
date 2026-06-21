@@ -1343,6 +1343,7 @@ Optimize the original resume now and return ONLY the JSON object:`;
       
 Job Title: ${company.role} at ${company.name}
 Job Keywords: ${jdKeywordsStr}
+JD Snippet: ${compactJDText}
 
 Candidate Resume:
 - Summary: ${existingSummary}
