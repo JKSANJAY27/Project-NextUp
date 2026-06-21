@@ -2087,8 +2087,6 @@ async function getDeterministicSalt(email: string): Promise<string> {
 
 function buildResumeFromAnswers({
   masterResume,
-  jobDescription,
-  gaps,
   questions,
   answers
 }: {
@@ -2398,6 +2396,7 @@ function AIToolkitContent() {
     }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const runLocalATS = async () => {
     if (!company) return;
     setCalculatingATS(true);
