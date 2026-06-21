@@ -282,6 +282,11 @@ function parseRobustLLMJSON(rawText: string): any {
     }
   }
 
+  // Pre-process unquoted keys, single-quoted keys, and trailing commas lookbehind-free
+  cleanText = cleanText.replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":');
+  cleanText = cleanText.replace(/([{,]\s*)'([a-zA-Z0-9_]+)'\s*:/g, '$1"$2":');
+  cleanText = cleanText.replace(/,\s*([}\]])/g, "$1");
+
   // Step 2: Extract block between first '{' and last '}'
   const firstBrace = cleanText.indexOf("{");
   const lastBrace = cleanText.lastIndexOf("}");
@@ -1381,94 +1386,261 @@ Optimize the original resume now and return ONLY the JSON object:`;
         throw new Error("No master resume found. Please ensure you have parsed your master resume first.");
       }
 
-      // 1. Gather all candidate skills from skills and project tech fields
-      const candidateSkills = new Set<string>();
-      (resumeData.skills || []).forEach((s: string) => candidateSkills.add(s.toLowerCase().trim()));
+      // 1. Gather all candidate proven skills and resume text
+      const provenSkills = new Set<string>();
+      (resumeData.skills || []).forEach((s: string) => provenSkills.add(s.toLowerCase().trim()));
       (resumeData.projects || []).forEach((p: any) => {
         if (p.tech) {
-          p.tech.split(',').forEach((t: string) => candidateSkills.add(t.trim().toLowerCase()));
+          p.tech.split(',').forEach((t: string) => provenSkills.add(t.trim().toLowerCase()));
         }
       });
 
-      // 2. Identify missing skills/keywords from the JD
-      const jdRequired = company.jd_required_skills || [];
-      const jdATS = company.jd_ats_keywords || [];
-      const allJDSkills = Array.from(new Set([...jdRequired, ...jdATS]));
-      
-      const missingSkills = allJDSkills.filter(skill => {
-        const sLower = skill.toLowerCase().trim();
-        if (sLower.length <= 2) return false;
-        if (sLower === company.name.toLowerCase()) return false;
-        return !candidateSkills.has(sLower);
+      const resumeTextParts: string[] = [];
+      if (resumeData.summary) resumeTextParts.push(resumeData.summary.toLowerCase());
+      (resumeData.experience || []).forEach((e: any) => {
+        if (e.role) resumeTextParts.push(e.role.toLowerCase());
+        if (e.company) resumeTextParts.push(e.company.toLowerCase());
+        if (e.description) resumeTextParts.push(e.description.toLowerCase());
+      });
+      (resumeData.projects || []).forEach((p: any) => {
+        if (p.title) resumeTextParts.push(p.title.toLowerCase());
+        if (p.tech) resumeTextParts.push(p.tech.toLowerCase());
+        if (p.description) resumeTextParts.push(p.description.toLowerCase());
+      });
+      const resumeText = resumeTextParts.join(" ");
+
+      // 2. Define standard domain-specific skill lists to match phrases
+      const domainKeywords = [
+        // Air Purification & IAQ
+        "air purification", "indoor air quality", "iaq", "hvac", "biotechnology",
+        "materials science", "nanotechnology", "life sciences", "polymer technology",
+        "chemical engineering", "prototype development", "invention disclosures",
+        "patent-related activities", "technology transfer", "feasibility assessments",
+        "benchmarking",
+        
+        // Security
+        "penetration testing", "pentesting", "adversarial simulation", "ethical hacking",
+        "threat modeling", "vulnerability assessment", "owasp top 10", "sql injection",
+        "xss", "csrf", "ssrf", "idor", "api security", "llm security", "prompt injection",
+        "jailbreaks", "retrieval poisoning", "cryptography", "aes", "rsa", "ssl/tls",
+        "burp suite", "nmap", "wireshark", "metasploit", "owasp zap", "tryhackme",
+        "hack the box", "ctf", "networking", "tcp/ip", "dns", "http/https", "proxies",
+        "sockets", "packet analysis", "cybersecurity", "web security",
+        
+        // DevOps & Cloud
+        "linux", "docker", "kubernetes", "helm charts", "aws", "gcp", "google cloud",
+        "azure", "microsoft azure", "ec2", "s3", "rds", "iam", "lambda", "vpc",
+        "nginx", "redis", "terraform", "ansible", "jenkins", "ci/cd", "github actions",
+        
+        // Software Development & AI
+        "python", "javascript", "typescript", "go", "golang", "java", "c++", "rust",
+        "node.js", "react", "next.js", "fastapi", "flask", "django", "sql", "postgresql",
+        "mongodb", "neo4j", "concurrency", "async streaming", "scaling", "latency",
+        "observability", "microservices", "websockets"
+      ];
+
+      // Extract skills from JD text using substring match
+      const jdTextLower = (company.jd_text || "").toLowerCase();
+      const extractedFromJD = new Set<string>();
+
+      domainKeywords.forEach(keyword => {
+        const escaped = keyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        // Match with word boundaries
+        const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+        if (regex.test(jdTextLower)) {
+          extractedFromJD.add(keyword);
+        }
       });
 
-      // 3. Mapping of skills to highly concrete questions that can go directly into a resume
+      // Also merge the database-extracted required skills and ats keywords (from backend)
+      const dbRequired = company.jd_required_skills || [];
+      const dbATS = company.jd_ats_keywords || [];
+      
+      const blacklistWords = new Set([
+        "strong", "active", "excellent", "global", "basic", "solutions", "environment", 
+        "team", "growth", "skills", "details", "attention", "communication", "collaborative",
+        "technologies", "opportunity", "department", "limited", "company", "role", "work",
+        "experience", "interest", "learning", "growth", "development", "product", "lines",
+        "support", "explore", "internal", "external", "business", "units", "activities",
+        "efforts", "methods", "materials", "systems", "processes"
+      ]);
+
+      [...dbRequired, ...dbATS].forEach(skill => {
+        const sLower = skill.toLowerCase().trim();
+        if (sLower.length <= 2) return;
+        if (sLower === company.name.toLowerCase()) return;
+        if (blacklistWords.has(sLower)) return;
+        
+        // Only add if it doesn't overlap or match a longer phrase already extracted
+        let shouldAdd = true;
+        Array.from(extractedFromJD).forEach(existing => {
+          if (existing.includes(sLower) || sLower.includes(existing)) {
+            shouldAdd = false;
+          }
+        });
+        if (shouldAdd) {
+          extractedFromJD.add(sLower);
+        }
+      });
+
+      // 3. Build Gap Matrix
+      const gapMatrix: Array<{ skill: string; status: "PROVEN" | "WEAKLY_PROVEN" | "NOT_PROVEN" }> = [];
+      
+      extractedFromJD.forEach(skill => {
+        const sLower = skill.toLowerCase();
+        
+        // Check if proven
+        let isProven = false;
+        provenSkills.forEach(ps => {
+          if (ps.includes(sLower) || sLower.includes(ps)) {
+            isProven = true;
+          }
+        });
+        
+        if (isProven) {
+          gapMatrix.push({ skill, status: "PROVEN" });
+        } else {
+          // Check if weakly proven (mentioned in resume text)
+          const escaped = sLower.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+          const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+          if (regex.test(resumeText)) {
+            gapMatrix.push({ skill, status: "WEAKLY_PROVEN" });
+          } else {
+            gapMatrix.push({ skill, status: "NOT_PROVEN" });
+          }
+        }
+      });
+
+      const missingSkills = gapMatrix.filter(item => item.status !== "PROVEN");
+
+      // 4. Mapping of skills to highly concrete questions that can go directly into a resume
       const skillQuestionTemplates: Record<string, string> = {
-        "linux": "Have you used Linux extensively for development, server administration, Docker deployments, security labs, or scripting? Describe your experience.",
-        "docker": "Have you packaged, run, or deployed any of your projects using Docker containers?",
-        "kubernetes": "Have you worked with Kubernetes, container orchestration, or Helm charts for microservices?",
-        "aws": "Have you hosted applications or used services on AWS (e.g. EC2, S3, RDS, IAM, Lambda, VPC)?",
-        "gcp": "Have you hosted services or used APIs on Google Cloud Platform (e.g. Compute Engine, Cloud Run, GCS)?",
-        "azure": "Have you deployed applications or managed IAM policies on Microsoft Azure?",
-        "cloud": "Have you used cloud platforms (AWS, GCP, or Azure) for hosting, storage, serverless functions, or deployment workflows?",
+        // Air Purification & IAQ
+        "air purification": "Have you worked with air purification systems, filtration technologies (e.g. HEPA, activated carbon), or aerosol science? Describe your exposure or prototype projects.",
+        "indoor air quality": "Have you measured, analyzed, or optimized indoor air quality (IAQ) parameters like CO2, PM2.5, VOCs, temperature, or relative humidity?",
+        "iaq": "Have you measured, analyzed, or optimized indoor air quality (IAQ) parameters like CO2, PM2.5, VOCs, temperature, or relative humidity?",
+        "hvac": "Have you worked with Heating, Ventilation, and Air Conditioning (HVAC) systems, ventilation design, or airflow modeling?",
+        "biotechnology": "Have you worked in biotechnology labs, molecular biology, bioprocessing, or related assay methods? Describe your coursework or lab projects.",
+        "materials science": "Have you studied or worked with synthesis, characterization, or application of materials (e.g. polymers, nanomaterials, metals)? Describe your lab experience.",
+        "nanotechnology": "Have you worked with nanomaterials, nanoparticles, or nanotech-based filtration/adsorption systems?",
+        "life sciences": "Have you participated in life sciences research, biological assays, or biochemistry lab work?",
+        "polymer technology": "Have you worked with polymer synthesis, polymer characterization (e.g. DSC, TGA), or plastics engineering?",
+        "chemical engineering": "Have you performed chemical process modeling, chemical reactor design, mass transfer, or fluid mechanics calculations?",
+        "prototype development": "Have you designed, built, and tested lab-scale or functional prototypes? Describe the tools (CAD, 3D printing), components, and testing results.",
+        "invention disclosures": "Have you contributed to invention disclosures, patent searches, or drafting patent applications? Describe your exposure.",
+        "patent-related activities": "Have you contributed to invention disclosures, patent searches, or drafting patent applications? Describe your exposure.",
+        "technology transfer": "Have you been involved in technology transfer, scaling up lab processes, or commercializing research concepts?",
+        "feasibility assessments": "Have you conducted preliminary technical calculations, cost-benefit analyses, or technical feasibility studies for a product?",
+        "benchmarking": "Have you conducted benchmarking studies to compare product specifications, performance metrics, or technologies against global competitors?",
+
+        // Security
+        "penetration testing": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
+        "pentesting": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
+        "adversarial simulation": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
+        "ethical hacking": "Have you completed coursework, labs, or certifications related to ethical hacking, secure coding, or network security?",
+        "threat modeling": "Have you performed threat modeling (e.g. STRIDE) to identify attack paths, trust boundaries, or security risks in systems?",
+        "vulnerability assessment": "Have you identified or validated security vulnerabilities (e.g. OWASP Top 10), performed scanning, or written vulnerability reports?",
+        "owasp top 10": "Have you studied or worked with OWASP Top 10 vulnerabilities (e.g. SQL Injection, XSS, CSRF, SSRF, IDOR, or insecure APIs)? Describe your exposure.",
+        "api security": "Your projects expose APIs. Have you implemented authentication, authorization, rate limiting, token validation, or abuse prevention mechanisms?",
+        "llm security": "Have you explored security risks in AI/LLM systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
+        "prompt injection": "Have you explored security risks in AI/LLM systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
+        "jailbreaks": "Have you explored security risks in AI/LLM systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
+        "retrieval poisoning": "Have you explored security risks in AI/LLM systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
+        "cryptography": "Have you worked with cryptographic principles (AES, RSA, hashing, SSL/TLS, signatures) in any project?",
+        "aes": "Have you worked with cryptographic principles (AES, RSA, hashing, SSL/TLS, signatures) in any project?",
+        "rsa": "Have you worked with cryptographic principles (AES, RSA, hashing, SSL/TLS, signatures) in any project?",
+        "ssl/tls": "Have you worked with cryptographic principles (AES, RSA, hashing, SSL/TLS, signatures) in any project?",
+        "burp suite": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how.",
+        "nmap": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how.",
+        "wireshark": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how.",
+        "metasploit": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how.",
+        "owasp zap": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how.",
+        "tryhackme": "Have you participated in CTFs (Capture The Flag), TryHackMe, Hack The Box, or bug bounty programs?",
+        "hack the box": "Have you participated in CTFs (Capture The Flag), TryHackMe, Hack The Box, or bug bounty programs?",
+        "ctf": "Have you participated in CTFs (Capture The Flag), TryHackMe, Hack The Box, or bug bounty programs?",
         "networking": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
         "tcp/ip": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
         "dns": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
-        "http": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
-        "security tools": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how you used them.",
-        "nmap": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how you used them.",
-        "wireshark": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how you used them.",
-        "metasploit": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how you used them.",
-        "burp suite": "Have you used security tools like Burp Suite, Nmap, Wireshark, Metasploit, Gobuster, Nikto, or OWASP ZAP? Describe how you used them.",
-        "owasp": "Have you studied or worked with OWASP Top 10 vulnerabilities (e.g. SQL Injection, XSS, CSRF, SSRF, IDOR, or insecure APIs)? Describe your exposure.",
+        "http/https": "What networking concepts have you worked with (TCP/IP, DNS, HTTP/HTTPS, TLS, proxies, sockets, packet analysis)?",
+        "cybersecurity": "Have you completed coursework, labs, or certifications related to cybersecurity, network security, or ethical hacking?",
         "web security": "Have you studied or worked with OWASP Top 10 vulnerabilities (e.g. SQL Injection, XSS, CSRF, SSRF, IDOR, or insecure APIs)? Describe your exposure.",
-        "cybersecurity": "Have you completed coursework, labs, or certifications related to cybersecurity, ethical hacking, secure coding, or network security?",
-        "ethical hacking": "Have you completed coursework, labs, or certifications related to cybersecurity, ethical hacking, secure coding, or network security?",
-        "cryptography": "Have you worked with cryptographic principles (AES, RSA, hashing, SSL/TLS, signatures) in any project?",
-        "penetration testing": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
-        "pentesting": "Have you participated in web, API, or infrastructure penetration testing or adversarial simulation labs?",
-        "vulnerability": "Have you identified or validated security vulnerabilities (e.g., OWASP Top 10), performed threat modeling, or written vulnerability reports?",
-        "threat modeling": "Have you analyzed systems to identify attack paths, trust boundaries, or security risks before deployment?",
-        "ctf": "Have you participated in CTFs (Capture The Flag), TryHackMe, Hack The Box, bug bounty programs, or security labs?",
-        "llm security": "Have you explored security risks in AI systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
-        "ai security": "Have you explored security risks in AI systems such as prompt injection, jailbreaks, data leakage, agent exploitation, or retrieval poisoning?",
-        "api security": "Your projects expose APIs. Have you implemented authentication, authorization, rate limiting, token validation, or abuse prevention mechanisms?",
-        "redis": "Have you used Redis for caching, session management, or pub/sub messaging in any of your real-time projects?",
+
+        // DevOps & Cloud
+        "linux": "Have you used Linux extensively for development, server administration, Docker deployments, or shell scripting? Describe your experience.",
+        "docker": "Have you packaged, run, or deployed any of your projects using Docker containers?",
+        "kubernetes": "Have you worked with Kubernetes, container orchestration, or Helm charts for microservices?",
+        "helm charts": "Have you worked with Kubernetes, container orchestration, or Helm charts for microservices?",
+        "aws": "Have you hosted applications or used services on AWS (e.g. EC2, S3, RDS, IAM, Lambda, VPC)?",
+        "amazon web services": "Have you hosted applications or used services on AWS (e.g. EC2, S3, RDS, IAM, Lambda, VPC)?",
+        "gcp": "Have you hosted services or used APIs on Google Cloud Platform (e.g. Compute Engine, Cloud Run, GCS)?",
+        "google cloud": "Have you hosted services or used APIs on Google Cloud Platform (e.g. Compute Engine, Cloud Run, GCS)?",
+        "azure": "Have you deployed applications or managed IAM policies on Microsoft Azure?",
+        "microsoft azure": "Have you deployed applications or managed IAM policies on Microsoft Azure?",
         "nginx": "Have you used Nginx as a reverse proxy, load balancer, or web server in your deployments?",
-        "git": "Have you used Git and GitHub for version control, branching, pull requests, or CI/CD pipelines?",
-        "ci/cd": "Have you set up CI/CD pipelines (e.g. GitHub Actions, Jenkins) for automated testing or deployment?"
+        "redis": "Have you used Redis for caching, session management, or pub/sub messaging in any of your real-time projects?",
+        "terraform": "Have you written Terraform configurations to define and provision cloud infrastructure (IaC)?",
+        "ansible": "Have you used Ansible for configuration management or application deployment?",
+        "jenkins": "Have you set up CI/CD pipelines (e.g. Jenkins, GitHub Actions) for automated testing or deployment?",
+        "ci/cd": "Have you set up CI/CD pipelines (e.g. Jenkins, GitHub Actions) for automated testing or deployment?",
+        "github actions": "Have you set up CI/CD pipelines (e.g. Jenkins, GitHub Actions) for automated testing or deployment?",
+
+        // Software Development & AI
+        "python": "Have you written Python code for backend APIs, data processing, machine learning, or automation scripting?",
+        "javascript": "Have you built frontend components or backend logic using JavaScript/ES6+?",
+        "typescript": "Have you worked with TypeScript for type-safe application development?",
+        "go": "Have you built concurrent services, microservices, or APIs using Go/Golang?",
+        "golang": "Have you built concurrent services, microservices, or APIs using Go/Golang?",
+        "java": "Have you worked with Java, Spring Boot, or enterprise OOP architectures?",
+        "c++": "Have you written C++ code for system programming, high-performance applications, or algorithms?",
+        "rust": "Have you written Rust code for safe systems programming or web assembly modules?",
+        "node.js": "Have you built backend services, REST APIs, or real-time systems using Node.js?",
+        "react": "Have you built responsive single-page applications using React and its lifecycle hooks?",
+        "next.js": "Have you built server-rendered React applications using Next.js (App Router or Pages Router)?",
+        "fastapi": "Have you built high-performance backend APIs using Python and FastAPI?",
+        "flask": "Have you built web applications or REST APIs using Python and Flask?",
+        "django": "Have you built database-driven web applications using Django and its ORM?",
+        "sql": "Have you written complex SQL queries, designed schemas, or optimized database indexes?",
+        "postgresql": "Have you used PostgreSQL for relational database storage and query optimization?",
+        "mongodb": "Have you designed document schemas or queried MongoDB collections?",
+        "neo4j": "Have you modeled knowledge graphs or written Cypher queries in Neo4j?",
+        "concurrency": "Have you handled multi-threading, concurrency, race conditions, or async execution in any project?",
+        "async streaming": "Have you implemented real-time async streaming (e.g. SSE, WebSockets, gRPC streaming) in any application?",
+        "scaling": "Have you designed systems for high throughput, load balancing, or horizontal scaling?",
+        "latency": "Have you analyzed or optimized system latency, query performance, or response times?",
+        "observability": "Have you integrated logging, tracing, or APM monitoring tools (e.g. Prometheus, Grafana, OpenTelemetry, Langfuse)?",
+        "microservices": "Have you designed or integrated decoupled microservices communicating via REST, gRPC, or message brokers?",
+        "websockets": "Have you used WebSockets or socket.io to enable real-time bidirectional communication?"
       };
 
       const jobQuestions: CopilotQuestion[] = [];
       const processedTemplates = new Set<string>();
 
-      // 4. Select Job-Specific Questions matching the missing skills
-      missingSkills.forEach(skill => {
-        const sLower = skill.toLowerCase().trim();
-        const templateKey = Object.keys(skillQuestionTemplates).find(k => sLower.includes(k) || k.includes(sLower));
+      // Pre-fill answers from Master Vault
+      const existingVault: VaultQA[] = resumeData.context_vault || [];
+
+      // Select Job-Specific Questions matching the missing/weakly proven skills
+      missingSkills.forEach(item => {
+        const sLower = item.skill.toLowerCase().trim();
+        const templateKey = Object.keys(skillQuestionTemplates).find(k => sLower === k || sLower.includes(k) || k.includes(sLower));
         
+        let qText = "";
         if (templateKey) {
-          const qText = skillQuestionTemplates[templateKey];
-          if (!processedTemplates.has(qText)) {
-            processedTemplates.add(qText);
-            jobQuestions.push({
-              id: Math.random().toString(),
-              type: "job_specific",
-              text: qText,
-              answer: ""
-            });
-          }
+          qText = skillQuestionTemplates[templateKey];
         } else {
-          const qText = `The job description requires experience with '${skill}'. Have you worked with this tool, framework, or concept in any projects, coursework, or self-learning? Describe your exposure.`;
-          if (!processedTemplates.has(qText)) {
-            processedTemplates.add(qText);
-            jobQuestions.push({
-              id: Math.random().toString(),
-              type: "job_specific",
-              text: qText,
-              answer: ""
-            });
-          }
+          // Format skill name for nice sentence presentation
+          const displaySkill = item.skill.split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+          qText = `The job description requires experience with '${displaySkill}'. Have you worked with this tool, framework, or concept in any projects, coursework, or self-learning? Describe your exposure.`;
+        }
+
+        if (!processedTemplates.has(qText)) {
+          processedTemplates.add(qText);
+          const match = existingVault.find(v => v.question.toLowerCase().trim() === qText.toLowerCase().trim());
+          jobQuestions.push({
+            id: Math.random().toString(),
+            type: "job_specific",
+            text: qText,
+            answer: match ? match.answer : ""
+          });
         }
       });
 
@@ -1501,11 +1673,19 @@ Optimize the original resume now and return ONLY the JSON object:`;
         }
       ];
 
-      // 6. Combine questions (Limit to max 8 questions: 3 general + 5 job_specific)
-      const finalGeneral = generalQuestions.slice(0, 3);
-      const finalJob = jobQuestions.slice(0, 5);
+      const finalGeneral = generalQuestions.map(q => {
+        const match = existingVault.find(v => v.question.toLowerCase().trim() === q.text.toLowerCase().trim());
+        return {
+          ...q,
+          answer: match ? match.answer : ""
+        };
+      });
+
+      // 6. Combine questions (Limit to max 4 general + 8 job_specific, total max 12)
+      const finalGeneralSlice = finalGeneral.slice(0, 4);
+      const finalJobSlice = jobQuestions.slice(0, 8);
       
-      const parsedQAs: CopilotQuestion[] = [...finalGeneral, ...finalJob];
+      const parsedQAs: CopilotQuestion[] = [...finalGeneralSlice, ...finalJobSlice];
 
       setCopilotQuestions(parsedQAs);
       showSuccess("Copilot questions generated successfully! Answer them below to personalize your resume.");
