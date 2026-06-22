@@ -16,7 +16,8 @@ import {
   CheckCircle2, 
   Lock,
   Plus,
-  Trash2
+  Trash2,
+  Briefcase
 } from "lucide-react";
 
 interface ApiError {
@@ -668,6 +669,13 @@ export default function ProfilePage() {
             <h1 className="text-5xl font-extrabold tracking-tighter uppercase leading-none">
               STUDENT PROFILE
             </h1>
+            <button 
+              onClick={() => router.push('/dashboard?tab=applications')}
+              className="mt-4 flex items-center justify-center gap-2 h-10 px-6 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 w-max"
+            >
+              <Briefcase size={16} />
+              <span>MY APPLICATIONS</span>
+            </button>
           </div>
 
           {/* Profile Completeness Meter */}
