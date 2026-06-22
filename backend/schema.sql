@@ -153,12 +153,26 @@ CREATE TABLE IF NOT EXISTS applications (
     UNIQUE(user_id, company_id)
 );
 
--- 10. Attachments Metadata
+-- 10. Announcements
+CREATE TABLE IF NOT EXISTS announcements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title VARCHAR(255) NOT NULL,
+    body TEXT NOT NULL,
+    announcement_type VARCHAR(100) DEFAULT 'GENERAL' CHECK (
+        announcement_type IN ('MANDATORY_REQUIREMENT', 'TRAINING', 'WORKSHOP', 'SEMINAR', 'PLACEMENT_REGISTRATION', 'CDC_NOTICE', 'GENERAL')
+    ),
+    deadline TIMESTAMP WITH TIME ZONE,
+    source_email_id UUID REFERENCES raw_ingestion_jobs(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 11. Attachments Metadata
 CREATE TABLE IF NOT EXISTS attachments_metadata (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_event_id UUID REFERENCES company_events(id) ON DELETE CASCADE,
+    announcement_id UUID REFERENCES announcements(id) ON DELETE CASCADE,
     file_name VARCHAR(255) NOT NULL,
-    file_type VARCHAR(100) NOT NULL, -- 'JD_PDF', 'SHORTLIST_EXCEL'
+    file_type VARCHAR(100) NOT NULL, -- 'JD_PDF', 'SHORTLIST_EXCEL', 'ANNOUNCEMENT_ATTACHMENT'
     storage_path TEXT,
     parsed_meta JSONB,
     uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

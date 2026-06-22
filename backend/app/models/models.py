@@ -130,18 +130,33 @@ class Application(Base):
     user = relationship("User", back_populates="applications")
     company = relationship("Company", back_populates="applications")
 
+class Announcement(Base):
+    __tablename__ = "announcements"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = Column(String, nullable=False)
+    body = Column(String, nullable=False)
+    announcement_type = Column(String, default="GENERAL") # 'MANDATORY_REQUIREMENT', 'TRAINING', 'WORKSHOP', 'SEMINAR', 'PLACEMENT_REGISTRATION', 'CDC_NOTICE', 'GENERAL'
+    deadline = Column(DateTime, nullable=True)
+    source_email_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    attachments = relationship("AttachmentMetadata", back_populates="announcement", cascade="all, delete-orphan")
+
 class AttachmentMetadata(Base):
     __tablename__ = "attachments_metadata"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    company_event_id = Column(UUID(as_uuid=True), ForeignKey("company_events.id", ondelete="CASCADE"), nullable=False)
+    company_event_id = Column(UUID(as_uuid=True), ForeignKey("company_events.id", ondelete="CASCADE"), nullable=True)
+    announcement_id = Column(UUID(as_uuid=True), ForeignKey("announcements.id", ondelete="CASCADE"), nullable=True)
     file_name = Column(String, nullable=False)
-    file_type = Column(String, nullable=False)  # 'JD_PDF', 'SHORTLIST_EXCEL'
+    file_type = Column(String, nullable=False)  # 'JD_PDF', 'SHORTLIST_EXCEL', 'ANNOUNCEMENT_ATTACHMENT'
     storage_path = Column(String)
     parsed_meta = Column(JSON)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
     company_event = relationship("CompanyEvent", back_populates="attachments")
+    announcement = relationship("Announcement", back_populates="attachments")
 
 class IngestionAuditLog(Base):
     __tablename__ = "ingestion_audit_logs"

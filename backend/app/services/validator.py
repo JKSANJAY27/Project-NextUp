@@ -160,6 +160,60 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session)
     if overall_conf < 0.75:
         requires_review = True
         
+    # Check category
+    category = ext.get("email_category", "UNKNOWN")
+    
+    # If GENERAL_ANNOUNCEMENT, we only validate the announcement block and bypass company/roles
+    if category == "GENERAL_ANNOUNCEMENT":
+        ann = ext.get("announcement", {})
+        if not isinstance(ann, dict):
+            ann = {}
+            ext["announcement"] = ann
+            
+        title_obj = ann.get("title", {})
+        if not isinstance(title_obj, dict):
+            title_obj = {"value": str(title_obj) if title_obj else "General Announcement", "confidence": 0.50}
+        title_val = title_obj.get("value") or "General Announcement"
+        title_conf = title_obj.get("confidence", 0.50)
+        if title_conf < 0.80:
+            requires_review = True
+            
+        ann["title"] = {"value": title_val, "confidence": title_conf}
+        
+        type_obj = ann.get("announcement_type", {})
+        if not isinstance(type_obj, dict):
+            type_obj = {"value": str(type_obj) if type_obj else "GENERAL", "confidence": 0.50}
+        type_val = type_obj.get("value") or "GENERAL"
+        valid_types = ['MANDATORY_REQUIREMENT', 'TRAINING', 'WORKSHOP', 'SEMINAR', 'PLACEMENT_REGISTRATION', 'CDC_NOTICE', 'GENERAL']
+        if type_val not in valid_types:
+            type_val = "GENERAL"
+        ann["announcement_type"] = {"value": type_val, "confidence": type_obj.get("confidence", 0.50)}
+        
+        deadline_obj = ann.get("deadline_iso", {})
+        if not isinstance(deadline_obj, dict):
+            deadline_obj = {"value": str(deadline_obj) if deadline_obj else None, "confidence": 0.50}
+        deadline_val = deadline_obj.get("value")
+        deadline_conf = deadline_obj.get("confidence", 0.50)
+        formatted_deadline = None
+        if deadline_val:
+            parsed_date = dateparser.parse(deadline_val)
+            if parsed_date:
+                formatted_deadline = parsed_date.isoformat()
+            else:
+                deadline_conf = min(deadline_conf, 0.40)
+                requires_review = True
+        ann["deadline_iso"] = {"value": formatted_deadline, "confidence": deadline_conf}
+        
+        body_obj = ann.get("body_summary", {})
+        if not isinstance(body_obj, dict):
+            body_obj = {"value": str(body_obj) if body_obj else "", "confidence": 0.50}
+        ann["body_summary"] = {"value": body_obj.get("value"), "confidence": body_obj.get("confidence", 0.50)}
+        
+        if "parser_metadata" not in parsed_data:
+            parsed_data["parser_metadata"] = {}
+        parsed_data["parser_metadata"]["requires_review"] = requires_review
+        return parsed_data
+        
     # 1. Company Name Normalization & Confidence Check
     company_obj = ext.get("company", {})
     if not isinstance(company_obj, dict):

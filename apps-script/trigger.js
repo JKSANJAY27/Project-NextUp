@@ -38,7 +38,7 @@ function checkPlacementsMail() {
   }
 
   // 2. Query Gmail for placement cell emails (last 48 hours to save search overhead)
-  var searchFilter = 'from:(noreply.cdcinfo@vit.ac.in OR cdc@vit.ac.in OR vitianscdc2027@vitstudent.ac.in OR vitianscdc2026@vitstudent.ac.in OR vitianscdc@vitstudent.ac.in)';
+  var searchFilter = 'from:(noreply.cdcinfo@vit.ac.in OR cdc@vit.ac.in OR vitianscdc2027@vitstudent.ac.in OR vitianscdc2026@vitstudent.ac.in OR vitianscdc@vitstudent.ac.in OR "Helpdesk CDC" OR helpdesk.cdc@vit.ac.in)';
   var threads = GmailApp.search(searchFilter, 0, 20);
 
   var newMessagesToProcess = [];

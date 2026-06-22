@@ -17,11 +17,11 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import generate_blind_index
 from app.models.models import (
-    User, StudentProfile, Company, CompanyEvent, CompanyChangeLog,
+    User, StudentProfile, Company, CompanyEvent, CompanyChangeLog, Announcement,
     Application, Notification, RawIngestionJob, AttachmentMetadata, NotificationJob,
     IngestionAuditLog
 )
-from app.services.email_parser import parse_placement_email
+from app.services.email_parser import parse_placement_email, build_regex_fallback_response
 from app.services.excel_parser import extract_neo_ids_from_excel
 from app.services.pdf_extractor import parse_job_description
 from app.services.ai_service import precompute_jd_intelligence_deterministic
@@ -201,7 +201,32 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         attachment_text = "\n\n".join(attachment_texts)
 
         # 4. Parse Email Body with Escalating LLM chain
-        raw_parsed_info = parse_placement_email(body, subject, attachment_text)
+        # Pre-classification check for Helpdesk CDC / announcements sender
+        sender_lower = sender.lower()
+        if "helpdesk cdc" in sender_lower or "helpdesk.cdc" in sender_lower:
+            logger.info(f"Helpdesk CDC sender detected for job {job.id}. Forcing GENERAL_ANNOUNCEMENT.")
+            fallback_res = build_regex_fallback_response(body, subject, force_announcement=True)
+            raw_parsed_info = {
+                "parser_metadata": {
+                    "parser_version": "v4-sender-override",
+                    "model_used": "sender-rules"
+                },
+                "overall_confidence": 1.0,
+                "extracted_data": {
+                    "email_category": "GENERAL_ANNOUNCEMENT",
+                    "company": {"value": None, "confidence": 1.0},
+                    "event_type": {"value": None, "confidence": 1.0},
+                    "roles": [],
+                    "announcement": {
+                        "title": {"value": fallback_res["extracted_data"]["announcement"]["title"]["value"], "confidence": 1.0},
+                        "announcement_type": {"value": fallback_res["extracted_data"]["announcement"]["announcement_type"]["value"], "confidence": 1.0},
+                        "deadline_iso": {"value": fallback_res["extracted_data"]["announcement"]["deadline_iso"]["value"], "confidence": 1.0},
+                        "body_summary": {"value": body[:200] + "...", "confidence": 1.0}
+                    }
+                }
+            }
+        else:
+            raw_parsed_info = parse_placement_email(body, subject, attachment_text)
         
         # Save raw parsed response into DB
         job.parsed_output = raw_parsed_info
@@ -216,6 +241,75 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         
         # Extract fields from validated output
         ext_data = validated_info.get("extracted_data", {})
+        email_category = ext_data.get("email_category", "UNKNOWN")
+        
+        if email_category == "GENERAL_ANNOUNCEMENT":
+            import uuid
+            ann_data = ext_data.get("announcement", {})
+            title = ann_data.get("title", {}).get("value") or subject or "General Announcement"
+            ann_type = ann_data.get("announcement_type", {}).get("value") or "GENERAL"
+            deadline_str = ann_data.get("deadline_iso", {}).get("value")
+            deadline = datetime.fromisoformat(deadline_str) if deadline_str else None
+            
+            # Check if this announcement already exists by checking source_email_id
+            announcement = db.query(Announcement).filter(
+                Announcement.source_email_id == str(job.id)
+            ).first()
+            
+            if not announcement:
+                announcement = Announcement(
+                    id=uuid.uuid4(),
+                    title=title,
+                    body=body,
+                    announcement_type=ann_type,
+                    deadline=deadline,
+                    source_email_id=str(job.id)
+                )
+                db.add(announcement)
+                db.flush()
+                logger.info(f"Created new announcement: {title}")
+                
+            # Process and store attachments for the announcement
+            for att in attachments:
+                filename = att.get("filename", "")
+                base64_data = att.get("base64_data", "")
+                if not base64_data:
+                    continue
+                    
+                file_bytes = base64.b64decode(base64_data)
+                
+                att_meta = db.query(AttachmentMetadata).filter(
+                    AttachmentMetadata.announcement_id == announcement.id,
+                    AttachmentMetadata.file_name == filename
+                ).first()
+
+                if not att_meta:
+                    att_meta = AttachmentMetadata(
+                        announcement_id=announcement.id,
+                        file_name=filename,
+                        file_type="ANNOUNCEMENT_ATTACHMENT",
+                        storage_path=f"attachments/announcements/{announcement.id}/{filename}",
+                        parsed_meta={}
+                    )
+                    db.add(att_meta)
+                    db.flush()
+                    logger.info(f"Processed and linked attachment {filename} to announcement {announcement.id}.")
+                
+                # Write file to storage
+                storage_dir = "storage"
+                full_path = os.path.join(storage_dir, att_meta.storage_path)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, "wb") as f:
+                    f.write(file_bytes)
+                logger.info(f"Wrote announcement attachment file to disk: {full_path}")
+            
+            # Complete job successfully
+            job.status = 'completed'
+            job.processed_at = datetime.utcnow()
+            db.commit()
+            logger.info(f"Job {job.id} processed as GENERAL_ANNOUNCEMENT successfully.")
+            return True
+
         company_name = ext_data.get("company", {}).get("value", "Unknown Company").strip()
         event_type = ext_data.get("event_type", {}).get("value", "GENERAL_UPDATE").strip()
         location = ext_data.get("job_location", {}).get("value")
@@ -464,6 +558,14 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     db.flush()
                 else:
                     logger.info(f"Re-using existing attachment metadata for {filename}.")
+                
+                # Write file to storage
+                storage_dir = "storage"
+                full_path = os.path.join(storage_dir, att_meta.storage_path)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, "wb") as f:
+                    f.write(file_bytes)
+                logger.info(f"Wrote attachment file to disk: {full_path}")
                 
                 # Process JD PDF
                 if filename.lower().endswith(".pdf"):

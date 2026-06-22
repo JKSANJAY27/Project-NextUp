@@ -45,6 +45,7 @@ interface ProjectEntry {
   title: string;
   tech: string;
   description: string;
+  github_url?: string;
 }
 
 interface ResumeData {
@@ -1048,6 +1049,13 @@ export default function ProfilePage() {
                       placeholder="Project details, what you built, achievements..."
                       rows={3}
                       className="w-full border border-border bg-background text-xs p-3 focus:outline-none focus:border-accent font-mono"
+                    />
+                    <input
+                      type="url"
+                      value={proj.github_url || ""}
+                      onChange={(e) => updateProject(idx, "github_url", e.target.value)}
+                      placeholder="GitHub Repo URL (auto-filled from PDF, or paste manually)"
+                      className="w-full border border-border bg-background text-xs px-3 h-10 focus:outline-none focus:border-accent font-mono text-zinc-500"
                     />
                     <div className="flex justify-end">
                       <button

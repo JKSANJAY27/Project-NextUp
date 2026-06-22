@@ -192,6 +192,49 @@ def parse_resume_with_huggingface(text: str) -> Dict[str, Any]:
         logger.warning(f"HuggingFace escalation resume parsing failed: {str(e)}")
     return {}
 
+def is_tech_only_line(line: str) -> bool:
+    """
+    Returns True if this line looks like a comma/pipe separated list of tech keywords.
+    Fixes the digit-stripping issue: splits by delimiter chars first so 'Neo4j' stays 'neo4j'.
+    """
+    # Split by common tech-list delimiters (comma, semicolon, pipe)
+    raw_parts = re.split(r'[,;|]', line)
+    words = []
+    for part in raw_parts:
+        # Strip whitespace, bullet chars, dashes, parens
+        cleaned = part.strip().strip('•*▪()-–— ').lower()
+        if cleaned:
+            words.append(cleaned)
+    
+    if not words:
+        return False
+    
+    tech_words = {
+        # Core languages
+        'python', 'java', 'javascript', 'typescript', 'c', 'c++', 'c#', 'go', 'rust', 'swift', 'kotlin', 'ruby', 'php', 'scala',
+        # Web frameworks
+        'react', 'reactjs', 'nextjs', 'next.js', 'vuejs', 'vue', 'angular', 'svelte', 'html', 'css', 'tailwind', 'tailwindcss',
+        'node', 'nodejs', 'node.js', 'express', 'express.js', 'fastapi', 'flask', 'django',
+        # Databases
+        'mongodb', 'sql', 'mysql', 'postgresql', 'postgres', 'sqlite', 'sqlite3', 'chromadb', 'neo4j', 'redis',
+        'nosql', 'prisma', 'supabase',
+        # AI/ML
+        'pytorch', 'scikit-learn', 'tensorflow', 'keras', 'pandas', 'numpy', 'opencv', 'nlp', 'llm', 'llms', 'rag', 'graphrag',
+        'langchain', 'langgraph', 'langfuse', 'ollama', 'deepgram', 'elevenlabs', 'onnx', 'wasm', 'webassembly',
+        # DevOps / Cloud
+        'docker', 'kubernetes', 'aws', 'gcp', 'azure', 'git', 'github', 'ci/cd', 'docker-compose',
+        # Other tech
+        'websockets', 'graphql', 'grpc', 'rest', 'api', 'apis', 'restful', 'networkx',
+        'ai', 'ml', 'web', 'full-stack', 'frontend', 'backend', 'js', 'postman', 'figma', 'jira',
+    }
+    
+    # The first word must be a tech keyword — if not, it's a project title or header
+    if words[0] not in tech_words:
+        return False
+    
+    tech_count = sum(1 for w in words if w in tech_words)
+    return (tech_count / len(words)) >= 0.65
+
 def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     data = {}
     lines = [line.strip() for line in text.split("\n") if line.strip()]
@@ -423,11 +466,41 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     exp_lines = sections.get('experience', [])
     current_exp = None
     
+    role_keywords = ['intern', 'developer', 'engineer', 'consultant', 'analyst', 'lead', 'manager', 'specialist', 'designer', 'programmer', 'architect', 'member', 'officer', 'scholar', 'student', 'founder', 'co-founder', 'head', 'president', 'vice', 'director']
+    comp_keywords = ['solutions', 'technologies', 'technology', 'inc', 'ltd', 'limited', 'corp', 'corporation', 'co', 'company', 'labs', 'systems', 'valsco', 'university', 'institute']
+
     for line in exp_lines:
         is_bullet = line.startswith(('•', '*', '-', 'o ', '▪'))
         has_date = re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b|\bPresent\b|\b20\d{2}\b', line, re.IGNORECASE)
         
-        if not is_bullet and (has_date or (not current_exp and not is_bullet)):
+        # Check if line is just a date range or location (no role keyword)
+        is_date_only = False
+        if has_date and not is_bullet:
+            has_role = any(re.search(rf"\b{re.escape(x)}\b", line.lower()) for x in role_keywords)
+            if not has_role:
+                is_date_only = True
+                
+        if is_date_only:
+            if current_exp:
+                # Extract period
+                period_match = re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\s*[-–—to]+\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\bPresent\b)\b', line, re.IGNORECASE)
+                if period_match:
+                    current_exp["period"] = period_match.group(0)
+                else:
+                    current_exp["period"] = line.strip(' ,-–—|()')
+            continue
+            
+        # Determine if we should start a new experience
+        is_new_exp = False
+        if not is_bullet:
+            has_role = any(re.search(rf"\b{re.escape(x)}\b", line.lower()) for x in role_keywords)
+            if has_role:
+                has_comp = any(re.search(rf"\b{re.escape(x)}\b", line.lower()) for x in comp_keywords)
+                has_sep = bool(re.search(r'[\u2014\u2013|]|\s+-\s+', line))
+                if has_date or has_comp or has_sep or not current_exp:
+                    is_new_exp = True
+                    
+        if is_new_exp:
             if current_exp:
                 experience_entries.append(current_exp)
                 
@@ -454,13 +527,10 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
             
             if len(parts) >= 2:
                 p0, p1 = parts[0], parts[1]
-                role_keywords = ['intern', 'developer', 'engineer', 'consultant', 'analyst', 'lead', 'manager', 'specialist', 'designer', 'programmer', 'architect', 'member', 'officer', 'scholar']
-                comp_keywords = ['solutions', 'technologies', 'technology', 'inc', 'ltd', 'limited', 'corp', 'corporation', 'co', 'company', 'labs', 'systems', 'valsco', 'university', 'institute']
-
-                p0_has_role = any(x in p0.lower() for x in role_keywords)
-                p1_has_comp = any(x in p1.lower() for x in comp_keywords)
-                p0_has_comp = any(x in p0.lower() for x in comp_keywords)
-                p1_has_role = any(x in p1.lower() for x in role_keywords)
+                p0_has_role = any(re.search(rf"\b{re.escape(x)}\b", p0.lower()) for x in role_keywords)
+                p1_has_comp = any(re.search(rf"\b{re.escape(x)}\b", p1.lower()) for x in comp_keywords)
+                p0_has_comp = any(re.search(rf"\b{re.escape(x)}\b", p0.lower()) for x in comp_keywords)
+                p1_has_role = any(re.search(rf"\b{re.escape(x)}\b", p1.lower()) for x in role_keywords)
 
                 if p0_has_role or p1_has_comp:
                     role = p0
@@ -493,7 +563,7 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
                 current_exp["description"] += "\n" + line
             else:
                 current_exp["description"] = line
-                
+
     if current_exp:
         experience_entries.append(current_exp)
         
@@ -505,12 +575,33 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     for line in proj_lines:
         is_bullet = line.startswith(('•', '*', '-', 'o ', '▪'))
         
+        # Check if line is just a tech stack for the current project
+        is_tech_only = False
+        if not is_bullet:
+            if is_tech_only_line(line):
+                is_tech_only = True
+                
+        if is_tech_only:
+            if current_proj:
+                cleaned_tech = line.strip(' ,-–—|()')
+                if current_proj["tech"]:
+                    # Avoid duplicates in tech stack list
+                    existing = [x.strip().lower() for x in current_proj["tech"].split(',')]
+                    new_skills = [x.strip() for x in cleaned_tech.split(',') if x.strip().lower() not in existing]
+                    if new_skills:
+                        current_proj["tech"] += ", " + ", ".join(new_skills)
+                else:
+                    current_proj["tech"] = cleaned_tech
+            continue
+            
         is_header = False
         if not is_bullet and len(line) > 0 and (line[0].isupper() or line[0].isdigit()):
-            has_separator = re.search(r'[\u2014\u2013|]|\s+-\s+', line)
-            has_tech = any(x in line.lower() for x in ['python', 'react', 'nodejs', 'fastapi', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain'])
-            if has_separator or (has_tech and len(line) < 100):
-                is_header = True
+            # A project header must not be a tech-only line
+            if not is_tech_only_line(line):
+                has_separator = re.search(r'[\u2014\u2013|]|\s+-\s+', line)
+                has_tech = any(x in line.lower() for x in ['python', 'react', 'nodejs', 'fastapi', 'javascript', 'c++', 'java', 'mongodb', 'sql', 'chromadb', 'ollama', 'websockets', 'langchain'])
+                if has_separator or (has_tech and len(line) < 100) or not current_proj:
+                    is_header = True
         
         if is_header:
             if current_proj:
@@ -521,8 +612,13 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
             tech = ""
             
             if len(parts) >= 2:
-                title = parts[0].strip()
-                tech = ", ".join(p.strip() for p in parts[1:])
+                right_side = " ".join(parts[1:]).strip()
+                if is_tech_only_line(right_side):
+                    title = parts[0].strip()
+                    tech = ", ".join(p.strip() for p in parts[1:])
+                else:
+                    title = line.strip()
+                    tech = ""
             else:
                 # Check for comma separation
                 comma_parts = [p.strip() for p in line.split(',') if p.strip()]
@@ -542,8 +638,9 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
                                 title = title[:match.start()].strip()
                                 break
             
-            title = re.sub(r'\s*[-–—|()]\s*$', '', title).strip()
-            title = re.sub(r'\s*\([^)]*\)\s*$', '', title).strip()
+            title = re.sub(r'\s*[-–—|]\s*$', '', title).strip()
+            # Do NOT strip parentheses containing a URL
+            title = re.sub(r'\s*\((?!https?://)[^)]*\)\s*$', '', title).strip()
             tech = re.sub(r'\s*[-–—|()]\s*$', '', tech).strip()
             
             current_proj = {
@@ -594,6 +691,29 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
         else:
             achievements[-1] += " " + clean_text
 
+    # Extract personal links
+    github_link = ""
+    linkedin_link = ""
+    website_link = ""
+    
+    github_match = re.search(r'(https?://)?(www\.)?github\.com/[\w\.-]+(/?[\w\.-]+)*', text, re.IGNORECASE)
+    if github_match:
+        github_link = github_match.group(0).strip()
+        
+    linkedin_match = re.search(r'(https?://)?(www\.)?linkedin\.com/in/[\w\.-]+', text, re.IGNORECASE)
+    if linkedin_match:
+        linkedin_link = linkedin_match.group(0).strip()
+        
+    portfolio_match = re.search(r'portfolio\s*(?:\([^)]*\))?\s*[:\-–\s]*\s*(https?://[^\s|()]+)', text, re.IGNORECASE)
+    if portfolio_match:
+        website_link = portfolio_match.group(1).strip()
+    else:
+        urls = re.findall(r'https?://[^\s|()]+', text)
+        for u in urls:
+            if "github.com" not in u and "linkedin.com" not in u:
+                website_link = u
+                break
+
     # Build resume_data structure
     data["resume_data"] = {
         "personal": {
@@ -602,9 +722,9 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
             "phone": phone,
             "location": location,
             "title": "",
-            "github": "",
-            "linkedin": "",
-            "website": ""
+            "github": github_link,
+            "linkedin": linkedin_link,
+            "website": website_link
         },
         "summary": summary,
         "education": education_entries,
@@ -724,4 +844,93 @@ def parse_resume_pdf(file_bytes: bytes) -> Dict[str, Any]:
     if "has_arrears" not in parsed:
         parsed["has_arrears"] = False
         
+    # Post-process parsed links (e.g. project repository URLs)
+    parsed = post_process_parsed_links(parsed, text)
+        
+    return parsed
+
+def slugify(s: str) -> str:
+    return re.sub(r'[^a-z0-9]', '', s.lower())
+
+def post_process_parsed_links(parsed: Dict[str, Any], text: str) -> Dict[str, Any]:
+    if not parsed or "resume_data" not in parsed:
+        return parsed
+        
+    rd = parsed["resume_data"]
+    pers = rd.get("personal", {})
+    
+    # 1. Fill in personal links from text if missing
+    if not pers.get("github"):
+        github_match = re.search(r'(https?://)?(www\.)?github\.com/[\w\.-]+(/?[\w\.-]+)*', text, re.IGNORECASE)
+        if github_match:
+            pers["github"] = github_match.group(0).strip()
+            
+    if not pers.get("linkedin"):
+        linkedin_match = re.search(r'(https?://)?(www\.)?linkedin\.com/in/[\w\.-]+', text, re.IGNORECASE)
+        if linkedin_match:
+            pers["linkedin"] = linkedin_match.group(0).strip()
+            
+    if not pers.get("website"):
+        portfolio_match = re.search(r'portfolio\s*(?:\([^)]*\))?\s*[:\-–\s]*\s*(https?://[^\s|()]+)', text, re.IGNORECASE)
+        if portfolio_match:
+            pers["website"] = portfolio_match.group(1).strip()
+        else:
+            urls = re.findall(r'https?://[^\s|()]+', text)
+            for u in urls:
+                if "github.com" not in u and "linkedin.com" not in u:
+                    pers["website"] = u
+                    break
+
+    # 2. Match GitHub project repository URLs and clean URL pollution from tech/description fields
+    all_github_urls = list(set(re.findall(r'https?://github\.com/[^\s|()]+', text)))
+    clean_github_urls = []
+    for u in all_github_urls:
+        clean_github_urls.append(u.rstrip('.,;:)'))
+        
+    for proj in rd.get("projects", []):
+        title = proj.get("title", "")
+        desc = proj.get("description", "")
+        tech = proj.get("tech", "")
+        
+        # ── Clean any inline URL artifacts from the tech field ──────────────
+        tech = re.sub(r'\s*\([^)]*https?://[^)]*\)\s*', ' ', tech)
+        tech = re.sub(r'\s*https?://\S+\s*', ' ', tech)
+        tech = re.sub(r'\s+', ' ', tech).strip()
+        proj["tech"] = tech
+        
+        # ── Clean any inline URL artifacts from bullet descriptions ─────────
+        # Removes patterns like: (https://github.com/...) at start of bullet lines
+        desc = re.sub(r'(?m)^(\s*[•\*▪\-]?\s*)\([^)]*https?://[^)]*\)\s*', r'\1', desc)
+        desc = re.sub(r'(?m)^\s*https?://\S+\s*\n?', '', desc)
+        desc = desc.strip()
+        proj["description"] = desc
+        
+        # ── Extract GitHub URL from title (link inlining artifact) ───────────
+        url_match = re.search(r'\s*\((https?://[^\s|()]+)\)', title)
+        if url_match:
+            extracted_url = url_match.group(1).rstrip('.,;:)')
+            proj["title"] = title.replace(url_match.group(0), "").strip()
+            if not proj.get("github_url") and "github.com" in extracted_url:
+                proj["github_url"] = extracted_url
+        else:
+            url_match_no_paren = re.search(r'(https?://[^\s|()]+)', title)
+            if url_match_no_paren:
+                extracted_url = url_match_no_paren.group(1).rstrip('.,;:)')
+                proj["title"] = title.replace(url_match_no_paren.group(1), "").strip("() ")
+                if not proj.get("github_url") and "github.com" in extracted_url:
+                    proj["github_url"] = extracted_url
+                
+        # ── Fuzzy match project title with discovered GitHub repository URLs ─
+        proj_title = proj.get("title", "")
+        proj_slug = slugify(proj_title)
+        if proj_title and proj_slug and not proj.get("github_url"):
+            for url in clean_github_urls:
+                parts = url.rstrip('/').split('/')
+                if len(parts) >= 5:
+                    repo_name = parts[-1]
+                    repo_slug = slugify(repo_name)
+                    if (proj_slug in repo_slug) or (repo_slug in proj_slug) or (len(proj_slug) > 3 and proj_slug[:5] in repo_slug):
+                        proj["github_url"] = url
+                        break
+                        
     return parsed

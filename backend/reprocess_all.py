@@ -7,6 +7,9 @@ from sqlalchemy import text
 # Load env vars
 load_dotenv()
 
+# Clear HF API token to bypass slow/depleted Hugging Face calls during batch reprocessing
+os.environ["HF_API_TOKEN"] = ""
+
 # Add parent path to import app modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -32,6 +35,7 @@ def main():
             "notification_jobs",
             "ingestion_audit_logs",
             "attachments_metadata",
+            "announcements",
             "company_events",
             "company_change_logs",
             "applications",

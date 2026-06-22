@@ -44,18 +44,19 @@ def clean_json_string(s: str) -> str:
 
 
 def get_parser_prompt(context_text: str) -> str:
-    return f"""You are a structured data extractor for university placement emails. 
+    return f"""You are a structured data extractor and classifier for university placement emails.
 Analyze the following email (subject, body, and any attachment text) and extract the required fields.
 Output ONLY a valid raw JSON object — no markdown, no explanation, no code fences.
 
 Required JSON Output Format:
 {{
   "parser_metadata": {{
-    "parser_version": "v3",
+    "parser_version": "v4",
     "model_used": "llm-extracted"
   }},
   "overall_confidence": 0.90,
   "extracted_data": {{
+    "email_category": "NEW_DRIVE",
     "company": {{
       "value": "Google",
       "confidence": 0.99
@@ -89,9 +90,21 @@ Required JSON Output Format:
         "requires_no_arrears": {{ "value": true, "confidence": 0.96 }},
         "eligible_branches": {{ "value": ["CSE", "IT"], "confidence": 0.94 }}
       }}
-    ]
+    ],
+    "announcement": {{
+      "title": {{ "value": "Litcoder Modules Completion Deadline", "confidence": 0.98 }},
+      "announcement_type": {{ "value": "TRAINING", "confidence": 0.98 }},
+      "deadline_iso": {{ "value": "2026-06-17T11:00:00", "confidence": 0.95 }},
+      "body_summary": {{ "value": "CDC reminder to complete minimum 11 Litcoder modules before registration.", "confidence": 0.95 }}
+    }}
   }}
 }}
+
+Guidelines for email_category (choose exactly ONE):
+- NEW_DRIVE: Mails announcing a new company hiring drive, job opening, or internship registration (creates a new workspace/opportunity). Set "announcement" fields to null.
+- DRIVE_UPDATE: Mails containing updates for an existing company drive (OA links, interview schedules, shortlist announcements, offer letters, rejection lists). Set "announcement" to null.
+- GENERAL_ANNOUNCEMENT: Non-company specific placement announcements. This includes general university notices, Litcoder modules completion warnings, TCS NQT/CoCubes general preparation instructions (not specific company drives), mandatory placement registrations, CDC seminars, resume reviews, webinars, or training workshops. Set "company", "event_type", "roles" to null.
+- UNKNOWN: Mails that are irrelevant to placement, spam, personal, or cannot be categorized.
 
 Guidelines for event_type (choose exactly ONE):
 - NEW_DRIVE: Company announces registration / opening a drive.
@@ -269,11 +282,8 @@ def parse_with_huggingface(context_text: str) -> Dict[str, Any]:
 
 def is_high_confidence(parsed: Dict[str, Any]) -> bool:
     """
-    Checks if overall confidence and core field confidences meet quality thresholds:
-      - Overall >= 0.75
-      - company confidence >= 0.80
-      - event_type confidence >= 0.80
-      - deadline_iso confidence >= 0.80 (if present and non-null)
+    Checks if overall confidence and core field confidences meet quality thresholds.
+    Supports either DRIVE/UPDATE or GENERAL_ANNOUNCEMENT schemas.
     """
     if not parsed or not isinstance(parsed, dict):
         return False
@@ -285,6 +295,21 @@ def is_high_confidence(parsed: Dict[str, Any]) -> bool:
     overall = parsed.get("overall_confidence", 0.0)
     if overall < 0.75:
         return False
+
+    category = ext.get("email_category")
+    if not category:
+        return False
+
+    if category == "GENERAL_ANNOUNCEMENT":
+        ann = ext.get("announcement")
+        if not ann or not isinstance(ann, dict):
+            return False
+        title_data = ann.get("title")
+        if not title_data or not isinstance(title_data, dict):
+            return False
+        if title_data.get("confidence", 0.0) < 0.80:
+            return False
+        return True
 
     for field in ["company", "event_type"]:
         field_data = ext.get(field)
@@ -318,7 +343,7 @@ def extract_company_from_subject(subject: str) -> str:
     parts = re.split(r'[-–—|:(]', s)
     first_part = parts[0].strip()
     clean = re.sub(
-        r'\b(?:next\s+round|tech\s+talk|super\s+dream|dream|regular|mass|recruiter|internship|placement|hiring|registration|selection|shortlist|online\s+test|oa|interview|offers?|applied|announcement|results?|list|batch|\d{4})\b.*$',
+        r'\b(?:next\s+round|tech\s+talk|super\s+dream|dream|regular|mass|recruitment|recruiter|drive|drives|internship|placement|hiring|registration|selection|shortlist|online\s+test|oa|interview|offers?|applied|announcement|results?|list|batch|\d{4})\b.*$',
         '',
         first_part,
         flags=re.I
@@ -515,7 +540,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     return data
 
 
-def build_regex_fallback_response(email_body: str, subject: str = "") -> Dict[str, Any]:
+def build_regex_fallback_response(email_body: str, subject: str = "", force_announcement: bool = False) -> Dict[str, Any]:
     """
     Builds a mock LLM-structure response from regex+spaCy extraction.
     Used as last resort when both Ollama and HuggingFace fail.
@@ -563,33 +588,97 @@ def build_regex_fallback_response(email_body: str, subject: str = "") -> Dict[st
     registration_link = parsed.get("registration_link")
     date_of_visit = parsed.get("date_of_visit", "Will be announced later")
 
-    # Determine event type from body and subject heuristics
-    event_type = "NEW_DRIVE"
+    # Determine email category and event type from subject and body heuristics
     text_to_check = (subject + " " + email_body).lower()
+    
+    # Check for GENERAL_ANNOUNCEMENT keywords
+    general_keywords = [
+        r"litcoder", r"placement registration", r"cdc seminar", r"resume review",
+        r"mock interview", r"seminar", r"webinar", r"workshop", r"kind attention",
+        r"mandatory form", r"mandatory registration", r"mandatory submission", r"not yet completed",
+        r"all interested students", r"completion of"
+    ]
+    
+    is_general = force_announcement or any(re.search(pat, text_to_check) for pat in general_keywords)
+    
+    if is_general:
+        email_category = "GENERAL_ANNOUNCEMENT"
+        # Determine announcement type
+        announcement_type = "GENERAL"
+        if "litcoder" in text_to_check or "module" in text_to_check:
+            announcement_type = "TRAINING"
+        elif "seminar" in text_to_check or "webinar" in text_to_check:
+            announcement_type = "SEMINAR"
+        elif "workshop" in text_to_check or "resume review" in text_to_check:
+            announcement_type = "WORKSHOP"
+        elif "registration" in text_to_check:
+            announcement_type = "PLACEMENT_REGISTRATION"
+        elif "mandatory" in text_to_check or "kind attention" in text_to_check:
+            announcement_type = "MANDATORY_REQUIREMENT"
+        else:
+            announcement_type = "CDC_NOTICE"
+            
+        title = subject.strip() if subject else "General Announcement"
+        title = re.sub(r'^(?:fwd|re|fw|kind attention|kind attn|attention)\b[:\s!]*', '', title, flags=re.I).strip()
+        body_summary = email_body[:200] + "..." if len(email_body) > 200 else email_body
+        
+        return {
+            "parser_metadata": {
+                "parser_version": "v4-regex-fallback",
+                "model_used": "regex-rules"
+            },
+            "overall_confidence": 0.45,
+            "extracted_data": {
+                "email_category": "GENERAL_ANNOUNCEMENT",
+                "company": {"value": None, "confidence": 0.45},
+                "event_type": {"value": None, "confidence": 0.45},
+                "roles": [],
+                "announcement": {
+                    "title": {"value": title, "confidence": 0.45},
+                    "announcement_type": {"value": announcement_type, "confidence": 0.45},
+                    "deadline_iso": {"value": deadline_iso, "confidence": 0.45},
+                    "body_summary": {"value": body_summary, "confidence": 0.45}
+                }
+            }
+        }
+
+    # Placement Drive vs Update
+    event_type = "NEW_DRIVE"
+    email_category = "NEW_DRIVE"
+    
     if "deadline extended" in text_to_check or "extension" in text_to_check:
         event_type = "DEADLINE_EXTENSION"
+        email_category = "DRIVE_UPDATE"
     elif "shortlist" in text_to_check or "short-listed" in text_to_check:
         event_type = "SHORTLIST_RELEASED"
+        email_category = "DRIVE_UPDATE"
     elif "oa result" in text_to_check or "online test result" in text_to_check or "assessment result" in text_to_check:
         event_type = "OA_RESULT"
+        email_category = "DRIVE_UPDATE"
     elif "online test" in text_to_check or "assessment" in text_to_check or " oa " in (" " + text_to_check + " ") or "online assessment" in text_to_check:
         event_type = "OA_SCHEDULED"
+        email_category = "DRIVE_UPDATE"
     elif "interview result" in text_to_check or "interview select" in text_to_check:
         event_type = "INTERVIEW_RESULT"
+        email_category = "DRIVE_UPDATE"
     elif "interview" in text_to_check:
         event_type = "INTERVIEW_SCHEDULED"
+        email_category = "DRIVE_UPDATE"
     elif "offer" in text_to_check or "congratulations" in text_to_check or "selection list" in text_to_check or "selected candidates" in text_to_check:
         event_type = "OFFER_RELEASED"
+        email_category = "DRIVE_UPDATE"
     elif "regret" in text_to_check or "not selected" in text_to_check or "rejection" in text_to_check:
         event_type = "REJECTION_RELEASED"
+        email_category = "DRIVE_UPDATE"
 
     return {
         "parser_metadata": {
-            "parser_version": "v3-regex-fallback",
+            "parser_version": "v4-regex-fallback",
             "model_used": "regex-rules"
         },
         "overall_confidence": 0.45,
         "extracted_data": {
+            "email_category": email_category,
             "company": {"value": company, "confidence": 0.45},
             "event_type": {"value": event_type, "confidence": 0.45},
             "job_location": {"value": job_location, "confidence": 0.45},
@@ -605,7 +694,8 @@ def build_regex_fallback_response(email_body: str, subject: str = "") -> Dict[st
                     "min_cgpa": {"value": min_cgpa, "confidence": 0.45},
                     "requires_no_arrears": {"value": requires_no_arrears, "confidence": 0.45}
                 }
-            ]
+            ],
+            "announcement": None
         }
     }
 
