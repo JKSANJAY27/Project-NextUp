@@ -39,6 +39,12 @@ def start_scheduler():
         scheduler.add_job(opportunity_lifecycle_cron, "interval", hours=6, id="opportunity_lifecycle_job", replace_existing=True)
         scheduler.start()
         logger.info("Background queue processor, view refresher, and opportunity lifecycle scheduler started.")
+        # Run opportunity lifecycle check once on startup immediately
+        try:
+            logger.info("Running initial opportunity lifecycle update on startup...")
+            opportunity_lifecycle_cron()
+        except Exception as e:
+            logger.error(f"Failed to run initial opportunity lifecycle update: {e}", exc_info=True)
 
 def shutdown_scheduler():
     if scheduler.running:
@@ -796,66 +802,67 @@ def process_notification_jobs(db: Session):
                     continue
 
                 if opp_current in ('archived', 'auto_archived'):
-                    # User archived this drive — do NOT auto-restore.
-                    # For high-visibility events, show a high-severity alert.
-                    # For low-priority events, only show one if no other unread notification exists.
-                    if is_high_vis:
-                        event_label = event.event_type.replace('_', ' ').title()
-                        msg = (
-                            f"🔔 [{event_label}] {company.name} ({company.role}): "
-                            f"This drive was archived. You may have applied — check your email."
-                        )
-                        notif_type = 'deadline'
-                        severity = ev_severity
-                    else:
-                        # Low priority: suppress if unread notification already exists for this company
-                        unread_for_company = db.query(Notification).join(
-                            CompanyEvent, Notification.company_event_id == CompanyEvent.id
-                        ).filter(
-                            Notification.user_id == profile.user_id,
-                            CompanyEvent.company_id == company.id,
-                            Notification.is_read == False
-                        ).first()
-                        if unread_for_company:
-                            continue  # Suppress spam
-                        msg = f"📬 New update for archived drive: {company.name} ({company.role})."
-                        notif_type = 'system'
-                        severity = 1
+                    # User archived this drive — create a low-priority collapsed notification (severity = 1), don't auto-read.
+                    event_label = event.event_type.replace('_', ' ').title()
+                    msg = f"📬 [Archived Update: {event_label}] {company.name} ({company.role}): {event.subject or 'New update'}."
+                    notif_type = 'system'
+                    severity = 1
                 else:
                     # Standard notification path for active/tracking/unseen states
                     if event.event_type == 'REGISTRATION':
                         deadline_str = company.registration_deadline.strftime('%b %d, %I:%M %p') if company.registration_deadline else 'N/A'
                         msg = f"📢 New drive: {company.name} is hiring for {company.role} ({company.category}). Deadline: {deadline_str}."
                         notif_type = 'company_update'
+                        severity = ev_severity
                     elif event.event_type == 'DEADLINE_EXTENSION':
                         deadline_str = company.registration_deadline.strftime('%b %d, %I:%M %p') if company.registration_deadline else 'N/A'
                         msg = f"⏰ Deadline extended! {company.name} ({company.role}) new deadline: {deadline_str}."
                         notif_type = 'deadline'
+                        severity = ev_severity
                     elif event.event_type == 'SHORTLIST':
-                        # Shortlisted students notified individually. Skip broadcast.
-                        continue
+                        # Check if this user is tracking this company
+                        if app and app.user_decision == 'tracking':
+                            # Verify if their Neo ID is in the shortlist
+                            is_found = check_if_student_shortlisted(db, profile.user_id, event)
+                            if not is_found:
+                                msg = f"⚠️ Shortlist released for {company.name} ({company.role}), but your Neo ID was not found. Please manually check and confirm."
+                                notif_type = 'confirm_archive'
+                                severity = 5
+                            else:
+                                msg = f"🎉 Congratulations! You are shortlisted for {company.name} ({company.role})! Prepare for next steps."
+                                notif_type = 'company_update'
+                                severity = 4
+                        else:
+                            # Skip if they aren't tracking / applied to this company
+                            continue
                     elif event.event_type == 'OA':
                         msg = f"📝 Online Assessment scheduled for {company.name} ({company.role}). Check email for details."
                         notif_type = 'company_update'
+                        severity = ev_severity
                     elif event.event_type == 'OA_RESULT':
                         msg = f"📊 OA results announced for {company.name} ({company.role}). Check your application status."
                         notif_type = 'company_update'
+                        severity = ev_severity
                     elif event.event_type == 'INTERVIEW':
                         msg = f"🎤 Interview scheduled for {company.name} ({company.role}). Check email for slot details."
                         notif_type = 'company_update'
+                        severity = ev_severity
                     elif event.event_type == 'INTERVIEW_RESULT':
                         msg = f"📋 Interview results announced for {company.name} ({company.role}). Check your application status."
                         notif_type = 'company_update'
+                        severity = ev_severity
                     elif event.event_type == 'OFFER':
                         msg = f"🎉 Offers released by {company.name} for {company.role}! Check your application status."
                         notif_type = 'offer'
+                        severity = ev_severity
                     elif event.event_type == 'REJECTION':
                         msg = f"📬 Update from {company.name} ({company.role}): {event.subject}."
                         notif_type = 'company_update'
+                        severity = ev_severity
                     else:
                         msg = f"📅 Update from {company.name}: {event.subject}."
                         notif_type = 'company_update'
-                    severity = ev_severity
+                        severity = ev_severity
 
                 db.add(Notification(
                     user_id=profile.user_id,
@@ -954,5 +961,78 @@ def update_recruitment_states(db: Session, company: Company, event_type: str, ev
             sync_user_calendar_events(db, app.user_id, company.id)
         except Exception as sync_err:
             logger.error(f"Error triggering calendar sync for user {app.user_id} and company {company.id}: {str(sync_err)}")
+
+
+def check_if_student_shortlisted(db: Session, user_id: UUID, event: CompanyEvent) -> bool:
+    """
+    Analyzes whether the student's credentials (email prefix, name, or hashed Neo ID)
+    are present in the company event body, subject, or any attachments.
+    Returns True if found, False otherwise.
+    """
+    import io
+    import pandas as pd
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return False
+    profile = db.query(StudentProfile).filter(StudentProfile.user_id == user_id).first()
+    if not profile:
+        return False
+
+    # 1. Plaintext checks: email prefix and full name
+    email_prefix = user.email.split('@')[0].lower()
+    full_name = profile.full_name.lower()
+    
+    # Text accumulator
+    all_text = f"{event.subject or ''}\n{event.body or ''}"
+    
+    # 2. Check attachments
+    attachments = db.query(AttachmentMetadata).filter(AttachmentMetadata.company_event_id == event.id).all()
+    for att in attachments:
+        if not att.storage_path:
+            continue
+        full_path = os.path.join("storage", att.storage_path)
+        if not os.path.exists(full_path):
+            continue
+            
+        try:
+            if att.file_name.lower().endswith(('.xls', '.xlsx')):
+                with open(full_path, "rb") as f:
+                    excel_bytes = f.read()
+                # Use in-memory pandas parser to find all sheet values
+                df = pd.read_excel(io.BytesIO(excel_bytes), engine="openpyxl")
+                # Flatten all string contents
+                for col in df.columns:
+                    col_vals = df[col].dropna().astype(str).str.strip().tolist()
+                    all_text += "\n" + "\n".join(col_vals)
+            elif att.file_name.lower().endswith('.pdf'):
+                with open(full_path, "rb") as f:
+                    pdf_bytes = f.read()
+                from app.services.pdf_extractor import extract_text_from_pdf
+                pdf_text = extract_text_from_pdf(pdf_bytes)
+                all_text += "\n" + pdf_text
+        except Exception as e:
+            logger.error(f"Error parsing attachment {att.file_name} for shortlist verification: {e}")
+
+    # Case-insensitive checks
+    all_text_lower = all_text.lower()
+    if email_prefix in all_text_lower:
+        logger.info(f"Student {user.email} shortlisted (email prefix matched in text)")
+        return True
+    if len(full_name) > 3 and full_name in all_text_lower:
+        logger.info(f"Student {user.email} shortlisted (full name matched in text)")
+        return True
+
+    # 3. Blind Index / Hashed Neo ID check
+    NEO_ID_REGEX = re.compile(r"\b[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d\b")
+    candidates = NEO_ID_REGEX.findall(all_text)
+    for cand in set(candidates):
+        cand_upper = cand.upper()
+        cand_hash = generate_blind_index(cand_upper, settings.PEPPER)
+        if cand_hash == profile.neo_id_hash:
+            logger.info(f"Student {user.email} shortlisted (blind index Neo ID match: {cand_upper})")
+            return True
+
+    logger.warning(f"Student {user.email} NOT found in shortlist event {event.id}")
+    return False
 
 

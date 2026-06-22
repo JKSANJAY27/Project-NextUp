@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
 import api from "@/lib/api";
@@ -28,7 +28,8 @@ import {
   AlertTriangle,
   Megaphone,
   Download,
-  Eye
+  Eye,
+  Archive
 } from "lucide-react";
 
 interface ImportantLink {
@@ -266,6 +267,7 @@ function getEligibility(user: any, company: Company): { status: string; reason: 
 function DashboardPageContent() {
   const { user, encryptionKey } = useAppStore();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const activeTab = searchParams.get("tab") || "action-center";
 
   const [companies, setCompanies] = useState<CompanyWithEligibility[]>([]);
@@ -274,7 +276,6 @@ function DashboardPageContent() {
   const [notificationBundles, setNotificationBundles] = useState<NotificationBundle[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<Announcement | null>(null);
-  const [showArchivedOpportunities, setShowArchivedOpportunities] = useState(false);
   
   const [loading, setLoading] = useState(true);
   const [showAddCompany, setShowAddCompany] = useState(false);
@@ -667,11 +668,13 @@ function DashboardPageContent() {
     }
   };
 
-  // Opportunity state actions: track | archive | snooze | restore
-  // Called for companies in decision_pending / archived state (no Application workspace yet)
-  const handleOpportunityAction = async (companyId: string, action: "track" | "archive" | "snooze" | "restore") => {
+  const handleOpportunityAction = async (companyId: string, action: "track" | "archive" | "snooze" | "restore", reason?: string) => {
     try {
-      await api.post(`/applications/opportunity-state?company_id=${companyId}&action=${action}`);
+      let url = `/applications/opportunity-state?company_id=${companyId}&action=${action}`;
+      if (reason) {
+        url += `&reason=${reason}`;
+      }
+      await api.post(url);
       await fetchDashboardData();
     } catch (err) {
       console.error(`Opportunity action '${action}' failed:`, err);
@@ -997,7 +1000,7 @@ function DashboardPageContent() {
     if (activeTab === "opportunities") {
       // Hide archived/auto_archived unless user wants to see them
       if (effectiveState === "archived" || effectiveState === "auto_archived") {
-        return showArchivedOpportunities;
+        return false;
       }
       // Hide if it is a confirmed tracking app (belongs in Tracking tab)
       if (app && app.user_decision === "tracking") return false;
@@ -1310,95 +1313,165 @@ function DashboardPageContent() {
                       <span className="text-[10px] uppercase">Your placements email inbox is fully processed.</span>
                     </div>
                   ) : (
-                    untriagedBundles.map((bundle) => (
-                      <div key={bundle.company_id} className="border-2 border-border p-4 bg-background space-y-4 relative">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <h5 className="font-extrabold text-sm uppercase tracking-tighter text-foreground">
-                              {bundle.company_name}
-                            </h5>
-                            <p className="text-[10px] text-muted-foreground uppercase">
-                              {bundle.role} ✦ {bundle.category}
-                            </p>
-                          </div>
-                          <span className="bg-accent/20 border border-accent text-accent text-[9px] font-black px-1.5 py-0.5 uppercase">
-                            {bundle.unread_count} NEW
-                          </span>
-                        </div>
-
-                        <div className="space-y-1.5 border-t border-border pt-2.5">
-                          {bundle.notifications.slice(0, 3).map((notif) => {
-                            const severityStars = notif.severity >= 4 ? '🔴' : notif.severity >= 3 ? '🟠' : '🟡';
-                            const isHighVis = (notif.severity || 1) >= 3;
-                            return (
-                              <div key={notif.id} className="text-[11px] text-foreground leading-normal flex items-start gap-1">
-                                <span className="shrink-0 mt-0.5" title={`Severity ${notif.severity}`}>{severityStars}</span>
-                                <p className={`flex-1 ${isHighVis ? 'font-semibold' : ''}`}>{notif.message}</p>
+                    untriagedBundles.map((bundle) => {
+                      const hasConfirmArchive = bundle.notifications.some(n => n.notification_type === 'confirm_archive');
+                      
+                      if (hasConfirmArchive) {
+                        return (
+                          <div key={bundle.company_id} className="border-2 border-red-500 bg-red-500/5 p-4 space-y-4 relative shadow-md shadow-red-500/10">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <h5 className="font-extrabold text-sm uppercase tracking-tighter text-foreground">
+                                  {bundle.company_name}
+                                </h5>
+                                <p className="text-[10px] text-muted-foreground uppercase">
+                                  {bundle.role} ✦ {bundle.category}
+                                </p>
                               </div>
-                            );
-                          })}
-                          {bundle.notifications.length > 3 && (
-                            <p className="text-[9px] text-muted-foreground uppercase font-bold pl-3">
-                              + {bundle.notifications.length - 3} more updates
-                            </p>
-                          )}
-                        </div>
+                              <span className="bg-red-500/20 border border-red-500 text-red-400 text-[9px] font-black px-1.5 py-0.5 uppercase flex items-center gap-1">
+                                <AlertTriangle size={10} /> ACTION REQUIRED
+                              </span>
+                            </div>
 
-                        <div className="border-t border-border pt-3 flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => handleUpdateApplication(bundle.company_id, { user_decision: 'tracking' })}
-                            className="h-8 px-3 border border-border bg-foreground text-background font-bold text-[10px] hover:bg-accent hover:text-black hover:border-accent uppercase tracking-wider transition-all"
-                          >
-                            🎯 Track
-                          </button>
-                          
-                          <button
-                            onClick={async () => {
-                              try {
-                                await api.post(`/notifications/company/${bundle.company_id}/read`);
-                                // Archive via opportunity-state if no real app exists, else update app
-                                const hasApp = !!applications[bundle.company_id];
-                                if (hasApp) {
-                                  handleUpdateApplication(bundle.company_id, { user_decision: 'archived' });
-                                } else {
-                                  handleOpportunityAction(bundle.company_id, 'archive');
-                                }
-                              } catch (err) {
-                                console.error("Failed to dismiss bundle:", err);
-                              }
-                            }}
-                            className="h-8 px-3 border border-border bg-transparent text-foreground font-bold text-[10px] hover:bg-muted uppercase tracking-wider transition-all"
-                          >
-                            👁️ Dismiss
-                          </button>
-                          
-                          <div className="relative group">
+                            <div className="space-y-1.5 border-t border-border pt-2.5">
+                              {bundle.notifications.slice(0, 3).map((notif) => {
+                                return (
+                                  <div key={notif.id} className="text-[11px] text-foreground leading-normal flex items-start gap-1">
+                                    <span className="shrink-0 mt-0.5">⚠️</span>
+                                    <p className="flex-1 font-semibold">{notif.message}</p>
+                                  </div>
+                                );
+                              })}
+                              {bundle.notifications.length > 3 && (
+                                <p className="text-[9px] text-muted-foreground uppercase font-bold pl-3">
+                                  + {bundle.notifications.length - 3} more updates
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="border-t border-border pt-3 flex items-center justify-end gap-2">
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await api.post(`/notifications/company/${bundle.company_id}/read`);
+                                    await handleUpdateApplication(bundle.company_id, { status: 'Shortlisted', user_decision: 'tracking' });
+                                  } catch (err) {
+                                    console.error("Failed to mark shortlisted:", err);
+                                  }
+                                }}
+                                className="h-8 px-3 border border-emerald-500/50 bg-emerald-950/30 text-emerald-400 font-bold text-[10px] hover:bg-emerald-500 hover:text-black uppercase tracking-wider transition-all"
+                              >
+                                🎉 I Was Shortlisted
+                              </button>
+                              
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await api.post(`/notifications/company/${bundle.company_id}/read`);
+                                    await handleOpportunityAction(bundle.company_id, 'archive', 'NOT_SHORTLISTED');
+                                  } catch (err) {
+                                    console.error("Failed to confirm and archive:", err);
+                                  }
+                                }}
+                                className="h-8 px-3 border border-red-500/50 bg-red-950/30 text-red-400 font-bold text-[10px] hover:bg-red-500 hover:text-white uppercase tracking-wider transition-all"
+                              >
+                                ✗ Confirm & Archive
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div key={bundle.company_id} className="border-2 border-border p-4 bg-background space-y-4 relative">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <h5 className="font-extrabold text-sm uppercase tracking-tighter text-foreground">
+                                {bundle.company_name}
+                              </h5>
+                              <p className="text-[10px] text-muted-foreground uppercase">
+                                {bundle.role} ✦ {bundle.category}
+                              </p>
+                            </div>
+                            <span className="bg-accent/20 border border-accent text-accent text-[9px] font-black px-1.5 py-0.5 uppercase">
+                              {bundle.unread_count} NEW
+                            </span>
+                          </div>
+
+                          <div className="space-y-1.5 border-t border-border pt-2.5">
+                            {bundle.notifications.slice(0, 3).map((notif) => {
+                              const severityStars = notif.severity >= 4 ? '🔴' : notif.severity >= 3 ? '🟠' : '🟡';
+                              const isHighVis = (notif.severity || 1) >= 3;
+                              return (
+                                <div key={notif.id} className="text-[11px] text-foreground leading-normal flex items-start gap-1">
+                                  <span className="shrink-0 mt-0.5" title={`Severity ${notif.severity}`}>{severityStars}</span>
+                                  <p className={`flex-1 ${isHighVis ? 'font-semibold' : ''}`}>{notif.message}</p>
+                                </div>
+                              );
+                            })}
+                            {bundle.notifications.length > 3 && (
+                              <p className="text-[9px] text-muted-foreground uppercase font-bold pl-3">
+                                + {bundle.notifications.length - 3} more updates
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="border-t border-border pt-3 flex items-center justify-end gap-2">
                             <button
-                              className="h-8 px-3 border border-border bg-transparent text-muted-foreground font-bold text-[10px] hover:bg-muted hover:text-foreground uppercase tracking-wider transition-all"
+                              onClick={() => handleUpdateApplication(bundle.company_id, { user_decision: 'tracking' })}
+                              className="h-8 px-3 border border-border bg-foreground text-background font-bold text-[10px] hover:bg-accent hover:text-black hover:border-accent uppercase tracking-wider transition-all"
                             >
-                              ⏰ Snooze
+                              🎯 Track
                             </button>
-                            <div className="absolute right-0 bottom-full z-10 mb-1 hidden group-hover:block hover:block bg-background border border-border py-1 shadow-xl min-w-[120px]">
-                              {[1, 3, 7].map((days) => (
-                                <button
-                                  key={days}
-                                  onClick={() => {
-                                    const snoozeDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
-                                    handleUpdateApplication(bundle.company_id, { 
-                                      user_decision: 'snoozed',
-                                      snoozed_until: snoozeDate
-                                    });
-                                  }}
-                                  className="w-full text-left px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider hover:bg-muted text-foreground"
-                                >
-                                  {days} Day{days > 1 ? 's' : ''}
-                                </button>
-                              ))}
+                            
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await api.post(`/notifications/company/${bundle.company_id}/read`);
+                                  // Archive via opportunity-state if no real app exists, else update app
+                                  const hasApp = !!applications[bundle.company_id];
+                                  if (hasApp) {
+                                    handleUpdateApplication(bundle.company_id, { user_decision: 'archived' });
+                                  } else {
+                                    handleOpportunityAction(bundle.company_id, 'archive');
+                                  }
+                                } catch (err) {
+                                  console.error("Failed to dismiss bundle:", err);
+                                }
+                              }}
+                              className="h-8 px-3 border border-border bg-transparent text-foreground font-bold text-[10px] hover:bg-muted uppercase tracking-wider transition-all"
+                            >
+                              👁️ Dismiss
+                            </button>
+                            
+                            <div className="relative group">
+                              <button
+                                className="h-8 px-3 border border-border bg-transparent text-muted-foreground font-bold text-[10px] hover:bg-muted hover:text-foreground uppercase tracking-wider transition-all"
+                              >
+                                ⏰ Snooze
+                              </button>
+                              <div className="absolute right-0 bottom-full z-10 mb-1 hidden group-hover:block hover:block bg-background border border-border py-1 shadow-xl min-w-[120px]">
+                                {[1, 3, 7].map((days) => (
+                                  <button
+                                    key={days}
+                                    onClick={() => {
+                                      const snoozeDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+                                      handleUpdateApplication(bundle.company_id, { 
+                                        user_decision: 'snoozed',
+                                        snoozed_until: snoozeDate
+                                      });
+                                    }}
+                                    className="w-full text-left px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider hover:bg-muted text-foreground"
+                                  >
+                                    {days} Day{days > 1 ? 's' : ''}
+                                  </button>
+                                ))}
+                              </div>
                             </div>
                           </div>
                         </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -2086,14 +2159,11 @@ function DashboardPageContent() {
               
               <div className="flex flex-wrap gap-4">
                 <button
-                  onClick={() => setShowArchivedOpportunities(prev => !prev)}
-                  className={`flex items-center justify-center gap-2 h-14 px-6 border-2 font-extrabold tracking-wider transition-all active:scale-95 uppercase text-sm ${
-                    showArchivedOpportunities
-                      ? 'border-amber-500 bg-amber-500/10 text-amber-400'
-                      : 'border-border bg-background hover:bg-muted'
-                  }`}
+                  onClick={() => router.push('/dashboard?tab=archived')}
+                  className="flex items-center justify-center gap-2 h-14 px-6 border-2 border-border bg-background hover:bg-muted font-extrabold tracking-wider transition-all active:scale-95 uppercase text-sm text-muted-foreground hover:text-foreground"
                 >
-                  {showArchivedOpportunities ? 'HIDE ARCHIVED' : 'SHOW ARCHIVED'}
+                  <Archive size={16} />
+                  <span>VIEW ARCHIVED DRIVES</span>
                 </button>
                 <button
                   onClick={handleTriggerSync}
@@ -2552,6 +2622,120 @@ function DashboardPageContent() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ==================== 2.5 ARCHIVED TAB ==================== */}
+        {activeTab === "archived" && (
+          <div className="space-y-12 animate-in fade-in duration-300">
+            <div className="flex justify-between items-end border-b-2 border-border pb-6">
+              <div className="space-y-1">
+                <h1 className="text-[clamp(2rem,6vw,4rem)] font-extrabold tracking-tighter uppercase leading-none">
+                  ARCHIVED PLACEMENTS
+                </h1>
+                <p className="text-xs text-muted-foreground uppercase tracking-widest">
+                  View and manage placement drives you have skipped, declined, or not been shortlisted for
+                </p>
+              </div>
+              <button
+                onClick={() => router.push('/dashboard?tab=opportunities')}
+                className="flex items-center justify-center h-14 px-6 border-2 border-border bg-background font-extrabold tracking-wider hover:bg-muted transition-all active:scale-95 uppercase text-sm"
+              >
+                <span>BACK TO ACTIVE DRIVES</span>
+              </button>
+            </div>
+
+            {loading ? (
+              <div className="text-center py-20 font-bold uppercase tracking-wider text-muted-foreground">
+                Loading archive database...
+              </div>
+            ) : (() => {
+              const archivedDrives = companies.filter(c => {
+                const opp = opportunityStates[c.id];
+                const app = applications[c.id];
+                return opp?.state === "archived" || opp?.state === "auto_archived" || app?.user_decision === "archived";
+              });
+
+              if (archivedDrives.length === 0) {
+                return (
+                  <div className="text-center py-20 border-2 border-dashed border-border font-bold uppercase tracking-wider text-muted-foreground">
+                    No archived placement drives found.
+                  </div>
+                );
+              }
+
+              return (
+                <div className="border-2 border-border overflow-hidden relative bg-card shadow-2xl">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b-2 border-border bg-muted/30 text-[10px] font-extrabold uppercase tracking-widest text-muted-foreground">
+                          <th className="py-4 px-6">COMPANY / ROLE</th>
+                          <th className="py-4 px-6">CATEGORY</th>
+                          <th className="py-4 px-6">CTC / STIPEND</th>
+                          <th className="py-4 px-6">ARCHIVED DATE</th>
+                          <th className="py-4 px-6">ARCHIVE REASON</th>
+                          <th className="py-4 px-6 text-right">ACTION</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {archivedDrives.map((c) => {
+                          const opp = opportunityStates[c.id];
+                          const archiveDateStr = opp?.archived_at
+                            ? new Date(opp.archived_at).toLocaleString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })
+                            : 'N/A';
+                          
+                          // Normalize reason for visual rendering
+                          const rawReason = opp?.archive_reason || "MANUAL_NOT_INTERESTED";
+                          let reasonText = "MANUAL ARCHIVE";
+                          let reasonColor = "border-zinc-500/30 text-zinc-400 bg-zinc-500/5";
+                          if (rawReason === "NOT_SHORTLISTED") {
+                            reasonText = "NOT SHORTLISTED";
+                            reasonColor = "border-red-500/30 text-red-400 bg-red-500/5";
+                          } else if (rawReason === "DEADLINE_EXPIRED" || rawReason === "AUTO_ARCHIVED") {
+                            reasonText = "EXPIRED DRIVE";
+                            reasonColor = "border-amber-500/30 text-amber-400 bg-amber-500/5";
+                          }
+
+                          return (
+                            <tr key={c.id} className="hover:bg-muted/15 transition-colors">
+                              <td className="py-5 px-6 font-bold uppercase text-sm">
+                                <div>{c.name}</div>
+                                <div className="text-[10px] text-muted-foreground font-normal tracking-tight mt-0.5">{c.role}</div>
+                              </td>
+                              <td className="py-5 px-6">
+                                <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 bg-muted border border-border text-foreground">
+                                  {c.category}
+                                </span>
+                              </td>
+                              <td className="py-5 px-6 text-xs font-mono font-bold text-foreground/80">
+                                {c.ctc || c.stipend || "NO DATA"}
+                              </td>
+                              <td className="py-5 px-6 text-xs text-muted-foreground">
+                                {archiveDateStr}
+                              </td>
+                              <td className="py-5 px-6">
+                                <span className={`text-[9px] font-extrabold uppercase px-2 py-0.5 border ${reasonColor}`}>
+                                  {reasonText}
+                                </span>
+                              </td>
+                              <td className="py-5 px-6 text-right">
+                                <button
+                                  onClick={() => handleOpportunityAction(c.id, 'restore')}
+                                  className="h-10 px-4 border-2 border-accent text-accent font-extrabold text-xs tracking-wider uppercase hover:bg-accent hover:text-black transition-all active:scale-95"
+                                >
+                                  RESTORE DRIVE
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 

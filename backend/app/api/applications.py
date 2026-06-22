@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
-from typing import List, Any, Dict
+from typing import List, Any, Dict, Optional
 from uuid import UUID
 from datetime import datetime
 from app.core.database import get_db
@@ -236,6 +236,7 @@ def delete_application(
 def upsert_opportunity_state(
     company_id: UUID,
     action: str,  # "track" | "archive" | "snooze" | "restore"
+    reason: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -286,9 +287,10 @@ def upsert_opportunity_state(
         if existing_app:
             existing_app.user_decision = 'archived'
 
-        set_archived(db=db, user_id=current_user.id, company_id=company_id, reason="MANUAL")
+        archive_reason = reason or "MANUAL_NOT_INTERESTED"
+        set_archived(db=db, user_id=current_user.id, company_id=company_id, reason=archive_reason)
         db.commit()
-        return {"status": "archived", "company_id": str(company_id)}
+        return {"status": "archived", "company_id": str(company_id), "archive_reason": archive_reason}
 
     elif action == "snooze":
         set_snooze(db=db, user_id=current_user.id, company_id=company_id)
