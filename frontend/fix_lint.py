@@ -1,48 +1,44 @@
-FILE = "app/ai-toolkit/page.tsx"
+import os
+import re
 
-with open(FILE, "r", encoding="utf-8") as f:
+path = r"d:\NextupAI\Project-NextUp\frontend\app\dashboard\page.tsx"
+with open(path, "r", encoding="utf-8") as f:
     content = f.read()
 
-# 1. Fix idx defined but never used in projects loop
-content = content.replace("projects.forEach((p, idx) => {", "projects.forEach((p) => {")
+# Remove 'Pin' from lucide-react import
+content = re.sub(r'\bPin,\s*', '', content)
 
-# 2. Fix modelType in structureAnswer
-# In callers:
-content = content.replace("structureAnswer(q, answers[q.id] || \"\", atsModel)", "structureAnswer(q, answers[q.id] || \"\")")
-# In definition:
-content = content.replace(
-    "async function structureAnswer(question: EvidenceQuestion, rawAnswer: string, modelType: BrowserModelType): Promise<{ evidence: UserEvidence; verification: CapabilityVerification }> {",
-    "async function structureAnswer(question: EvidenceQuestion, rawAnswer: string): Promise<{ evidence: UserEvidence; verification: CapabilityVerification }> {"
-)
+# Remove KANBAN_COLUMNS definition
+content = re.sub(r'const KANBAN_COLUMNS = \[\s*\{ id: "Applied"[\s\S]*?\];', '', content)
 
-# 3. Fix unused 'e' in catch block
-content = content.replace("} catch (e) { /* skip this project */ }", "} catch { /* skip this project */ }")
+# Remove draggedOverColumn state
+content = re.sub(r'const \[draggedOverColumn, setDraggedOverColumn\] = useState<string \| null>\(null\);\s*', '', content)
 
-# 4. Remove unused JDConcept interface
-jd_concept_block = """interface JDConcept {
-  name: string;
-  type:
-    | "Required Skill"
-    | "Preferred Skill"
-    | "Responsibility"
-    | "Domain Knowledge"
-    | "Industry Context"
-    | "Company Name"
-    | "Product Name"
-    | "Soft Skill"
-    | "Educational Requirement"
-    | "Ignore";
-}"""
+# Remove focusMode state
+content = re.sub(r'const \[focusMode, setFocusMode\] = useState\(false\);\s*', '', content)
 
-content = content.replace(jd_concept_block.replace("\r\n", "\n"), "")
+# Remove drag and drop handlers
+content = re.sub(r'const handleDragStart = [\s\S]*?};\s*(?=const handleDragOver)', '', content)
+content = re.sub(r'const handleDragOver = [\s\S]*?};\s*(?=const handleDragLeave)', '', content)
+content = re.sub(r'const handleDragLeave = [\s\S]*?};\s*(?=const handleDrop)', '', content)
+content = re.sub(r'const handleDrop = [\s\S]*?};\s*', '', content)
 
-# 5. Fix unused setLocalDownloadProgress state setter
-content = content.replace(
-    "const [localDownloadProgress, setLocalDownloadProgress] = useState<number | null>(null);",
-    "const [localDownloadProgress, _setLocalDownloadProgress] = useState<number | null>(null);"
-)
+# Try to remove unused app variable inside dashboard/page.tsx if present
+content = re.sub(r'const app = applications\[c\.id\];\s*', '', content)
 
-with open(FILE, "w", encoding="utf-8", newline="\n") as f:
+with open(path, "w", encoding="utf-8") as f:
     f.write(content)
 
-print("ESLint fixes applied successfully!")
+# Fix tracking/page.tsx
+tracking_path = r"d:\NextupAI\Project-NextUp\frontend\app\tracking\page.tsx"
+with open(tracking_path, "r", encoding="utf-8") as f:
+    tracking_content = f.read()
+
+tracking_content = tracking_content.replace("(resApps.data || []).forEach((record: Record<string, unknown>) => {", "(resApps.data || []).forEach((record: Application) => {")
+# Just in case we didn't apply the first time properly or it was partially reverted
+tracking_content = tracking_content.replace("(resApps.data || []).forEach((record: any) => {", "(resApps.data || []).forEach((record: Application) => {")
+
+with open(tracking_path, "w", encoding="utf-8") as f:
+    f.write(tracking_content)
+
+print("Fixed")

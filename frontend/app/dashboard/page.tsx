@@ -22,7 +22,6 @@ import {
   Clock,
   Calendar,
   ArrowRight,
-  Pin,
   TrendingUp,
   Award,
   AlertTriangle,
@@ -184,14 +183,7 @@ interface Announcement {
   attachments: AttachmentMetadata[];
 }
 
-const KANBAN_COLUMNS = [
-  { id: "Applied", name: "APPLIED" },
-  { id: "Shortlisted", name: "SHORTLISTED" },
-  { id: "OA", name: "ONLINE ASSESSMENT" },
-  { id: "Technical", name: "TECHNICAL INTERVIEW" },
-  { id: "HR", name: "HR INTERVIEW" },
-  { id: "Offer", name: "OFFER RECEIVED" }
-];
+
 
 async function calculateHash(text: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -209,6 +201,12 @@ function DashboardPageContent() {
   const router = useRouter();
   const activeTab = searchParams.get("tab") || "action-center";
 
+  useEffect(() => {
+    if (activeTab === "tracking") {
+      router.replace("/tracking");
+    }
+  }, [activeTab, router]);
+
   const [companies, setCompanies] = useState<CompanyWithEligibility[]>([]);
   const [applications, setApplications] = useState<Record<string, Application>>({});
   const [opportunityStates, setOpportunityStates] = useState<Record<string, OpportunityState>>({});
@@ -220,11 +218,8 @@ function DashboardPageContent() {
   const [showAddCompany, setShowAddCompany] = useState(false);
   const [filterCategory, setFilterCategory] = useState("ALL");
   const [filterEligibility, setFilterEligibility] = useState("ALL");
-  const [draggedOverColumn, setDraggedOverColumn] = useState<string | null>(null);
   const [selectedCompany, setSelectedCompany] = useState<CompanyWithEligibility | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [focusMode, setFocusMode] = useState(false);
-
   // Bulk Selection and Comparison states
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([]);
   const [showComparison, setShowComparison] = useState(false);
@@ -593,12 +588,6 @@ function DashboardPageContent() {
     }
   };
 
-  const handleStatusChange = async (companyId: string, newStatus: string) => {
-    await handleUpdateApplication(companyId, {
-      status: newStatus,
-      current_round: newStatus
-    });
-  };
 
   // Timeline Notes GCM Encryption & Save
   const handleSaveRoundNote = async (roundKey: string, noteText: string) => {
@@ -639,28 +628,6 @@ function DashboardPageContent() {
   };
 
   // Native HTML5 Drag and Drop handlers
-  const handleDragStart = (e: React.DragEvent, companyId: string) => {
-    e.dataTransfer.setData("text/plain", companyId);
-  };
-
-  const handleDragOver = (e: React.DragEvent, colId: string) => {
-    e.preventDefault();
-    setDraggedOverColumn(colId);
-  };
-
-  const handleDragLeave = () => {
-    setDraggedOverColumn(null);
-  };
-
-  const handleDrop = async (e: React.DragEvent, colId: string) => {
-    e.preventDefault();
-    setDraggedOverColumn(colId);
-    const companyId = e.dataTransfer.getData("text/plain");
-    if (companyId) {
-      await handleStatusChange(companyId, colId);
-    }
-  };
-
   // Check if application is currently snoozed
   const isSnoozed = (app: Application) => {
     if (!app || !app.snoozed_until) return false;
@@ -904,9 +871,9 @@ function DashboardPageContent() {
 
   // Filter lists based on tab selection
   const filteredCompanies = companies.filter((c) => {
-    const app = applications[c.id];
     const oppState = opportunityStates[c.id];
     const effectiveState = oppState?.state;
+    const app = applications[c.id];
 
     if (activeTab === "opportunities") {
       // Hide archived/auto_archived unless user wants to see them
@@ -915,12 +882,6 @@ function DashboardPageContent() {
       }
       // Hide if it is a confirmed tracking app (belongs in Tracking tab)
       if (app && app.user_decision === "tracking") return false;
-    }
-
-    if (activeTab === "tracking") {
-      if (!app || app.user_decision !== "tracking") return false;
-      if (isSnoozed(app)) return false;
-      if (focusMode && app.workspace_priority_override !== "pinned") return false;
     }
 
     if (activeTab === "applications") {
@@ -2346,7 +2307,6 @@ function DashboardPageContent() {
                     </thead>
                     <tbody className="divide-y divide-border">
                       {filteredCompanies.map((c) => {
-                        const app = applications[c.id];
                         const oppState = opportunityStates[c.id];
                         const effectiveState = oppState?.state;
                         const deadlineDate = c.registration_deadline ? new Date(c.registration_deadline) : null;
@@ -2630,169 +2590,6 @@ function DashboardPageContent() {
                 </div>
               );
             })()}
-          </div>
-        )}
-
-        {/* ==================== 3. ACTIVE TRACKING TAB ==================== */}
-        {activeTab === "tracking" && (
-          <div className="space-y-12">
-            <div className="flex justify-between items-center border-b-2 border-border pb-6">
-              <div className="space-y-1">
-                <h1 className="text-[clamp(2rem,6vw,4rem)] font-extrabold tracking-tighter uppercase leading-none">
-                  ACTIVE TRACKING
-                </h1>
-                <p className="text-xs text-muted-foreground uppercase tracking-widest">
-                  Kanban workflow for active application tracking workspaces
-                </p>
-              </div>
-
-              <div className="flex gap-4">
-                <button
-                  onClick={() => setFocusMode(!focusMode)}
-                  className={`
-                    flex items-center gap-2 px-6 h-12 border-2 font-bold text-xs tracking-wider transition-all uppercase
-                    ${focusMode 
-                      ? "bg-accent border-black text-black animate-pulse" 
-                      : "border-border hover:bg-muted text-muted-foreground"
-                    }
-                  `}
-                >
-                  <span>📌 FOCUS MODE: {focusMode ? "ON" : "OFF"}</span>
-                </button>
-              </div>
-            </div>
-
-            {loading ? (
-              <div className="text-center py-20 font-bold uppercase tracking-wider text-muted-foreground">
-                Loading workspace tracker board...
-              </div>
-            ) : filteredCompanies.length === 0 ? (
-              <div className="text-center py-20 border-2 border-dashed border-border text-muted-foreground font-bold uppercase tracking-wider text-xs">
-                {focusMode 
-                  ? "No focus/pinned applications in active tracking. Pin workspaces to display them in focus mode."
-                  : "No companies currently in active tracking. Go to the Opportunities board to start tracking drives."}
-              </div>
-            ) : (
-              /* Kanban View Mode with HTML5 Drag-and-Drop */
-              <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6 items-start">
-                {KANBAN_COLUMNS.map((col) => {
-                  const columnApps = filteredCompanies.filter((c) => {
-                    const app = applications[c.id];
-                    if (!app) return false;
-                    const activeStatus = app.status || "Applied";
-                    
-                    if (col.id === "Applied") return activeStatus === "Applied";
-                    if (col.id === "Shortlisted") return activeStatus === "Shortlisted";
-                    if (col.id === "OA") return activeStatus === "OA" || activeStatus === "Online Assessment";
-                    if (col.id === "Technical") return activeStatus === "Technical" || activeStatus.includes("Technical");
-                    if (col.id === "HR") return activeStatus === "HR" || activeStatus.includes("HR");
-                    if (col.id === "Offer") return activeStatus === "Offer" || activeStatus.includes("Offer");
-                    return false;
-                  });
-
-                  const isOver = draggedOverColumn === col.id;
-
-                  return (
-                    <div 
-                      key={col.id}
-                      onDragOver={(e) => handleDragOver(e, col.id)}
-                      onDragLeave={handleDragLeave}
-                      onDrop={(e) => handleDrop(e, col.id)}
-                      className={`
-                        border-2 p-4 min-h-[500px] flex flex-col gap-4 transition-all duration-200
-                        ${isOver ? "border-accent bg-accent/5 scale-[1.02]" : "border-border bg-muted/10"}
-                      `}
-                    >
-                      {/* Column Header */}
-                      <div className="border-b-2 border-border pb-2 flex justify-between items-center bg-background p-2">
-                        <span className="text-xs font-black tracking-wider uppercase truncate max-w-[85%]">
-                          {col.name}
-                        </span>
-                        <span className="h-5 w-5 bg-muted text-[10px] font-bold flex items-center justify-center border border-border">
-                          {columnApps.length}
-                        </span>
-                      </div>
-
-                      {/* Column Cards */}
-                      <div className="flex-1 space-y-4 overflow-y-auto max-h-[600px] pr-1">
-                        {columnApps.length === 0 ? (
-                          <div className="text-center py-12 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-                            DRAG HERE
-                          </div>
-                        ) : (
-                          columnApps.map((c) => {
-                            const app = applications[c.id];
-                            const risk = getRiskLevel(app, c);
-                            const isPinned = app.workspace_priority_override === 'pinned';
-
-                            return (
-                              <div
-                                key={c.id}
-                                draggable
-                                onDragStart={(e) => handleDragStart(e, c.id)}
-                                className="border-2 border-border p-4 bg-background hover:border-accent cursor-grab active:cursor-grabbing group transition-all duration-300 relative space-y-3"
-                              >
-                                <div className="flex justify-between items-start">
-                                  <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 bg-muted border border-border text-foreground">
-                                    {c.category}
-                                  </span>
-                                  <button
-                                    onClick={() => handleUpdateApplication(c.id, {
-                                      workspace_priority_override: isPinned ? null : 'pinned'
-                                    })}
-                                    className="text-muted-foreground hover:text-accent transition-colors"
-                                    title={isPinned ? "Unpin workspace" : "Pin workspace"}
-                                  >
-                                    <Pin size={10} className={isPinned ? "fill-accent stroke-accent" : ""} />
-                                  </button>
-                                </div>
-
-                                <div onClick={() => { setSelectedCompany(c); setModalTab("overview"); }} className="cursor-pointer">
-                                  <h4 className="font-extrabold text-sm uppercase tracking-tighter text-foreground truncate group-hover:text-accent transition-colors">
-                                    {c.name}
-                                  </h4>
-                                  <p className="text-[10px] text-muted-foreground uppercase truncate">
-                                    {c.role}
-                                  </p>
-                                </div>
-
-                                {/* Transition recruitment_state Sub-state badge */}
-                                {app.recruitment_state && app.recruitment_state !== app.status && (
-                                  <div className="text-[8px] font-black uppercase text-accent border border-accent/30 bg-accent/5 px-2 py-0.5 w-max">
-                                    ⏳ {app.recruitment_state}
-                                  </div>
-                                )}
-
-                                {/* Stale Flag */}
-                                {app.is_stale && (
-                                  <div className="text-[8px] font-black uppercase text-red-500 border border-red-500/30 bg-red-500/5 px-2 py-0.5 w-max animate-pulse">
-                                    ⚠️ No updates: 30 days
-                                  </div>
-                                )}
-
-                                {/* Risk Level Badge */}
-                                {risk !== 'low' && (
-                                  <div className={`text-[8px] font-black uppercase border px-2 py-0.5 w-max ${
-                                    risk === 'high' ? 'bg-red-950 border-red-500 text-red-400' : 'bg-amber-950 border-amber-500 text-amber-400'
-                                  }`}>
-                                    {risk === 'high' ? '🔴 HIGH RISK' : '🟡 NEEDS ATTENTION'}
-                                  </div>
-                                )}
-
-                                <div className="border-t border-border pt-2 flex justify-between items-center text-[9px] font-bold text-muted-foreground uppercase">
-                                  <span>{c.ctc || "—"}</span>
-                                  <span>Priority: {app.priority_score}</span>
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </div>
         )}
 
