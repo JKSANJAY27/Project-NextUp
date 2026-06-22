@@ -3329,9 +3329,32 @@ function DashboardPageContent() {
                         <h2 className="text-2xl font-black uppercase tracking-tighter leading-none">{selectedCompany.name} Workspace</h2>
                         <p className="text-xs text-muted-foreground uppercase mt-1">{selectedCompany.role} ✦ {selectedCompany.job_location || "Unknown location"}</p>
                       </div>
-                      <span className="bg-accent px-2 py-0.5 border border-accent text-[9px] font-black text-black uppercase w-max">
-                        {selectedCompany.category}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        {selectedApp && selectedApp.user_decision === 'tracking' && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black text-muted-foreground uppercase">STAGE:</span>
+                            <select
+                              value={selectedApp.status}
+                              onChange={async (e) => {
+                                await handleUpdateApplication(selectedCompany.id, {
+                                  status: e.target.value,
+                                  current_round: e.target.value
+                                });
+                              }}
+                              className="bg-zinc-950 border-2 border-black px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-accent focus:outline-none cursor-pointer hover:bg-zinc-900 transition-colors"
+                            >
+                              {["Applied", "Shortlisted", "OA", "Technical", "HR", "Offer", "Rejected"].map((s) => (
+                                <option key={s} value={s}>
+                                  {s.toUpperCase()}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                        <span className="bg-accent px-2 py-1 border border-accent text-[9px] font-black text-black uppercase w-max">
+                          {selectedCompany.category}
+                        </span>
+                      </div>
                     </div>
 
                     {/* Specifications Grid */}
