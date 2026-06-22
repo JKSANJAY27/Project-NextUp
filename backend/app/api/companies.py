@@ -181,13 +181,14 @@ def list_companies(
     results = []
     for company in companies:
         if current_user.profile:
-            status, reason = check_eligibility(current_user.profile, company)
+            status, reason, explanation = check_eligibility(current_user.profile, company)
         else:
-            status, reason = "CHECK", "Student profile not set up."
+            status, reason, explanation = "CHECK", "Student profile not set up.", None
         # Create a dict compatible with CompanyWithEligibilityOut
         company_data = CompanyOut.from_orm(company).dict()
         company_data["eligibility_status"] = status
         company_data["eligibility_reason"] = reason
+        company_data["eligibility_explanation"] = explanation
         results.append(company_data)
     return results
 
@@ -205,12 +206,13 @@ def get_company(
             detail="Company not found."
         )
     if current_user.profile:
-        status_elig, reason_elig = check_eligibility(current_user.profile, company)
+        status_elig, reason_elig, explanation_elig = check_eligibility(current_user.profile, company)
     else:
-        status_elig, reason_elig = "CHECK", "Student profile not set up."
+        status_elig, reason_elig, explanation_elig = "CHECK", "Student profile not set up.", None
     company_data = CompanyOut.from_orm(company).dict()
     company_data["eligibility_status"] = status_elig
     company_data["eligibility_reason"] = reason_elig
+    company_data["eligibility_explanation"] = explanation_elig
     return company_data
 
 

@@ -7,6 +7,8 @@ from uuid import UUID
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     branch: Optional[str] = None
+    degree_type: Optional[str] = None
+    specialization: Optional[str] = None
     batch_year: Optional[int] = None
     neo_id_enc: Optional[str] = None
     neo_id: Optional[str] = None # Plaintext for blind index generation
@@ -14,6 +16,7 @@ class UserUpdate(BaseModel):
     tenth_marks: Optional[float] = None
     twelfth_marks: Optional[float] = None
     has_arrears: Optional[bool] = None
+    ug_cgpa: Optional[float] = None
     skills: Optional[List[str]] = None
 
 class UserOut(BaseModel):
@@ -25,6 +28,8 @@ class UserOut(BaseModel):
     # Profile fields (joined from student_profiles)
     full_name: Optional[str] = None
     branch: Optional[str] = None
+    degree_type: Optional[str] = None
+    specialization: Optional[str] = None
     batch_year: Optional[int] = None
     neo_id_enc: Optional[str] = None
     neo_id_hash: Optional[str] = None
@@ -32,6 +37,7 @@ class UserOut(BaseModel):
     tenth_marks: Optional[float] = None
     twelfth_marks: Optional[float] = None
     has_arrears: Optional[bool] = None
+    ug_cgpa: Optional[float] = None
     skills: Optional[List[str]] = None
 
     class Config:
@@ -47,6 +53,7 @@ class CompanyCreate(BaseModel):
     job_location: Optional[str] = None
     eligible_branches: Optional[List[str]] = None
     eligibility_rules: Optional[Dict[str, Any]] = None
+    eligibility_raw_text: Optional[str] = None
     registration_deadline: Optional[datetime] = None
     registration_link: Optional[str] = None
     website: Optional[str] = None
@@ -64,9 +71,15 @@ class CompanyOut(CompanyCreate):
     class Config:
         from_attributes = True
 
+class EligibilityExplanation(BaseModel):
+    eligible: bool
+    matched: List[str] = []
+    failed: List[str] = []
+
 class CompanyWithEligibilityOut(CompanyOut):
     eligibility_status: str  # 'ELIGIBLE', 'NOT_ELIGIBLE'
     eligibility_reason: Optional[str] = None
+    eligibility_explanation: Optional[EligibilityExplanation] = None
 
 # Application Schemas
 class ApplicationCreate(BaseModel):

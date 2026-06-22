@@ -21,9 +21,9 @@ def get_merged_user_data(user: User, db: Session) -> dict:
     
     if profile:
         profile_fields = [
-            "full_name", "branch", "batch_year", "neo_id_enc", 
+            "full_name", "branch", "degree_type", "specialization", "batch_year", "neo_id_enc", 
             "neo_id_hash", "cgpa", "tenth_marks", "twelfth_marks", 
-            "has_arrears", "skills"
+            "has_arrears", "ug_cgpa", "skills"
         ]
         for field in profile_fields:
             data[field] = getattr(profile, field)
@@ -32,6 +32,8 @@ def get_merged_user_data(user: User, db: Session) -> dict:
         data.update({
             "full_name": None,
             "branch": None,
+            "degree_type": None,
+            "specialization": None,
             "batch_year": None,
             "neo_id_enc": None,
             "neo_id_hash": None,
@@ -39,6 +41,7 @@ def get_merged_user_data(user: User, db: Session) -> dict:
             "tenth_marks": None,
             "twelfth_marks": None,
             "has_arrears": None,
+            "ug_cgpa": None,
             "skills": []
         })
     return data
@@ -60,13 +63,12 @@ def update_user_me(
     
     # If student profile does not exist, initialize it
     if not profile:
-        # In schema.sql, full_name, branch, batch_year, neo_id_enc, and neo_id_hash are NOT NULL.
-        # Thus, we assign default placeholders if they are not provided in the first request,
-        # but let the client override them.
         profile = StudentProfile(
             user_id=current_user.id,
             full_name=user_in.full_name or "New Student",
             branch=user_in.branch or "Unknown",
+            degree_type=user_in.degree_type or "BTECH",
+            specialization=user_in.specialization or "CSE_CORE",
             batch_year=user_in.batch_year or datetime.utcnow().year,
             neo_id_enc=user_in.neo_id_enc or "UNSET",
             neo_id_hash=generate_blind_index(user_in.neo_id, settings.PEPPER) if user_in.neo_id else "UNSET",
@@ -74,6 +76,7 @@ def update_user_me(
             tenth_marks=user_in.tenth_marks or 0.0,
             twelfth_marks=user_in.twelfth_marks or 0.0,
             has_arrears=user_in.has_arrears or False,
+            ug_cgpa=user_in.ug_cgpa,
             skills=user_in.skills or []
         )
         db.add(profile)
@@ -86,7 +89,7 @@ def update_user_me(
                 profile.neo_id_hash = generate_blind_index(neo_id, settings.PEPPER)
                 
         for field, value in update_data.items():
-            if hasattr(profile, field) and value is not None:
+            if hasattr(profile, field):
                 setattr(profile, field, value)
             
     db.commit()

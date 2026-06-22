@@ -26,6 +26,7 @@ from app.services.excel_parser import extract_neo_ids_from_excel
 from app.services.pdf_extractor import parse_job_description
 from app.services.ai_service import precompute_jd_intelligence_deterministic
 from app.services.validator import validate_and_normalize_parsed_data, normalize_role_name
+from app.services.eligibility import check_eligibility
 
 logger = logging.getLogger(__name__)
 
@@ -438,11 +439,26 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     company = best_match
                     logger.info(f"Fuzzy matched incoming email to existing company: {company.name} (ID: {company.id}, Match Score: {best_score})")
 
+            degree_types = r_item.get("degree_types", {}).get("value", [])
+            specializations = r_item.get("specializations", {}).get("value", [])
+            min_tenth_marks = r_item.get("min_tenth_marks", {}).get("value")
+            min_twelfth_marks = r_item.get("min_twelfth_marks", {}).get("value")
+            min_ug_cgpa = r_item.get("min_ug_cgpa", {}).get("value")
+            eligibility_raw_text = ext_data.get("eligibility_raw_text", {}).get("value")
+
+            allow_all_specializations = False
+            if not specializations or specializations == ["CSE_CORE"]:
+                allow_all_specializations = True
+
             eligibility_rules = {
+                "degree_types": degree_types,
+                "specializations": specializations,
+                "allow_all_specializations": allow_all_specializations,
                 "min_cgpa": min_cgpa,
-                "min_tenth_marks": None,
-                "min_twelfth_marks": None,
+                "min_tenth_marks": min_tenth_marks,
+                "min_twelfth_marks": min_twelfth_marks,
                 "requires_no_arrears": requires_no_arrears,
+                "min_ug_cgpa": min_ug_cgpa,
                 "date_of_visit": ext_data.get("date_of_visit", {}).get("value") or "Will be announced later"
             }
             
@@ -456,6 +472,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     job_location=location,
                     eligible_branches=eligible_branches,
                     eligibility_rules=eligibility_rules,
+                    eligibility_raw_text=eligibility_raw_text,
                     registration_deadline=registration_deadline,
                     registration_link=registration_link,
                     recruitment_cycle=recruitment_cycle,
@@ -473,6 +490,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     "registration_deadline": registration_deadline,
                     "registration_link": registration_link,
                     "eligibility_rules": eligibility_rules,
+                    "eligibility_raw_text": eligibility_raw_text,
                     "eligible_branches": eligible_branches,
                     "requires_review": requires_review
                 }
@@ -769,12 +787,10 @@ def process_notification_jobs(db: Session):
             ev_severity, is_high_vis = EVENT_SEVERITY.get(event.event_type, (1, False))
 
             for profile in profiles:
-                # Check branch eligibility
-                if company.eligible_branches:
-                    user_branch = (profile.branch or "").strip().upper()
-                    eligible_branches_upper = [b.strip().upper() for b in company.eligible_branches]
-                    if user_branch not in eligible_branches_upper:
-                        continue
+                # Check eligibility
+                status_elig, _, _ = check_eligibility(profile, company)
+                if status_elig == "NOT_ELIGIBLE":
+                    continue
 
                 # Check application state to see if notifications are silenced
                 app = db.query(Application).filter(

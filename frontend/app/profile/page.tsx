@@ -106,6 +106,8 @@ export default function ProfilePage() {
   // Profile Form Fields (Plaintext)
   const [fullName, setFullName] = useState("");
   const [branch, setBranch] = useState("");
+  const [degreeType, setDegreeType] = useState("BTECH");
+  const [specialization, setSpecialization] = useState("CSE_CORE");
   const [batchYear, setBatchYear] = useState<number>(new Date().getFullYear());
   const [skillsStr, setSkillsStr] = useState("");
 
@@ -114,6 +116,7 @@ export default function ProfilePage() {
   const [cgpa, setCgpa] = useState("");
   const [tenthMarks, setTenthMarks] = useState("");
   const [twelfthMarks, setTwelfthMarks] = useState("");
+  const [ugCgpa, setUgCgpa] = useState("");
   const [hasArrears, setHasArrears] = useState(false);
 
   // Full Structured Resume State
@@ -151,6 +154,8 @@ export default function ProfilePage() {
     try {
       setFullName(user.full_name || "");
       setBranch(user.branch || "");
+      setDegreeType(user.degree_type || "BTECH");
+      setSpecialization(user.specialization || "CSE_CORE");
       setBatchYear(user.batch_year || new Date().getFullYear());
       setSkillsStr(user.skills ? user.skills.join(", ") : "");
 
@@ -158,6 +163,7 @@ export default function ProfilePage() {
       setCgpa(user.cgpa !== null && user.cgpa !== undefined && user.cgpa !== 0 ? String(user.cgpa) : "");
       setTenthMarks(user.tenth_marks !== null && user.tenth_marks !== undefined && user.tenth_marks !== 0 ? String(user.tenth_marks) : "");
       setTwelfthMarks(user.twelfth_marks !== null && user.twelfth_marks !== undefined && user.twelfth_marks !== 0 ? String(user.twelfth_marks) : "");
+      setUgCgpa(user.ug_cgpa !== null && user.ug_cgpa !== undefined && user.ug_cgpa !== 0 ? String(user.ug_cgpa) : "");
       setHasArrears(user.has_arrears || false);
 
       // Decrypt sensitive Neo ID field
@@ -422,6 +428,8 @@ export default function ProfilePage() {
       const userRes = await api.put("/users/me", {
         full_name: fullName.trim(),
         branch: branch.trim().toUpperCase(),
+        degree_type: degreeType,
+        specialization: specialization,
         batch_year: Number(batchYear),
         skills: skillsArray,
         neo_id_enc: encNeoId,
@@ -430,6 +438,7 @@ export default function ProfilePage() {
         tenth_marks: tenthMarks ? parseFloat(tenthMarks) : 0.0,
         twelfth_marks: twelfthMarks ? parseFloat(twelfthMarks) : 0.0,
         has_arrears: hasArrears,
+        ug_cgpa: ["MTECH", "MCA", "MSC"].includes(degreeType) && ugCgpa ? parseFloat(ugCgpa) : null,
       });
 
       // 4. Update the skills inside structured resumeData to keep in sync
@@ -1203,6 +1212,41 @@ export default function ProfilePage() {
 
               <div className="space-y-2">
                 <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase block">
+                  DEGREE TYPE
+                </label>
+                <select
+                  value={degreeType}
+                  onChange={(e) => setDegreeType(e.target.value)}
+                  className="w-full h-14 border-2 border-border bg-background text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
+                >
+                  <option value="BTECH">B.Tech (Bachelor of Technology)</option>
+                  <option value="MTECH">M.Tech (Master of Technology)</option>
+                  <option value="MCA">MCA (Master of Computer Applications)</option>
+                  <option value="MSC">M.Sc (Master of Science)</option>
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase block">
+                  SPECIALIZATION
+                </label>
+                <select
+                  value={specialization}
+                  onChange={(e) => setSpecialization(e.target.value)}
+                  className="w-full h-14 border-2 border-border bg-background text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
+                >
+                  <option value="CSE_CORE">Computer Science & Engineering (Core)</option>
+                  <option value="CSE_INFO_SEC">CSE - Information Security</option>
+                  <option value="CSE_IOT">CSE - Internet of Things (IoT)</option>
+                  <option value="CSE_DATA_SCIENCE">CSE - Data Science</option>
+                  <option value="CSE_BLOCKCHAIN">CSE - Blockchain Technology</option>
+                  <option value="CSE_AI_ML">CSE - Artificial Intelligence & Machine Learning (AI & ML)</option>
+                  <option value="OTHER">Other / Non-CSE Major</option>
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase block">
                   BATCH YEAR
                 </label>
                 <input
@@ -1257,6 +1301,25 @@ export default function ProfilePage() {
                   className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
                 />
               </div>
+
+              {["MTECH", "MCA", "MSC"].includes(degreeType) && (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase block">
+                    UG CGPA (Plaintext on server)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="10"
+                    required
+                    value={ugCgpa}
+                    onChange={(e) => setUgCgpa(e.target.value)}
+                    placeholder="E.G. 8.50"
+                    className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
+                  />
+                </div>
+              )}
 
               <div className="space-y-2">
                 <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase block">

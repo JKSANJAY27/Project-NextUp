@@ -268,7 +268,7 @@ def upsert_opportunity_state(
                 current_round='Applied',
                 match_score=0,
                 user_decision='tracking',
-                recruitment_state='Awaiting Shortlist',
+                recruitment_state='Registration',
             )
             db.add(new_app)
         else:
@@ -317,7 +317,7 @@ def upsert_opportunity_state(
                     current_round='Applied',
                     match_score=0,
                     user_decision='tracking',
-                    recruitment_state='Awaiting Shortlist',
+                    recruitment_state='Registration',
                 )
                 db.add(new_app)
         db.commit()

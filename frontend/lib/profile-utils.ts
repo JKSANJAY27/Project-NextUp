@@ -12,6 +12,9 @@ export interface UserProfile {
   twelfth_marks: number | null;
   has_arrears: boolean | null;
   skills: string[] | null;
+  degree_type: string | null;
+  specialization: string | null;
+  ug_cgpa: number | null;
   created_at: string;
 }
 

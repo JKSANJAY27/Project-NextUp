@@ -25,6 +25,8 @@ class StudentProfile(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     full_name = Column(String, nullable=False)
     branch = Column(String, nullable=False)
+    degree_type = Column(String, default="BTECH")
+    specialization = Column(String, default="CSE_CORE")
     batch_year = Column(Integer, nullable=False)
     neo_id_enc = Column(String, nullable=False)
     neo_id_hash = Column(String(64), unique=True, nullable=False, index=True)
@@ -32,6 +34,7 @@ class StudentProfile(Base):
     tenth_marks = Column(Numeric(5, 2), nullable=False)
     twelfth_marks = Column(Numeric(5, 2), nullable=False)
     has_arrears = Column(Boolean, default=False)
+    ug_cgpa = Column(Numeric(4, 2), nullable=True)
     skills = Column(ARRAY(String), default=list)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -76,6 +79,7 @@ class Company(Base):
     fingerprint = Column(String(64), unique=True, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     requires_review = Column(Boolean, default=False)
+    eligibility_raw_text = Column(String, nullable=True)
 
     applications = relationship("Application", back_populates="company", cascade="all, delete-orphan")
     events = relationship("CompanyEvent", back_populates="company", cascade="all, delete-orphan")

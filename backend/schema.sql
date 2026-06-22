@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS student_profiles (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     full_name VARCHAR(255) NOT NULL,
     branch VARCHAR(100) NOT NULL,
+    degree_type VARCHAR(50) DEFAULT 'BTECH',
+    specialization VARCHAR(100) DEFAULT 'CSE_CORE',
     batch_year INT NOT NULL,
     neo_id_enc TEXT NOT NULL,
     neo_id_hash VARCHAR(64) UNIQUE NOT NULL, -- HMAC-SHA256 blind index
@@ -64,6 +66,7 @@ CREATE TABLE IF NOT EXISTS student_profiles (
     tenth_marks NUMERIC(5,2) NOT NULL,
     twelfth_marks NUMERIC(5,2) NOT NULL,
     has_arrears BOOLEAN DEFAULT FALSE,
+    ug_cgpa NUMERIC(4,2) DEFAULT NULL,
     skills TEXT[] DEFAULT '{}',
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -108,7 +111,8 @@ CREATE TABLE IF NOT EXISTS companies (
     recruitment_cycle VARCHAR(100) DEFAULT 'Default',
     fingerprint VARCHAR(64) UNIQUE NOT NULL, -- SHA256 of Company|Role|Category|Batch|Cycle
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    requires_review BOOLEAN DEFAULT FALSE
+    requires_review BOOLEAN DEFAULT FALSE,
+    eligibility_raw_text TEXT DEFAULT NULL
 );
 
 -- 7. Company Version Change Logs

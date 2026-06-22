@@ -4,6 +4,7 @@ import dateparser
 from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 from app.models.models import Company
+from app.services.email_parser import normalize_degree, normalize_specialization
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +295,15 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session)
         "confidence": visit_obj.get("confidence", 0.50)
     }
 
+    # 5.6 Eligibility Raw Text
+    raw_text_obj = ext.get("eligibility_raw_text", {})
+    if not isinstance(raw_text_obj, dict):
+        raw_text_obj = {"value": str(raw_text_obj) if raw_text_obj else None, "confidence": 0.50}
+    ext["eligibility_raw_text"] = {
+        "value": raw_text_obj.get("value").strip() if raw_text_obj.get("value") else None,
+        "confidence": raw_text_obj.get("confidence", 0.50)
+    }
+
     # 6. Roles Array Processing
     roles_list = ext.get("roles", [])
     if not isinstance(roles_list, list) or len(roles_list) == 0:
@@ -302,6 +312,11 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session)
             "ctc": {"value": None, "confidence": 0.50},
             "stipend": {"value": None, "confidence": 0.50},
             "eligible_branches": {"value": [], "confidence": 0.50},
+            "degree_types": {"value": [], "confidence": 0.50},
+            "specializations": {"value": [], "confidence": 0.50},
+            "min_tenth_marks": {"value": None, "confidence": 0.50},
+            "min_twelfth_marks": {"value": None, "confidence": 0.50},
+            "min_ug_cgpa": {"value": None, "confidence": 0.50},
             "min_cgpa": {"value": None, "confidence": 0.50},
             "requires_no_arrears": {"value": False, "confidence": 0.50}
         }]
@@ -336,6 +351,71 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session)
         branches_val = branches_obj.get("value") or []
         branches_val = [b.strip().upper() for b in branches_val if isinstance(b, str)]
         
+        # Degree Types
+        degree_types_obj = r.get("degree_types", {})
+        if not isinstance(degree_types_obj, dict):
+            degree_types_obj = {"value": list(degree_types_obj) if isinstance(degree_types_obj, (list, set)) else [], "confidence": 0.50}
+        degree_types_raw = degree_types_obj.get("value") or []
+        degree_types_val = []
+        for d in degree_types_raw:
+            if isinstance(d, str):
+                norm_d = normalize_degree(d)
+                if norm_d:
+                    degree_types_val.append(norm_d)
+        degree_types_val = sorted(list(set(degree_types_val)))
+
+        # Specializations
+        specializations_obj = r.get("specializations", {})
+        if not isinstance(specializations_obj, dict):
+            specializations_obj = {"value": list(specializations_obj) if isinstance(specializations_obj, (list, set)) else [], "confidence": 0.50}
+        specializations_raw = specializations_obj.get("value") or []
+        specializations_val = []
+        for s in specializations_raw:
+            if isinstance(s, str):
+                norm_s = normalize_specialization(s)
+                if norm_s:
+                    specializations_val.append(norm_s)
+        specializations_val = sorted(list(set(specializations_val)))
+
+        # Tenth Marks
+        tenth_marks_obj = r.get("min_tenth_marks", {})
+        if not isinstance(tenth_marks_obj, dict):
+            tenth_marks_obj = {"value": tenth_marks_obj, "confidence": 0.50}
+        tenth_marks_val = tenth_marks_obj.get("value")
+        if tenth_marks_val is not None:
+            try:
+                tenth_marks_val = float(tenth_marks_val)
+                if not (0.0 <= tenth_marks_val <= 100.0):
+                    tenth_marks_val = None
+            except ValueError:
+                tenth_marks_val = None
+
+        # Twelfth Marks
+        twelfth_marks_obj = r.get("min_twelfth_marks", {})
+        if not isinstance(twelfth_marks_obj, dict):
+            twelfth_marks_obj = {"value": twelfth_marks_obj, "confidence": 0.50}
+        twelfth_marks_val = twelfth_marks_obj.get("value")
+        if twelfth_marks_val is not None:
+            try:
+                twelfth_marks_val = float(twelfth_marks_val)
+                if not (0.0 <= twelfth_marks_val <= 100.0):
+                    twelfth_marks_val = None
+            except ValueError:
+                twelfth_marks_val = None
+
+        # UG CGPA
+        ug_cgpa_obj = r.get("min_ug_cgpa", {})
+        if not isinstance(ug_cgpa_obj, dict):
+            ug_cgpa_obj = {"value": ug_cgpa_obj, "confidence": 0.50}
+        ug_cgpa_val = ug_cgpa_obj.get("value")
+        if ug_cgpa_val is not None:
+            try:
+                ug_cgpa_val = float(ug_cgpa_val)
+                if not (0.0 <= ug_cgpa_val <= 10.0):
+                    ug_cgpa_val = None
+            except ValueError:
+                ug_cgpa_val = None
+
         # Min CGPA
         cgpa_obj = r.get("min_cgpa", {})
         if not isinstance(cgpa_obj, dict):
@@ -359,6 +439,11 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session)
             "ctc": {"value": ctc_obj.get("value"), "confidence": ctc_obj.get("confidence", 0.50)},
             "stipend": {"value": stipend_obj.get("value"), "confidence": stipend_obj.get("confidence", 0.50)},
             "eligible_branches": {"value": branches_val, "confidence": branches_obj.get("confidence", 0.50)},
+            "degree_types": {"value": degree_types_val, "confidence": degree_types_obj.get("confidence", 0.50)},
+            "specializations": {"value": specializations_val, "confidence": specializations_obj.get("confidence", 0.50)},
+            "min_tenth_marks": {"value": tenth_marks_val, "confidence": tenth_marks_obj.get("confidence", 0.50)},
+            "min_twelfth_marks": {"value": twelfth_marks_val, "confidence": twelfth_marks_obj.get("confidence", 0.50)},
+            "min_ug_cgpa": {"value": ug_cgpa_val, "confidence": ug_cgpa_obj.get("confidence", 0.50)},
             "min_cgpa": {"value": cgpa_val, "confidence": cgpa_obj.get("confidence", 0.50)},
             "requires_no_arrears": {"value": arrears_obj.get("value"), "confidence": arrears_obj.get("confidence", 0.50)}
         })

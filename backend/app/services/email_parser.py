@@ -30,12 +30,117 @@ except ImportError:
     nlp = None
 
 
+DEGREE_ONTOLOGY = {
+    "btech": "BTECH",
+    "b.tech": "BTECH",
+    "b. tech": "BTECH",
+    "b_tech": "BTECH",
+    "b tech": "BTECH",
+    "bachelor of technology": "BTECH",
+    
+    "mtech": "MTECH",
+    "m.tech": "MTECH",
+    "m. tech": "MTECH",
+    "m_tech": "MTECH",
+    "m tech": "MTECH",
+    "master of technology": "MTECH",
+    
+    "mca": "MCA",
+    "m.c.a.": "MCA",
+    "master of computer applications": "MCA",
+    
+    "msc": "MSC",
+    "m.sc": "MSC",
+    "m.sc.": "MSC",
+    "master of science": "MSC"
+}
+
+SPECIALIZATION_ONTOLOGY = {
+    "cse core": "CSE_CORE",
+    "cse-core": "CSE_CORE",
+    "cse_core": "CSE_CORE",
+    "computer science and engineering": "CSE_CORE",
+    "computer science & engineering": "CSE_CORE",
+    "computer science": "CSE_CORE",
+    "cse": "CSE_CORE",
+    
+    "information security": "CSE_INFO_SEC",
+    "info sec": "CSE_INFO_SEC",
+    "infosec": "CSE_INFO_SEC",
+    "cse-is": "CSE_INFO_SEC",
+    "cse(is)": "CSE_INFO_SEC",
+    "cse (is)": "CSE_INFO_SEC",
+    "cyber security": "CSE_INFO_SEC",
+    "cybersecurity": "CSE_INFO_SEC",
+    "information assurance": "CSE_INFO_SEC",
+    
+    "iot": "CSE_IOT",
+    "internet of things": "CSE_IOT",
+    "cse-iot": "CSE_IOT",
+    "cse(iot)": "CSE_IOT",
+    "cse (iot)": "CSE_IOT",
+    
+    "data science": "CSE_DATA_SCIENCE",
+    "datascience": "CSE_DATA_SCIENCE",
+    "cse-ds": "CSE_DATA_SCIENCE",
+    "cse(ds)": "CSE_DATA_SCIENCE",
+    "cse (ds)": "CSE_DATA_SCIENCE",
+    "ds": "CSE_DATA_SCIENCE",
+    
+    "blockchain": "CSE_BLOCKCHAIN",
+    "block chain": "CSE_BLOCKCHAIN",
+    "cse-blockchain": "CSE_BLOCKCHAIN",
+    "cse (blockchain)": "CSE_BLOCKCHAIN",
+    "cse(blockchain)": "CSE_BLOCKCHAIN",
+    
+    "ai ml": "CSE_AI_ML",
+    "ai/ml": "CSE_AI_ML",
+    "ai & ml": "CSE_AI_ML",
+    "ai and ml": "CSE_AI_ML",
+    "artificial intelligence": "CSE_AI_ML",
+    "machine learning": "CSE_AI_ML",
+    "cse-aiml": "CSE_AI_ML",
+    "cse (aiml)": "CSE_AI_ML",
+    "cse(aiml)": "CSE_AI_ML",
+    "cse-ai/ml": "CSE_AI_ML",
+    "cse-ai & ml": "CSE_AI_ML",
+    "cse (ai & ml)": "CSE_AI_ML",
+    "cse(ai & ml)": "CSE_AI_ML",
+    "cse-ai": "CSE_AI_ML",
+    "aids": "CSE_AI_ML",
+    "ai & ds": "CSE_AI_ML",
+    "ai/ds": "CSE_AI_ML",
+    
+    "other": "OTHER"
+}
+
+def normalize_degree(raw_str: str) -> Optional[str]:
+    if not raw_str:
+        return None
+    val = raw_str.strip().lower()
+    if val in DEGREE_ONTOLOGY:
+        return DEGREE_ONTOLOGY[val]
+    for k, v in DEGREE_ONTOLOGY.items():
+        if k in val:
+            return v
+    return None
+
+def normalize_specialization(raw_str: str) -> Optional[str]:
+    if not raw_str:
+        return None
+    val = raw_str.strip().lower()
+    if val in SPECIALIZATION_ONTOLOGY:
+        return SPECIALIZATION_ONTOLOGY[val]
+    for k, v in SPECIALIZATION_ONTOLOGY.items():
+        if k in val:
+            return v
+    return None
+
 def clean_json_string(s: str) -> str:
     s = s.strip()
     match = re.search(r"```(?:json)?\s*(.*?)\s*```", s, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
-    # Find first { and last } to extract JSON object robustly
     start = s.find("{")
     end = s.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -51,7 +156,7 @@ Output ONLY a valid raw JSON object — no markdown, no explanation, no code fen
 Required JSON Output Format:
 {{
   "parser_metadata": {{
-    "parser_version": "v4",
+    "parser_version": "v5",
     "model_used": "llm-extracted"
   }},
   "overall_confidence": 0.90,
@@ -81,14 +186,23 @@ Required JSON Output Format:
       "value": "Will be announced later",
       "confidence": 0.85
     }},
+    "eligibility_raw_text": {{
+      "value": "Eligible Branches: B.Tech CSE (all specializations), M.Tech CSE/DS. CGPA >= 8.0, 10th/12th >= 60%, No standing arrears.",
+      "confidence": 0.95
+    }},
     "roles": [
       {{
         "role": {{ "value": "Software Engineer", "confidence": 0.98 }},
         "ctc": {{ "value": "18 LPA", "confidence": 0.95 }},
         "stipend": {{ "value": null, "confidence": 0.99 }},
-        "min_cgpa": {{ "value": 7.5, "confidence": 0.97 }},
+        "min_cgpa": {{ "value": 8.0, "confidence": 0.97 }},
         "requires_no_arrears": {{ "value": true, "confidence": 0.96 }},
-        "eligible_branches": {{ "value": ["CSE", "IT"], "confidence": 0.94 }}
+        "eligible_branches": {{ "value": ["CSE", "CSE AI/ML", "M.Tech CSE", "M.Tech Data Science"], "confidence": 0.94 }},
+        "degree_types": {{ "value": ["BTECH", "MTECH"], "confidence": 0.95 }},
+        "specializations": {{ "value": ["CSE_CORE", "CSE_AI_ML", "CSE_DATA_SCIENCE"], "confidence": 0.95 }},
+        "min_tenth_marks": {{ "value": 60.0, "confidence": 0.95 }},
+        "min_twelfth_marks": {{ "value": 60.0, "confidence": 0.95 }},
+        "min_ug_cgpa": {{ "value": null, "confidence": 0.95 }}
       }}
     ],
     "announcement": {{
@@ -121,7 +235,15 @@ Guidelines for event_type (choose exactly ONE):
 Multi-role rules:
 - If the email mentions multiple roles (e.g. Software Engineer AND Data Scientist), include EACH as a separate object in the "roles" array.
 - Never merge multiple roles into one object.
-- Each role object must have its own ctc, stipend, min_cgpa, eligible_branches, requires_no_arrears.
+- Each role object must have its own ctc, stipend, min_cgpa, eligible_branches, requires_no_arrears, degree_types, specializations, min_tenth_marks, min_twelfth_marks, min_ug_cgpa.
+
+Eligibility Rules:
+- eligibility_raw_text: Extract the exact raw text block or sentence describing the eligibility criteria, eligible branches, cgpa, and backlogs directly from the email body.
+- degree_types: A list of strings containing values from: BTECH, MTECH, MCA, MSC. If the email mentions B.Tech or M.Tech generally, output BTECH, MTECH.
+- specializations: A list of string values from: CSE_CORE, CSE_INFO_SEC, CSE_IOT, CSE_DATA_SCIENCE, CSE_BLOCKCHAIN, CSE_AI_ML. Map the branches mentioned. If it says "B.Tech CSE" generally, list all specializations or extract what's listed.
+- min_tenth_marks: Extract the minimum percentage required for Class 10 (e.g. 60.0 or 70.0). Null if not mentioned.
+- min_twelfth_marks: Extract the minimum percentage required for Class 12 (e.g. 60.0 or 70.0). Null if not mentioned.
+- min_ug_cgpa: Only for PG programs (e.g. M.Tech, MCA) if they mention a minimum UG CGPA (e.g. "UG CGPA >= 7.0"). Null if not mentioned.
 
 CGPA rules:
 - Extract only the numeric CGPA threshold (0.0 to 10.0).
@@ -471,6 +593,47 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
         if found:
             data["eligible_branches"] = list(set([b.upper() for b in found]))
 
+    found_degrees = []
+    if re.search(r'\b(b\.?\s*tech|bachelor\s+of\s+tech)\b', email_body, re.I):
+        found_degrees.append("BTECH")
+    if re.search(r'\b(m\.?\s*tech|master\s+of\s+tech)\b', email_body, re.I):
+        found_degrees.append("MTECH")
+    if re.search(r'\b(m\.?\s*c\.?\s*a|master\s+of\s+computer\s+app)\b', email_body, re.I):
+        found_degrees.append("MCA")
+    if re.search(r'\b(m\.?\s*sc|master\s+of\s+sci)\b', email_body, re.I):
+        found_degrees.append("MSC")
+    data["degree_types"] = found_degrees
+
+    found_specializations = []
+    if re.search(r'\b(core|computer\s*science|cse)\b', email_body, re.I):
+        found_specializations.append("CSE_CORE")
+    if re.search(r'\b(info(rmation)?\s*sec(urity)?|cyber\s*sec(urity)?|is)\b', email_body, re.I):
+        found_specializations.append("CSE_INFO_SEC")
+    if re.search(r'\b(iot|internet\s+of\s+things)\b', email_body, re.I):
+        found_specializations.append("CSE_IOT")
+    if re.search(r'\b(data\s*science|ds)\b', email_body, re.I):
+        found_specializations.append("CSE_DATA_SCIENCE")
+    if re.search(r'\b(blockchain|block\s*chain)\b', email_body, re.I):
+        found_specializations.append("CSE_BLOCKCHAIN")
+    if re.search(r'\b(ai|ml|artificial\s*intel|machine\s*learn)\b', email_body, re.I):
+        found_specializations.append("CSE_AI_ML")
+    data["specializations"] = found_specializations
+
+    # 10th / 12th percentages
+    tenth_match = re.search(r'(?:10th|xth|class\s*10|matriculation)(?:\s*marks|\s*percentage|\s*%)?(?:\s*(?:>=|>|:|-|of|\b)\s*)(\d{2})', email_body, re.I)
+    data["min_tenth_marks"] = float(tenth_match.group(1)) if tenth_match else None
+    
+    twelfth_match = re.search(r'(?:12th|xiith|class\s*12|hs|higher\s*secondary)(?:\s*marks|\s*percentage|\s*%)?(?:\s*(?:>=|>|:|-|of|\b)\s*)(\d{2})', email_body, re.I)
+    data["min_twelfth_marks"] = float(twelfth_match.group(1)) if twelfth_match else None
+
+    # PG UG CGPA
+    ug_cgpa_match = re.search(r'(?:ug\s*cgpa|undergrad\s*cgpa)(?:\s*(?:>=|>|:|-|of|\b)\s*)(\d+(?:\.\d+)?)', email_body, re.I)
+    data["min_ug_cgpa"] = float(ug_cgpa_match.group(1)) if ug_cgpa_match else None
+
+    # raw eligibility text
+    raw_text_match = re.search(r'(?:eligibility|eligible|criteria|branches).*?(\n.*){1,4}', email_body, re.I)
+    data["eligibility_raw_text"] = raw_text_match.group(0).strip() if raw_text_match else None
+
     # 8. Min CGPA — handles both "6.0 CGPA", "CGPA >= 7.5", "min CGPA 8", "60% or 6.0 CGPA"
     cgpa_patterns = [
         r"(?:min(?:imum)?\s+CGPA\s*(?:of|:)?\s*)([\d.]+)",
@@ -673,7 +836,7 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
 
     return {
         "parser_metadata": {
-            "parser_version": "v4-regex-fallback",
+            "parser_version": "v5-regex-fallback",
             "model_used": "regex-rules"
         },
         "overall_confidence": 0.45,
@@ -685,12 +848,18 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
             "deadline_iso": {"value": deadline_iso, "confidence": 0.45},
             "registration_link": {"value": registration_link, "confidence": 0.45},
             "date_of_visit": {"value": date_of_visit, "confidence": 0.45},
+            "eligibility_raw_text": {"value": parsed.get("eligibility_raw_text"), "confidence": 0.45},
             "roles": [
                 {
                     "role": {"value": role, "confidence": 0.45},
                     "ctc": {"value": ctc, "confidence": 0.45},
                     "stipend": {"value": stipend, "confidence": 0.45},
                     "eligible_branches": {"value": eligible_branches, "confidence": 0.45},
+                    "degree_types": {"value": parsed.get("degree_types", []), "confidence": 0.45},
+                    "specializations": {"value": parsed.get("specializations", []), "confidence": 0.45},
+                    "min_tenth_marks": {"value": parsed.get("min_tenth_marks"), "confidence": 0.45},
+                    "min_twelfth_marks": {"value": parsed.get("min_twelfth_marks"), "confidence": 0.45},
+                    "min_ug_cgpa": {"value": parsed.get("min_ug_cgpa"), "confidence": 0.45},
                     "min_cgpa": {"value": min_cgpa, "confidence": 0.45},
                     "requires_no_arrears": {"value": requires_no_arrears, "confidence": 0.45}
                 }

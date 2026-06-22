@@ -84,9 +84,17 @@ interface Company {
   requires_review?: boolean;
 }
 
+interface EligibilityExplanation {
+  eligible: boolean;
+  matched: string[];
+  failed: string[];
+}
+
 interface CompanyWithEligibility extends Company {
   eligibility_status: string;
   eligibility_reason: string | null;
+  eligibility_explanation?: EligibilityExplanation | null;
+  eligibility_raw_text?: string | null;
 }
 
 interface Application {
@@ -193,76 +201,7 @@ async function calculateHash(text: string): Promise<string> {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function getEligibility(user: any, company: Company): { status: string; reason: string | null } {
-  if (!user) {
-    return { status: "CHECK", reason: "Profile not loaded." };
-  }
 
-  if (company.eligible_branches && company.eligible_branches.length > 0) {
-    const userBranch = (user.branch || "").trim().toUpperCase();
-    const eligibleBranches = company.eligible_branches.map((b: string) => b.trim().toUpperCase());
-    if (!eligibleBranches.includes(userBranch)) {
-      return {
-        status: "NOT_ELIGIBLE",
-        reason: `Your branch '${user.branch || "Unknown"}' is not eligible.`,
-      };
-    }
-  }
-
-  const rules = company.eligibility_rules || {};
-
-  const minCgpa = rules.min_cgpa !== undefined ? rules.min_cgpa : null;
-  if (minCgpa !== null && minCgpa !== undefined) {
-    if (user.cgpa === null || user.cgpa === undefined) {
-      return { status: "CHECK", reason: "CGPA not set in profile." };
-    }
-    if (Number(user.cgpa) < Number(minCgpa)) {
-      return {
-        status: "NOT_ELIGIBLE",
-        reason: `Your CGPA (${Number(user.cgpa).toFixed(2)}) is below the required ${Number(minCgpa).toFixed(2)}.`,
-      };
-    }
-  }
-
-  const minTenth = rules.min_tenth_marks || rules.min_tenth || null;
-  if (minTenth !== null && minTenth !== undefined) {
-    if (user.tenth_marks === null || user.tenth_marks === undefined) {
-      return { status: "CHECK", reason: "10th marks not set in profile." };
-    }
-    if (Number(user.tenth_marks) < Number(minTenth)) {
-      return {
-        status: "NOT_ELIGIBLE",
-        reason: `Your 10th marks (${Number(user.tenth_marks).toFixed(1)}%) are below the required ${Number(minTenth).toFixed(1)}%.`,
-      };
-    }
-  }
-
-  const minTwelfth = rules.min_twelfth_marks || rules.min_twelfth || null;
-  if (minTwelfth !== null && minTwelfth !== undefined) {
-    if (user.twelfth_marks === null || user.twelfth_marks === undefined) {
-      return { status: "CHECK", reason: "12th marks not set in profile." };
-    }
-    if (Number(user.twelfth_marks) < Number(minTwelfth)) {
-      return {
-        status: "NOT_ELIGIBLE",
-        reason: `Your 12th marks (${Number(user.twelfth_marks).toFixed(1)}%) are below the required ${Number(minTwelfth).toFixed(1)}%.`,
-      };
-    }
-  }
-
-  const requiresNoArrears = rules.requires_no_arrears !== undefined ? rules.requires_no_arrears : false;
-  if (requiresNoArrears) {
-    if (user.has_arrears) {
-      return {
-        status: "NOT_ELIGIBLE",
-        reason: "Company requires no standing arrears, but you have arrears.",
-      };
-    }
-  }
-
-  return { status: "ELIGIBLE", reason: "You meet all academic criteria." };
-}
 
 function DashboardPageContent() {
   const { user, encryptionKey } = useAppStore();
@@ -319,38 +258,10 @@ function DashboardPageContent() {
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      // 1. Fetch companies directly from Supabase
-      const { data: compData, error: compError } = await supabase
-        .from("companies")
-        .select("*")
-        .order("created_at", { ascending: false });
-      
-      if (compError) throw compError;
-
-      // 2. Fetch user profile from Supabase
-      let activeProfile = user;
-      if (user?.id) {
-        const { data: profileData } = await supabase
-          .from("student_profiles")
-          .select("*")
-          .eq("user_id", user.id)
-          .maybeSingle();
-        if (profileData) {
-          activeProfile = { ...user, ...profileData };
-        }
-      }
-
-      // Compute client-side eligibility
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const companiesWithEligibility: CompanyWithEligibility[] = (compData || []).map((c: any) => {
-        const eligibility = getEligibility(activeProfile, c);
-        return {
-          ...c,
-          eligibility_status: eligibility.status,
-          eligibility_reason: eligibility.reason
-        };
-      });
-      setCompanies(companiesWithEligibility);
+      // 1. Fetch companies from API (FastAPI calculates eligibility)
+      const resCompanies = await api.get("/companies");
+      const compData = resCompanies.data || [];
+      setCompanies(compData);
 
       // 3. Fetch applications from FastAPI to get computed priority scoring and stale status
       let appData = [];
@@ -2431,7 +2342,6 @@ function DashboardPageContent() {
                         <th className="py-4 px-6">DEADLINE</th>
                         <th className="py-4 px-6">ELIGIBILITY</th>
                         <th className="py-4 px-6">FIT & READINESS</th>
-                        <th className="py-4 px-6">TRACKING STAGE</th>
                         <th className="py-4 px-6 text-right">ACTION</th>
                       </tr>
                     </thead>
@@ -2440,10 +2350,7 @@ function DashboardPageContent() {
                         const app = applications[c.id];
                         const oppState = opportunityStates[c.id];
                         const effectiveState = oppState?.state;
-                        const activeStatus = app ? app.status : "";
                         const deadlineDate = c.registration_deadline ? new Date(c.registration_deadline) : null;
-                        const isDeadlinePast = deadlineDate ? deadlineDate < new Date() : false;
-                        const isAppSnoozed = app ? isSnoozed(app) : false;
                         const isRowChecked = selectedCompanyIds.includes(c.id);
                         const isArchived = effectiveState === 'archived' || effectiveState === 'auto_archived';
                         
@@ -2504,48 +2411,67 @@ function DashboardPageContent() {
                               )}
                             </td>
 
-                            <td className="py-5 px-6">
-                              {getEligibilityIcon(c.eligibility_status)}
-                              {c.eligibility_reason && (
-                                <p className="text-[10px] text-muted-foreground max-w-xs mt-1 leading-normal uppercase">
-                                  {c.eligibility_reason}
-                                </p>
-                              )}
+                            <td className="py-5 px-6 relative group/elig">
+                              <div className="flex flex-col gap-1 cursor-help">
+                                {getEligibilityIcon(c.eligibility_status)}
+                                {c.eligibility_reason && (
+                                  <p className="text-[10px] text-muted-foreground max-w-xs mt-1 leading-normal uppercase">
+                                    {c.eligibility_reason}
+                                  </p>
+                                )}
+                              </div>
+                              
+                              <div className="absolute left-6 bottom-full mb-1 hidden group-hover/elig:block bg-zinc-950 border-2 border-black p-4 shadow-[4px_4px_0px_0px_#000] z-50 text-[10px] min-w-[300px] max-w-md uppercase leading-relaxed font-bold rounded-none">
+                                {c.eligibility_explanation ? (
+                                  <div className="space-y-3">
+                                    {c.eligibility_explanation.failed && c.eligibility_explanation.failed.length > 0 && (
+                                      <div className="space-y-1">
+                                        <p className="text-red-500 font-extrabold tracking-wider border-b border-red-500/20 pb-0.5">⚠️ FAILED CRITERIA</p>
+                                        <ul className="list-disc list-inside text-red-400/90 font-mono text-[9px] space-y-0.5 normal-case">
+                                          {c.eligibility_explanation.failed.map((rule, idx) => (
+                                            <li key={idx} className="whitespace-normal">{rule}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                    {c.eligibility_explanation.matched && c.eligibility_explanation.matched.length > 0 && (
+                                      <div className="space-y-1">
+                                        <p className="text-emerald-500 font-extrabold tracking-wider border-b border-emerald-500/20 pb-0.5">✓ MATCHED CRITERIA</p>
+                                        <ul className="list-disc list-inside text-emerald-400/90 font-mono text-[9px] space-y-0.5 normal-case">
+                                          {c.eligibility_explanation.matched.map((rule, idx) => (
+                                            <li key={idx} className="whitespace-normal">{rule}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                    {c.eligibility_raw_text && (
+                                      <div className="space-y-1">
+                                        <p className="text-muted-foreground font-extrabold tracking-wider border-b border-zinc-850 pb-0.5">SOURCE TEXT</p>
+                                        <pre className="text-[9px] font-mono text-zinc-300 normal-case bg-zinc-900 p-2 border border-zinc-800 max-h-32 overflow-y-auto whitespace-pre-wrap leading-normal font-normal">
+                                          {c.eligibility_raw_text}
+                                        </pre>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2">
+                                    <p className="text-muted-foreground">No detailed rules parsed for this company.</p>
+                                    {c.eligibility_raw_text && (
+                                      <div className="space-y-1">
+                                        <p className="text-muted-foreground font-extrabold tracking-wider border-b border-zinc-850 pb-0.5">SOURCE TEXT</p>
+                                        <pre className="text-[9px] font-mono text-zinc-300 normal-case bg-zinc-900 p-2 border border-zinc-800 max-h-32 overflow-y-auto whitespace-pre-wrap leading-normal font-normal">
+                                          {c.eligibility_raw_text}
+                                        </pre>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                             </td>
 
                             <td className="py-5 px-6 font-mono text-[10px] font-bold space-y-0.5">
                               <p>MATCH: <span className="text-accent">{app?.match_score > 0 ? `${app.match_score}%` : '0%'}</span></p>
                               <p>PREP: <span className="text-foreground">{getPrepScore(c)}%</span></p>
-                            </td>
-
-                            <td className="py-5 px-6">
-                              {app ? (
-                                <div className="flex flex-col gap-1 items-start">
-                                  <span className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 ${getStatusColor(activeStatus)}`}>
-                                    {activeStatus}
-                                  </span>
-                                  {isAppSnoozed && (
-                                    <span className="text-[8px] font-bold text-amber-500 uppercase flex items-center gap-0.5">
-                                      <Clock size={8} /> SNOOZED
-                                    </span>
-                                  )}
-                                  {app.user_decision === 'archived' && (
-                                    <span className="text-[8px] font-bold text-muted-foreground uppercase">ARCHIVED</span>
-                                  )}
-                                </div>
-                              ) : effectiveState === 'decision_pending' ? (
-                                <span className="text-[9px] font-black text-amber-400 uppercase px-2 py-0.5 bg-amber-950/40 border border-amber-500/50">
-                                  ⏰ DECISION PENDING
-                                </span>
-                              ) : effectiveState === 'archived' || effectiveState === 'auto_archived' ? (
-                                <span className="text-[9px] font-bold text-muted-foreground uppercase px-2 py-0.5 bg-muted border border-border">
-                                  📦 {effectiveState === 'auto_archived' ? 'AUTO-ARCHIVED' : 'ARCHIVED'}
-                                </span>
-                              ) : isDeadlinePast ? (
-                                <span className="text-[9px] font-bold text-red-400 uppercase">EXPIRED</span>
-                              ) : (
-                                <span className="text-xs text-muted-foreground uppercase">NOT TRACKING</span>
-                              )}
                             </td>
 
                             <td className="py-5 px-6 text-right">
@@ -2558,48 +2484,22 @@ function DashboardPageContent() {
                                   >
                                     ↩ RESTORE
                                   </button>
-                                ) : effectiveState === 'decision_pending' ? (
-                                  // Decision pending: show quick decision buttons
+                                ) : (
                                   <div className="flex gap-2">
                                     <button
                                       onClick={() => handleOpportunityAction(c.id, 'track')}
                                       className="h-10 px-3 border-2 border-accent bg-accent text-black text-xs font-bold tracking-wider uppercase hover:bg-accent/80 transition-all"
                                     >
-                                      ✅ Applied
+                                      ✅ Apply
                                     </button>
                                     <button
-                                      onClick={() => handleOpportunityAction(c.id, 'archive')}
+                                      onClick={() => handleOpportunityAction(c.id, 'archive', 'MANUAL_NOT_INTERESTED')}
                                       className="h-10 px-3 border-2 border-border bg-background text-xs font-bold tracking-wider uppercase hover:bg-muted transition-all"
                                     >
-                                      ✗ Skip
+                                      ✗ Archive
                                     </button>
                                   </div>
-                                ) : encryptionKey ? (
-                                  <div className="relative inline-block text-left group">
-                                    <button className="h-10 px-4 border-2 border-border bg-background hover:bg-muted text-xs font-bold tracking-wider uppercase flex items-center gap-2">
-                                      <span>{app && app.user_decision === 'tracking' ? "UPDATE ROUND" : "TRACK WORKSPACE"}</span>
-                                      <ChevronDown size={12} />
-                                    </button>
-                                    <div className="absolute right-0 bottom-full z-10 mb-1 w-44 border-2 border-black bg-background py-1 hidden group-hover:block hover:block">
-                                      {["Applied", "Shortlisted", "OA", "Technical", "HR", "Offer", "Rejected"].map((s) => (
-                                        <button
-                                          key={s}
-                                          onClick={() => handleUpdateApplication(c.id, { 
-                                            status: s,
-                                            current_round: s,
-                                            user_decision: 'tracking' 
-                                          })}
-                                          className={`
-                                            w-full text-left px-4 py-2 text-xs font-bold uppercase tracking-wider
-                                            ${activeStatus === s && app?.user_decision === 'tracking' ? "bg-accent text-black" : "hover:bg-muted text-foreground"}
-                                          `}
-                                        >
-                                          {s}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  </div>
-                                ) : null}
+                                )}
 
                                 {c.registration_link && (
                                   <a
@@ -3219,15 +3119,61 @@ function DashboardPageContent() {
                     {selectedCompanyIds.slice(0, 3).map(id => {
                       const comp = companies.find(c => c.id === id);
                       return (
-                        <td key={id} className="py-4 px-6 border-r border-border space-y-1.5">
+                        <td key={id} className="py-4 px-6 border-r border-border space-y-1.5 relative group/elig">
                           {comp ? (
                             <>
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex flex-col gap-1 cursor-help">
                                 {getEligibilityIcon(comp.eligibility_status)}
+                                {comp.eligibility_reason && (
+                                  <p className="text-[9px] text-muted-foreground leading-normal max-w-xs uppercase">{comp.eligibility_reason}</p>
+                                )}
                               </div>
-                              {comp.eligibility_reason && (
-                                <p className="text-[9px] text-muted-foreground leading-normal max-w-xs">{comp.eligibility_reason}</p>
-                              )}
+                              <div className="absolute left-1/2 bottom-full -translate-x-1/2 mb-1 hidden group-hover/elig:block bg-zinc-950 border-2 border-black p-4 shadow-[4px_4px_0px_0px_#000] z-50 text-[10px] min-w-[280px] max-w-md uppercase leading-relaxed font-bold rounded-none">
+                                {comp.eligibility_explanation ? (
+                                  <div className="space-y-3">
+                                    {comp.eligibility_explanation.failed && comp.eligibility_explanation.failed.length > 0 && (
+                                      <div className="space-y-1">
+                                        <p className="text-red-500 font-extrabold tracking-wider border-b border-red-500/20 pb-0.5">⚠️ FAILED CRITERIA</p>
+                                        <ul className="list-disc list-inside text-red-400/90 font-mono text-[9px] space-y-0.5 normal-case">
+                                          {comp.eligibility_explanation.failed.map((rule, idx) => (
+                                            <li key={idx} className="whitespace-normal">{rule}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                    {comp.eligibility_explanation.matched && comp.eligibility_explanation.matched.length > 0 && (
+                                      <div className="space-y-1">
+                                        <p className="text-emerald-500 font-extrabold tracking-wider border-b border-emerald-500/20 pb-0.5">✓ MATCHED CRITERIA</p>
+                                        <ul className="list-disc list-inside text-emerald-400/90 font-mono text-[9px] space-y-0.5 normal-case">
+                                          {comp.eligibility_explanation.matched.map((rule, idx) => (
+                                            <li key={idx} className="whitespace-normal">{rule}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                    {comp.eligibility_raw_text && (
+                                      <div className="space-y-1">
+                                        <p className="text-muted-foreground font-extrabold tracking-wider border-b border-zinc-850 pb-0.5">SOURCE TEXT</p>
+                                        <pre className="text-[9px] font-mono text-zinc-300 normal-case bg-zinc-900 p-2 border border-zinc-800 max-h-24 overflow-y-auto whitespace-pre-wrap leading-normal font-normal">
+                                          {comp.eligibility_raw_text}
+                                        </pre>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2">
+                                    <p className="text-muted-foreground">No detailed rules parsed for this company.</p>
+                                    {comp.eligibility_raw_text && (
+                                      <div className="space-y-1">
+                                        <p className="text-muted-foreground font-extrabold tracking-wider border-b border-zinc-850 pb-0.5">SOURCE TEXT</p>
+                                        <pre className="text-[9px] font-mono text-zinc-300 normal-case bg-zinc-900 p-2 border border-zinc-800 max-h-24 overflow-y-auto whitespace-pre-wrap leading-normal font-normal">
+                                          {comp.eligibility_raw_text}
+                                        </pre>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                             </>
                           ) : "—"}
                         </td>
@@ -3693,9 +3639,44 @@ function DashboardPageContent() {
                           <span className="text-xs font-bold uppercase">{selectedCompany.eligibility_status}</span>
                         </div>
                         {selectedCompany.eligibility_reason && (
-                          <p className="text-[10px] text-muted-foreground uppercase leading-snug">
+                          <p className="text-[10px] text-muted-foreground uppercase leading-snug font-bold">
                             {selectedCompany.eligibility_reason}
                           </p>
+                        )}
+
+                        {selectedCompany.eligibility_explanation && (
+                          <div className="space-y-3.5 pt-2 border-t border-border/60">
+                            {selectedCompany.eligibility_explanation.failed && selectedCompany.eligibility_explanation.failed.length > 0 && (
+                              <div className="space-y-1">
+                                <span className="text-[9px] font-black text-red-500 tracking-widest uppercase block">⚠️ FAILED CRITERIA</span>
+                                <ul className="list-disc list-inside text-[10px] text-red-400 font-mono space-y-1 pl-1">
+                                  {selectedCompany.eligibility_explanation.failed.map((rule, idx) => (
+                                    <li key={idx} className="leading-tight normal-case">{rule}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {selectedCompany.eligibility_explanation.matched && selectedCompany.eligibility_explanation.matched.length > 0 && (
+                              <div className="space-y-1">
+                                <span className="text-[9px] font-black text-emerald-500 tracking-widest uppercase block">✓ MATCHED CRITERIA</span>
+                                <ul className="list-disc list-inside text-[10px] text-emerald-400 font-mono space-y-1 pl-1">
+                                  {selectedCompany.eligibility_explanation.matched.map((rule, idx) => (
+                                    <li key={idx} className="leading-tight normal-case">{rule}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {selectedCompany.eligibility_raw_text && (
+                          <div className="space-y-1 pt-2 border-t border-border/60">
+                            <span className="text-[9px] font-black text-muted-foreground tracking-widest uppercase block">RAW ELIGIBILITY TEXT (SOURCE)</span>
+                            <pre className="text-[10px] font-mono text-zinc-350 bg-zinc-950 p-2.5 border border-border/80 whitespace-pre-wrap max-h-32 overflow-y-auto leading-normal normal-case font-normal">
+                              {selectedCompany.eligibility_raw_text}
+                            </pre>
+                          </div>
                         )}
                       </div>
                     </div>
