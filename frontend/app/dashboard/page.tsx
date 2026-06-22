@@ -2341,7 +2341,6 @@ function DashboardPageContent() {
                         <th className="py-4 px-6">CTC / STIPEND</th>
                         <th className="py-4 px-6">DEADLINE</th>
                         <th className="py-4 px-6">ELIGIBILITY</th>
-                        <th className="py-4 px-6">FIT & READINESS</th>
                         <th className="py-4 px-6 text-right">ACTION</th>
                       </tr>
                     </thead>
@@ -2467,11 +2466,6 @@ function DashboardPageContent() {
                                   </div>
                                 )}
                               </div>
-                            </td>
-
-                            <td className="py-5 px-6 font-mono text-[10px] font-bold space-y-0.5">
-                              <p>MATCH: <span className="text-accent">{app?.match_score > 0 ? `${app.match_score}%` : '0%'}</span></p>
-                              <p>PREP: <span className="text-foreground">{getPrepScore(c)}%</span></p>
                             </td>
 
                             <td className="py-5 px-6 text-right">
