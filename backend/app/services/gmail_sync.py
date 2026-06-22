@@ -21,7 +21,7 @@ from app.models.models import (
     Application, Notification, RawIngestionJob, AttachmentMetadata, NotificationJob,
     IngestionAuditLog
 )
-from app.services.email_parser import parse_placement_email
+from app.services.email_parser import parse_placement_email, build_regex_fallback_response
 from app.services.excel_parser import extract_neo_ids_from_excel
 from app.services.pdf_extractor import parse_job_description
 from app.services.ai_service import precompute_jd_intelligence_deterministic
@@ -201,7 +201,32 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         attachment_text = "\n\n".join(attachment_texts)
 
         # 4. Parse Email Body with Escalating LLM chain
-        raw_parsed_info = parse_placement_email(body, subject, attachment_text)
+        # Pre-classification check for Helpdesk CDC / announcements sender
+        sender_lower = sender.lower()
+        if "helpdesk cdc" in sender_lower or "helpdesk.cdc" in sender_lower:
+            logger.info(f"Helpdesk CDC sender detected for job {job.id}. Forcing GENERAL_ANNOUNCEMENT.")
+            fallback_res = build_regex_fallback_response(body, subject, force_announcement=True)
+            raw_parsed_info = {
+                "parser_metadata": {
+                    "parser_version": "v4-sender-override",
+                    "model_used": "sender-rules"
+                },
+                "overall_confidence": 1.0,
+                "extracted_data": {
+                    "email_category": "GENERAL_ANNOUNCEMENT",
+                    "company": {"value": None, "confidence": 1.0},
+                    "event_type": {"value": None, "confidence": 1.0},
+                    "roles": [],
+                    "announcement": {
+                        "title": {"value": fallback_res["extracted_data"]["announcement"]["title"]["value"], "confidence": 1.0},
+                        "announcement_type": {"value": fallback_res["extracted_data"]["announcement"]["announcement_type"]["value"], "confidence": 1.0},
+                        "deadline_iso": {"value": fallback_res["extracted_data"]["announcement"]["deadline_iso"]["value"], "confidence": 1.0},
+                        "body_summary": {"value": body[:200] + "...", "confidence": 1.0}
+                    }
+                }
+            }
+        else:
+            raw_parsed_info = parse_placement_email(body, subject, attachment_text)
         
         # Save raw parsed response into DB
         job.parsed_output = raw_parsed_info

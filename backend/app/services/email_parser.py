@@ -540,7 +540,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     return data
 
 
-def build_regex_fallback_response(email_body: str, subject: str = "") -> Dict[str, Any]:
+def build_regex_fallback_response(email_body: str, subject: str = "", force_announcement: bool = False) -> Dict[str, Any]:
     """
     Builds a mock LLM-structure response from regex+spaCy extraction.
     Used as last resort when both Ollama and HuggingFace fail.
@@ -599,7 +599,7 @@ def build_regex_fallback_response(email_body: str, subject: str = "") -> Dict[st
         r"all interested students", r"completion of"
     ]
     
-    is_general = any(re.search(pat, text_to_check) for pat in general_keywords)
+    is_general = force_announcement or any(re.search(pat, text_to_check) for pat in general_keywords)
     
     if is_general:
         email_category = "GENERAL_ANNOUNCEMENT"
