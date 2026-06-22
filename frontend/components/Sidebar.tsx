@@ -15,7 +15,8 @@ import {
   Moon,
   Menu,
   X,
-  Lock
+  Lock,
+  Calendar
 } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { useSearchParams } from "next/navigation";
@@ -58,6 +59,7 @@ export default function Sidebar() {
 
   const menuItems = [
     { name: "ACTION CENTER", href: "/dashboard", icon: LayoutDashboard },
+    { name: "CALENDAR", href: "/calendar", icon: Calendar },
     { name: "OPPORTUNITIES", href: "/dashboard?tab=opportunities", icon: Target },
     { name: "ACTIVE TRACKING", href: "/dashboard?tab=tracking", icon: Activity },
     { name: "MY APPLICATIONS", href: "/dashboard?tab=applications", icon: Briefcase },

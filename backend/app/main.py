@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.api import auth, users, companies, applications, gmail, notifications, resumes, ai, announcements
+from app.api import auth, users, companies, applications, gmail, notifications, resumes, ai, calendar, announcements
 from app.services.gmail_sync import start_scheduler, shutdown_scheduler
 
 # Auto-create tables (for SQLite local dev convenience, production uses migrations)
@@ -46,6 +46,7 @@ app.include_router(gmail.router, prefix=settings.API_V1_STR)
 app.include_router(notifications.router, prefix=settings.API_V1_STR)
 app.include_router(resumes.router, prefix=settings.API_V1_STR)
 app.include_router(ai.router, prefix=settings.API_V1_STR)
+app.include_router(calendar.router, prefix=settings.API_V1_STR)
 app.include_router(announcements.router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")

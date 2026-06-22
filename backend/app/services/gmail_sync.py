@@ -947,3 +947,12 @@ def update_recruitment_states(db: Session, company: Company, event_type: str, ev
 
     db.commit()
 
+    # Synchronize calendar events for all users tracking this company
+    from app.services.calendar_sync import sync_user_calendar_events
+    for app in apps:
+        try:
+            sync_user_calendar_events(db, app.user_id, company.id)
+        except Exception as sync_err:
+            logger.error(f"Error triggering calendar sync for user {app.user_id} and company {company.id}: {str(sync_err)}")
+
+
