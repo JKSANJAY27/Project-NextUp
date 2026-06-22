@@ -143,6 +143,7 @@ export default function CalendarPage() {
   // Filter archived company IDs
   const archivedCompanyIds = React.useMemo(() => {
     const set = new Set<string>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     applications.forEach((record: any) => {
       if (
         record.record_type === "opportunity_state" &&
