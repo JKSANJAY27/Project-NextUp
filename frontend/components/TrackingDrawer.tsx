@@ -154,7 +154,7 @@ export default function TrackingDrawer({
               Use these actions only if email parsing fails to automatically progress the application.
             </p>
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => onMoveStage("Registration")} className="h-8 border border-border text-[9px] font-bold hover:bg-yellow-500 hover:text-black uppercase transition-colors">Move to Registration</button>
+              <button onClick={() => onMoveStage("Applied")} className="h-8 border border-border text-[9px] font-bold hover:bg-yellow-500 hover:text-black uppercase transition-colors">Move to Registration</button>
               <button onClick={() => onMoveStage("Shortlisted")} className="h-8 border border-border text-[9px] font-bold hover:bg-blue-500 hover:text-black uppercase transition-colors">Move to Shortlisted</button>
               <button onClick={() => onMoveStage("OA")} className="h-8 border border-border text-[9px] font-bold hover:bg-orange-500 hover:text-black uppercase transition-colors">Move to OA</button>
               <button onClick={() => onMoveStage("Interview")} className="h-8 border border-border text-[9px] font-bold hover:bg-purple-500 hover:text-black uppercase transition-colors">Move to Interview</button>

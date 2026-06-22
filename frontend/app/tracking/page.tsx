@@ -109,12 +109,25 @@ export default function TrackingPage() {
 
   const handleMoveStage = async (newStage: string) => {
     if (!selectedCompanyId) return;
+    const appId = applications[selectedCompanyId]?.id;
+    if (!appId) return;
     try {
       if (newStage === "Archive") {
-         await api.patch(`/applications/${selectedCompanyId}`, { user_decision: "archived" });
+         await api.patch(`/applications/${appId}`, { user_decision: "archived" });
          setSelectedCompanyId(null);
       } else {
-         await api.patch(`/applications/${selectedCompanyId}`, { status: newStage });
+         const recruitmentMap: Record<string, string> = {
+           "Applied": "Registration",
+           "Shortlisted": "Shortlisted",
+           "OA": "OA",
+           "Interview": "Interview",
+           "Offer": "Offer",
+           "Rejected": "Rejected"
+         };
+         await api.patch(`/applications/${appId}`, { 
+           status: newStage,
+           recruitment_state: recruitmentMap[newStage] || newStage
+         });
       }
       fetchTrackingData();
     } catch(e) {
