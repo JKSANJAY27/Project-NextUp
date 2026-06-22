@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS applications (
     tailored_resume_enc TEXT,
     match_score INT DEFAULT 0,
     applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    user_decision VARCHAR(50) DEFAULT 'unseen' CHECK (user_decision IN ('unseen', 'interested', 'tracking', 'archived', 'snoozed')),
+    user_decision VARCHAR(50) DEFAULT 'unseen' CHECK (user_decision IN ('unseen', 'interested', 'tracking', 'archived', 'snoozed', 'decision_pending')),
     recruitment_state VARCHAR(50) DEFAULT 'Registration' CHECK (recruitment_state IN ('Registration', 'Shortlisted', 'OA', 'Interview', 'Offer', 'Rejected', 'Awaiting Result', 'Awaiting Shortlist', 'Awaiting OA Result', 'Awaiting Interview Result')),
     last_user_activity_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     workspace_priority_override VARCHAR(50) DEFAULT NULL,
@@ -208,8 +208,29 @@ CREATE TABLE IF NOT EXISTS notifications (
     notification_type VARCHAR(100) DEFAULT 'company_update' CHECK (
         notification_type IN ('company_update', 'deadline', 'shortlist', 'offer', 'system')
     ),
+    severity INT DEFAULT 1, -- 1=low, 2=medium-low, 3=medium, 4=high, 5=critical
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, company_event_id)
+);
+
+-- 14. Opportunity States (Lightweight per-user decision tracking, separate from Application workspaces)
+CREATE TABLE IF NOT EXISTS opportunity_states (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+    -- States: unseen, tracking, decision_pending, archived, auto_archived
+    state VARCHAR(50) DEFAULT 'unseen' CHECK (state IN ('unseen', 'tracking', 'decision_pending', 'archived', 'auto_archived')),
+    -- Archive metadata
+    archive_reason VARCHAR(100) DEFAULT NULL, -- MANUAL, DEADLINE_EXPIRED, AUTO_ARCHIVED, NOT_ELIGIBLE
+    archived_at TIMESTAMP WITH TIME ZONE DEFAULT NULL,
+    -- Decision pending: when it was first moved to decision_pending (never overwritten, used for 90-day auto-archive)
+    decision_pending_since TIMESTAMP WITH TIME ZONE DEFAULT NULL,
+    -- Snooze: Remind Me Later (7 days)
+    snoozed_until TIMESTAMP WITH TIME ZONE DEFAULT NULL,
+    -- Restore: what state to go back to when user clicks Restore
+    previous_state VARCHAR(50) DEFAULT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, company_id)
 );
 
 -- 14. Performance Indexing

@@ -19,7 +19,7 @@ from app.core.security import generate_blind_index
 from app.models.models import (
     User, StudentProfile, Company, CompanyEvent, CompanyChangeLog, Announcement,
     Application, Notification, RawIngestionJob, AttachmentMetadata, NotificationJob,
-    IngestionAuditLog
+    IngestionAuditLog, OpportunityState
 )
 from app.services.email_parser import parse_placement_email, build_regex_fallback_response
 from app.services.excel_parser import extract_neo_ids_from_excel
@@ -36,13 +36,25 @@ def start_scheduler():
     if not scheduler.running:
         scheduler.add_job(process_queued_jobs_cron, "interval", minutes=5, id="queue_processor_job", replace_existing=True)
         scheduler.add_job(refresh_views_cron, "interval", minutes=30, id="view_refresher_job", replace_existing=True)
+        scheduler.add_job(opportunity_lifecycle_cron, "interval", hours=6, id="opportunity_lifecycle_job", replace_existing=True)
         scheduler.start()
-        logger.info("Background queue processor and view refresher scheduler started.")
+        logger.info("Background queue processor, view refresher, and opportunity lifecycle scheduler started.")
 
 def shutdown_scheduler():
     if scheduler.running:
         scheduler.shutdown()
         logger.info("Background scheduler stopped.")
+
+def opportunity_lifecycle_cron():
+    """Scheduled job: run opportunity lifecycle transitions for all users every 6 hours."""
+    from app.services.opportunity_lifecycle import run_lifecycle_for_all_users
+    db = SessionLocal()
+    try:
+        run_lifecycle_for_all_users(db)
+    except Exception as e:
+        logger.error(f"Opportunity lifecycle cron failed: {e}", exc_info=True)
+    finally:
+        db.close()
 
 def recover_stale_jobs(db: Session):
     """
@@ -613,14 +625,15 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                                     Application.user_id == profile.user_id,
                                     Application.company_id == company.id
                                 ).first()
-                                
+
                                 if not app:
                                     app = Application(
                                         user_id=profile.user_id,
                                         company_id=company.id,
                                         status='Shortlisted',
                                         recruitment_state='Shortlisted',
-                                        current_round='Shortlist Announcement'
+                                        current_round='Shortlist Announcement',
+                                        user_decision='tracking',
                                     )
                                     db.add(app)
                                 else:
@@ -628,7 +641,28 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                                         app.status = 'Shortlisted'
                                         app.recruitment_state = 'Shortlisted'
                                         app.current_round = 'Shortlisted'
-                                        
+                                        app.user_decision = 'tracking'
+
+                                # Auto-restore OpportunityState to 'tracking' (Neo ID match = evidence)
+                                opp_state = db.query(OpportunityState).filter(
+                                    OpportunityState.user_id == profile.user_id,
+                                    OpportunityState.company_id == company.id,
+                                ).first()
+                                if not opp_state:
+                                    opp_state = OpportunityState(
+                                        user_id=profile.user_id,
+                                        company_id=company.id,
+                                        state='tracking',
+                                    )
+                                    db.add(opp_state)
+                                else:
+                                    if opp_state.state not in ('tracking',):
+                                        opp_state.previous_state = opp_state.state
+                                    opp_state.state = 'tracking'
+                                    opp_state.archive_reason = None
+                                    opp_state.archived_at = None
+                                    opp_state.updated_at = datetime.utcnow()
+
                                 notif_msg = f"🎉 Congratulations! You are shortlisted in the {company.name} drive for the {company.role} role."
                                 existing_notif = db.query(Notification).filter(
                                     Notification.user_id == profile.user_id,
@@ -639,7 +673,8 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                                         user_id=profile.user_id,
                                         company_event_id=event.id,
                                         message=notif_msg,
-                                        notification_type='shortlist'
+                                        notification_type='shortlist',
+                                        severity=4,
                                     ))
                                 matched_count += 1
                                 
@@ -713,6 +748,20 @@ def process_notification_jobs(db: Session):
             # AND who haven't explicitly set their application to Declined or Rejected
             profiles = db.query(StudentProfile).all()
             
+            # Map event type → (severity int, is_high_visibility bool)
+            EVENT_SEVERITY = {
+                'OFFER':            (5, True),
+                'INTERVIEW_RESULT': (4, True),
+                'INTERVIEW':        (4, True),
+                'OA_RESULT':        (3, True),
+                'OA':               (3, True),
+                'SHORTLIST':        (4, True),
+                'DEADLINE_EXTENSION': (2, False),
+                'REGISTRATION':     (1, False),
+                'REJECTION':        (1, False),
+            }
+            ev_severity, is_high_vis = EVENT_SEVERITY.get(event.event_type, (1, False))
+
             for profile in profiles:
                 # Check branch eligibility
                 if company.eligible_branches:
@@ -720,65 +769,101 @@ def process_notification_jobs(db: Session):
                     eligible_branches_upper = [b.strip().upper() for b in company.eligible_branches]
                     if user_branch not in eligible_branches_upper:
                         continue
-                        
+
                 # Check application state to see if notifications are silenced
                 app = db.query(Application).filter(
                     Application.user_id == profile.user_id,
                     Application.company_id == company.id
                 ).first()
-                
+
                 if app and app.status in ('Rejected', 'Declined', 'Ignored'):
-                    # Silenced state
+                    # Silenced — always skip
                     continue
-                    
-                # Create the notification message based on event type
-                if event.event_type == 'REGISTRATION':
-                    deadline_str = company.registration_deadline.strftime('%b %d, %I:%M %p') if company.registration_deadline else 'N/A'
-                    msg = f"📢 New drive: {company.name} is hiring for {company.role} ({company.category}). Deadline: {deadline_str}."
-                    notif_type = 'company_update'
-                elif event.event_type == 'DEADLINE_EXTENSION':
-                    deadline_str = company.registration_deadline.strftime('%b %d, %I:%M %p') if company.registration_deadline else 'N/A'
-                    msg = f"⏰ Deadline extended! {company.name} ({company.role}) new deadline: {deadline_str}."
-                    notif_type = 'deadline'
-                elif event.event_type == 'SHORTLIST':
-                    # Shortlisted students notified individually. Skip broadcast.
-                    continue
-                elif event.event_type == 'OA':
-                    msg = f"📝 Online Assessment scheduled for {company.name} ({company.role}). Check email for details."
-                    notif_type = 'company_update'
-                elif event.event_type == 'OA_RESULT':
-                    msg = f"📊 OA results announced for {company.name} ({company.role}). Check your application status."
-                    notif_type = 'company_update'
-                elif event.event_type == 'INTERVIEW':
-                    msg = f"🎤 Interview scheduled for {company.name} ({company.role}). Check email for slot details."
-                    notif_type = 'company_update'
-                elif event.event_type == 'INTERVIEW_RESULT':
-                    msg = f"📋 Interview results announced for {company.name} ({company.role}). Check your application status."
-                    notif_type = 'company_update'
-                elif event.event_type == 'OFFER':
-                    msg = f"🎉 Offers released by {company.name} for {company.role}! Check your application status."
-                    notif_type = 'offer'
-                elif event.event_type == 'REJECTION':
-                    # Rejection notifications — can be noisy, send as system update
-                    msg = f"📬 Update from {company.name} ({company.role}): {event.subject}."
-                    notif_type = 'company_update'
-                else:
-                    msg = f"📅 Update from {company.name}: {event.subject}."
-                    notif_type = 'company_update'
-                    
-                # Unique constraint UNIQUE(user_id, company_event_id) prevents duplication
+
+                # Check opportunity state to determine if this is an archived drive
+                opp_state = db.query(OpportunityState).filter(
+                    OpportunityState.user_id == profile.user_id,
+                    OpportunityState.company_id == company.id
+                ).first()
+                opp_current = opp_state.state if opp_state else "unseen"
+
+                # Deduplicate — always check first
                 existing = db.query(Notification).filter(
                     Notification.user_id == profile.user_id,
                     Notification.company_event_id == event.id
                 ).first()
-                
-                if not existing:
-                    db.add(Notification(
-                        user_id=profile.user_id,
-                        company_event_id=event.id,
-                        message=msg,
-                        notification_type=notif_type
-                    ))
+                if existing:
+                    continue
+
+                if opp_current in ('archived', 'auto_archived'):
+                    # User archived this drive — do NOT auto-restore.
+                    # For high-visibility events, show a high-severity alert.
+                    # For low-priority events, only show one if no other unread notification exists.
+                    if is_high_vis:
+                        event_label = event.event_type.replace('_', ' ').title()
+                        msg = (
+                            f"🔔 [{event_label}] {company.name} ({company.role}): "
+                            f"This drive was archived. You may have applied — check your email."
+                        )
+                        notif_type = 'deadline'
+                        severity = ev_severity
+                    else:
+                        # Low priority: suppress if unread notification already exists for this company
+                        unread_for_company = db.query(Notification).join(
+                            CompanyEvent, Notification.company_event_id == CompanyEvent.id
+                        ).filter(
+                            Notification.user_id == profile.user_id,
+                            CompanyEvent.company_id == company.id,
+                            Notification.is_read == False
+                        ).first()
+                        if unread_for_company:
+                            continue  # Suppress spam
+                        msg = f"📬 New update for archived drive: {company.name} ({company.role})."
+                        notif_type = 'system'
+                        severity = 1
+                else:
+                    # Standard notification path for active/tracking/unseen states
+                    if event.event_type == 'REGISTRATION':
+                        deadline_str = company.registration_deadline.strftime('%b %d, %I:%M %p') if company.registration_deadline else 'N/A'
+                        msg = f"📢 New drive: {company.name} is hiring for {company.role} ({company.category}). Deadline: {deadline_str}."
+                        notif_type = 'company_update'
+                    elif event.event_type == 'DEADLINE_EXTENSION':
+                        deadline_str = company.registration_deadline.strftime('%b %d, %I:%M %p') if company.registration_deadline else 'N/A'
+                        msg = f"⏰ Deadline extended! {company.name} ({company.role}) new deadline: {deadline_str}."
+                        notif_type = 'deadline'
+                    elif event.event_type == 'SHORTLIST':
+                        # Shortlisted students notified individually. Skip broadcast.
+                        continue
+                    elif event.event_type == 'OA':
+                        msg = f"📝 Online Assessment scheduled for {company.name} ({company.role}). Check email for details."
+                        notif_type = 'company_update'
+                    elif event.event_type == 'OA_RESULT':
+                        msg = f"📊 OA results announced for {company.name} ({company.role}). Check your application status."
+                        notif_type = 'company_update'
+                    elif event.event_type == 'INTERVIEW':
+                        msg = f"🎤 Interview scheduled for {company.name} ({company.role}). Check email for slot details."
+                        notif_type = 'company_update'
+                    elif event.event_type == 'INTERVIEW_RESULT':
+                        msg = f"📋 Interview results announced for {company.name} ({company.role}). Check your application status."
+                        notif_type = 'company_update'
+                    elif event.event_type == 'OFFER':
+                        msg = f"🎉 Offers released by {company.name} for {company.role}! Check your application status."
+                        notif_type = 'offer'
+                    elif event.event_type == 'REJECTION':
+                        msg = f"📬 Update from {company.name} ({company.role}): {event.subject}."
+                        notif_type = 'company_update'
+                    else:
+                        msg = f"📅 Update from {company.name}: {event.subject}."
+                        notif_type = 'company_update'
+                    severity = ev_severity
+
+                db.add(Notification(
+                    user_id=profile.user_id,
+                    company_event_id=event.id,
+                    message=msg,
+                    notification_type=notif_type,
+                    severity=severity
+                ))
                     
             job.status = 'completed'
             job.processed_at = datetime.utcnow()

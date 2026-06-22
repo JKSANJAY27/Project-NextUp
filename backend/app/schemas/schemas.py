@@ -112,14 +112,31 @@ class ApplicationOut(BaseModel):
     class Config:
         from_attributes = True
 
+class OpportunityStateOut(BaseModel):
+    record_type: str = "opportunity_state"
+    company_id: UUID
+    state: str  # unseen, tracking, decision_pending, archived, auto_archived
+    archive_reason: Optional[str] = None
+    archived_at: Optional[datetime] = None
+    decision_pending_since: Optional[datetime] = None
+    snoozed_until: Optional[datetime] = None
+    previous_state: Optional[str] = None
+    updated_at: datetime
+    # Minimal company info for display
+    company: Optional[CompanyOut] = None
+
+    class Config:
+        from_attributes = True
+
 # Notification Schemas
 class NotificationOut(BaseModel):
     id: UUID
     user_id: UUID
-    company_event_id: UUID
+    company_event_id: Optional[UUID] = None
     message: str
     is_read: bool
     notification_type: str
+    severity: int = 1  # 1=low, 3=medium, 4=high, 5=critical
     created_at: datetime
 
     class Config:
@@ -130,8 +147,9 @@ class NotificationDetail(BaseModel):
     message: str
     is_read: bool
     notification_type: str
+    severity: int = 1
     created_at: datetime
-    company_event_id: UUID
+    company_event_id: Optional[UUID] = None
     
     # Source Event Fields
     subject: Optional[str] = None

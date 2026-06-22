@@ -25,10 +25,34 @@ export default function CalendarPage() {
       setLoading(true);
       try {
         const res = await api.get("/companies");
+
+        // Fetch opportunity states to filter out archived deadlines
+        let archivedCompanyIds = new Set<string>();
+        try {
+          const appRes = await api.get("/applications");
+          (appRes.data || []).forEach((record: any) => {
+            if (
+              record.record_type === "opportunity_state" &&
+              (record.state === "archived" || record.state === "auto_archived")
+            ) {
+              archivedCompanyIds.add(record.company_id);
+            }
+            // Also check real apps with user_decision=archived
+            if (record.record_type === "application" && record.user_decision === "archived") {
+              archivedCompanyIds.add(record.company_id);
+            }
+          });
+        } catch (e) {
+          // Ignore if not available — show all events
+        }
+
         const extractedEvents: PlacementEvent[] = [];
         
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         res.data.forEach((company: any) => {
+          // Skip archived companies
+          if (archivedCompanyIds.has(company.id)) return;
+
           if (company.registration_deadline) {
             extractedEvents.push({
               id: `${company.id}-deadline`,

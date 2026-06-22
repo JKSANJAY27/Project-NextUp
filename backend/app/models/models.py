@@ -17,6 +17,7 @@ class User(Base):
     resumes = relationship("Resume", back_populates="user", cascade="all, delete-orphan")
     applications = relationship("Application", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    opportunity_states = relationship("OpportunityState", back_populates="user", cascade="all, delete-orphan")
 
 class StudentProfile(Base):
     __tablename__ = "student_profiles"
@@ -79,6 +80,7 @@ class Company(Base):
     applications = relationship("Application", back_populates="company", cascade="all, delete-orphan")
     events = relationship("CompanyEvent", back_populates="company", cascade="all, delete-orphan")
     change_logs = relationship("CompanyChangeLog", back_populates="company", cascade="all, delete-orphan")
+    opportunity_states = relationship("OpportunityState", back_populates="company", cascade="all, delete-orphan")
 
 class CompanyChangeLog(Base):
     __tablename__ = "company_change_logs"
@@ -129,6 +131,29 @@ class Application(Base):
 
     user = relationship("User", back_populates="applications")
     company = relationship("Company", back_populates="applications")
+
+class OpportunityState(Base):
+    __tablename__ = "opportunity_states"
+    __table_args__ = (UniqueConstraint('user_id', 'company_id', name='uq_opportunity_state_user_company'),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    # States: unseen, tracking, decision_pending, archived, auto_archived
+    state = Column(String, default="unseen")
+    # Archive metadata
+    archive_reason = Column(String, default=None, nullable=True)  # MANUAL, DEADLINE_EXPIRED, AUTO_ARCHIVED, NOT_ELIGIBLE
+    archived_at = Column(DateTime, default=None, nullable=True)
+    # Decision pending metadata
+    decision_pending_since = Column(DateTime, default=None, nullable=True)  # Set once when first moved to decision_pending
+    # Snooze (Remind Me Later) for decision_pending
+    snoozed_until = Column(DateTime, default=None, nullable=True)
+    # Restore target: what state to restore to when user clicks Restore
+    previous_state = Column(String, default=None, nullable=True)  # unseen, tracking, decision_pending
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="opportunity_states")
+    company = relationship("Company", back_populates="opportunity_states")
 
 class Announcement(Base):
     __tablename__ = "announcements"
@@ -190,6 +215,7 @@ class Notification(Base):
     message = Column(String, nullable=False)
     is_read = Column(Boolean, default=False)
     notification_type = Column(String, default="company_update")
+    severity = Column(Integer, default=1)  # 1=low, 3=medium, 4=high, 5=critical
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="notifications")

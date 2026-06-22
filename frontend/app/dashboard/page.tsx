@@ -90,6 +90,7 @@ interface CompanyWithEligibility extends Company {
 
 interface Application {
   id: string;
+  record_type: "application";
   company_id: string;
   status: string;
   current_round: string;
@@ -104,13 +105,27 @@ interface Application {
   is_stale: boolean;
 }
 
+interface OpportunityState {
+  record_type: "opportunity_state";
+  company_id: string;
+  state: string; // unseen | tracking | decision_pending | archived | auto_archived
+  archive_reason: string | null;
+  archived_at: string | null;
+  decision_pending_since: string | null;
+  snoozed_until: string | null;
+  previous_state: string | null;
+  updated_at: string;
+  company: Company | null;
+}
+
 interface NotificationDetail {
   id: string;
   message: string;
   is_read: boolean;
   notification_type: string;
+  severity: number; // 1-5
   created_at: string;
-  company_event_id: string;
+  company_event_id: string | null;
   subject?: string;
   sender?: string;
   body?: string;
@@ -255,9 +270,11 @@ function DashboardPageContent() {
 
   const [companies, setCompanies] = useState<CompanyWithEligibility[]>([]);
   const [applications, setApplications] = useState<Record<string, Application>>({});
+  const [opportunityStates, setOpportunityStates] = useState<Record<string, OpportunityState>>({});
   const [notificationBundles, setNotificationBundles] = useState<NotificationBundle[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<Announcement | null>(null);
+  const [showArchivedOpportunities, setShowArchivedOpportunities] = useState(false);
   
   const [loading, setLoading] = useState(true);
   const [showAddCompany, setShowAddCompany] = useState(false);
@@ -348,25 +365,33 @@ function DashboardPageContent() {
       }
 
       const appMap: Record<string, Application> = {};
+      const oppStateMap: Record<string, OpportunityState> = {};
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (appData || []).forEach((app: any) => {
-        appMap[app.company_id] = {
-          id: app.id,
-          company_id: app.company_id,
-          status: app.status || "Applied",
-          current_round: app.current_round || "Applied",
-          notes_enc: app.notes_enc,
-          match_score: app.match_score || 0,
-          user_decision: app.user_decision || "tracking",
-          recruitment_state: app.recruitment_state || "Registration",
-          last_user_activity_at: app.last_user_activity_at,
-          workspace_priority_override: app.workspace_priority_override,
-          snoozed_until: app.snoozed_until,
-          priority_score: app.priority_score || 0,
-          is_stale: app.is_stale || false
-        };
+      (appData || []).forEach((record: any) => {
+        if (record.record_type === "opportunity_state") {
+          oppStateMap[record.company_id] = record as OpportunityState;
+        } else {
+          // Real application tracker
+          appMap[record.company_id] = {
+            id: record.id,
+            record_type: "application",
+            company_id: record.company_id,
+            status: record.status || "Applied",
+            current_round: record.current_round || "Applied",
+            notes_enc: record.notes_enc,
+            match_score: record.match_score || 0,
+            user_decision: record.user_decision || "tracking",
+            recruitment_state: record.recruitment_state || "Registration",
+            last_user_activity_at: record.last_user_activity_at,
+            workspace_priority_override: record.workspace_priority_override,
+            snoozed_until: record.snoozed_until,
+            priority_score: record.priority_score || 0,
+            is_stale: record.is_stale || false
+          };
+        }
       });
       setApplications(appMap);
+      setOpportunityStates(oppStateMap);
 
       // 4. Fetch notifications bundled by company workspace
       if (user) {
@@ -639,6 +664,18 @@ function DashboardPageContent() {
       alert("Failed to complete bulk action.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Opportunity state actions: track | archive | snooze | restore
+  // Called for companies in decision_pending / archived state (no Application workspace yet)
+  const handleOpportunityAction = async (companyId: string, action: "track" | "archive" | "snooze" | "restore") => {
+    try {
+      await api.post(`/applications/opportunity-state?company_id=${companyId}&action=${action}`);
+      await fetchDashboardData();
+    } catch (err) {
+      console.error(`Opportunity action '${action}' failed:`, err);
+      alert(`Failed to ${action} opportunity.`);
     }
   };
 
@@ -954,20 +991,27 @@ function DashboardPageContent() {
   // Filter lists based on tab selection
   const filteredCompanies = companies.filter((c) => {
     const app = applications[c.id];
-    
+    const oppState = opportunityStates[c.id];
+    const effectiveState = oppState?.state;
+
     if (activeTab === "opportunities") {
-      if (app && app.user_decision === "archived") return false;
+      // Hide archived/auto_archived unless user wants to see them
+      if (effectiveState === "archived" || effectiveState === "auto_archived") {
+        return showArchivedOpportunities;
+      }
+      // Hide if it is a confirmed tracking app (belongs in Tracking tab)
+      if (app && app.user_decision === "tracking") return false;
     }
-    
+
     if (activeTab === "tracking") {
       if (!app || app.user_decision !== "tracking") return false;
       if (isSnoozed(app)) return false;
-      if (focusMode && app.workspace_priority_override !== 'pinned') return false;
+      if (focusMode && app.workspace_priority_override !== "pinned") return false;
     }
 
     if (activeTab === "applications") {
       if (!app) return false;
-      const isArchived = app.user_decision === "archived";
+      const isArchived = app.user_decision === "archived" || effectiveState === "archived" || effectiveState === "auto_archived";
       const isRejected = app.status === "Rejected" || app.recruitment_state === "Rejected";
       const isOffer = app.status === "Offer" || app.recruitment_state === "Offer";
       if (!isArchived && !isRejected && !isOffer) return false;
@@ -975,8 +1019,21 @@ function DashboardPageContent() {
 
     if (filterCategory !== "ALL" && c.category !== filterCategory) return false;
     if (filterEligibility !== "ALL" && c.eligibility_status !== filterEligibility) return false;
-    
+
     return true;
+  });
+
+  // Companies awaiting user decision (deadline expired, no app workspace yet)
+  const decisionPendingCompanies = companies.filter(c => {
+    const oppState = opportunityStates[c.id];
+    return oppState?.state === "decision_pending";
+  });
+
+  // Active decision-pending (not snoozed) — shown in Action Center
+  const activeDecisionPendingCompanies = decisionPendingCompanies.filter(c => {
+    const oppState = opportunityStates[c.id];
+    if (!oppState?.snoozed_until) return true;
+    return new Date(oppState.snoozed_until) <= new Date();
   });
 
   const getStatusColor = (status: string) => {
@@ -1270,12 +1327,16 @@ function DashboardPageContent() {
                         </div>
 
                         <div className="space-y-1.5 border-t border-border pt-2.5">
-                          {bundle.notifications.slice(0, 3).map((notif) => (
-                            <div key={notif.id} className="text-[11px] text-foreground leading-normal flex items-start gap-1">
-                              <span>•</span>
-                              <p className="flex-1">{notif.message}</p>
-                            </div>
-                          ))}
+                          {bundle.notifications.slice(0, 3).map((notif) => {
+                            const severityStars = notif.severity >= 4 ? '🔴' : notif.severity >= 3 ? '🟠' : '🟡';
+                            const isHighVis = (notif.severity || 1) >= 3;
+                            return (
+                              <div key={notif.id} className="text-[11px] text-foreground leading-normal flex items-start gap-1">
+                                <span className="shrink-0 mt-0.5" title={`Severity ${notif.severity}`}>{severityStars}</span>
+                                <p className={`flex-1 ${isHighVis ? 'font-semibold' : ''}`}>{notif.message}</p>
+                              </div>
+                            );
+                          })}
                           {bundle.notifications.length > 3 && (
                             <p className="text-[9px] text-muted-foreground uppercase font-bold pl-3">
                               + {bundle.notifications.length - 3} more updates
@@ -1295,7 +1356,13 @@ function DashboardPageContent() {
                             onClick={async () => {
                               try {
                                 await api.post(`/notifications/company/${bundle.company_id}/read`);
-                                handleUpdateApplication(bundle.company_id, { user_decision: 'archived' });
+                                // Archive via opportunity-state if no real app exists, else update app
+                                const hasApp = !!applications[bundle.company_id];
+                                if (hasApp) {
+                                  handleUpdateApplication(bundle.company_id, { user_decision: 'archived' });
+                                } else {
+                                  handleOpportunityAction(bundle.company_id, 'archive');
+                                }
                               } catch (err) {
                                 console.error("Failed to dismiss bundle:", err);
                               }
@@ -1409,6 +1476,67 @@ function DashboardPageContent() {
                 </div>
               )}
             </div>
+
+            {/* Decision Pending Widget — Companies past deadline with no decision */}
+            {activeDecisionPendingCompanies.length > 0 && (
+              <div className="border-2 border-amber-500/60 bg-amber-500/5 p-6 space-y-4">
+                <div className="border-b border-amber-500/40 pb-3 flex justify-between items-center">
+                  <h4 className="text-xs font-black tracking-widest uppercase text-amber-400">
+                    ⏰ DECISION REQUIRED — {activeDecisionPendingCompanies.length} EXPIRED DRIVE{activeDecisionPendingCompanies.length !== 1 ? 'S' : ''}
+                  </h4>
+                  <span className="text-[10px] font-bold text-amber-500/70 uppercase">Deadline has passed. Did you apply?</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {activeDecisionPendingCompanies.slice(0, 6).map((comp) => {
+                    const opp = opportunityStates[comp.id];
+                    const deadlineStr = comp.registration_deadline
+                      ? new Date(comp.registration_deadline).toLocaleString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                      : 'N/A';
+                    const pendingSince = opp?.decision_pending_since
+                      ? new Date(opp.decision_pending_since).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })
+                      : null;
+                    return (
+                      <div key={comp.id} className="border-2 border-amber-500/40 bg-background p-4 space-y-3">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h5 className="font-extrabold text-sm uppercase tracking-tighter text-foreground">{comp.name}</h5>
+                            <p className="text-[10px] text-muted-foreground uppercase">{comp.role} ✦ {comp.category}</p>
+                          </div>
+                          <span className="text-[8px] font-black bg-amber-950/60 border border-amber-500/50 text-amber-400 px-1.5 py-0.5 uppercase shrink-0">
+                            PENDING
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-amber-500/80 font-bold uppercase">
+                          ⏰ Deadline: {deadlineStr}
+                          {pendingSince && <span className="ml-2 text-muted-foreground">• Pending since {pendingSince}</span>}
+                        </div>
+                        <div className="flex gap-2 pt-1 border-t border-border/40">
+                          <button
+                            onClick={() => handleOpportunityAction(comp.id, 'track')}
+                            className="flex-1 h-7 bg-accent text-black font-bold text-[9px] uppercase tracking-wider hover:bg-accent/80 transition-all border border-accent"
+                          >
+                            ✅ Yes, I Applied
+                          </button>
+                          <button
+                            onClick={() => handleOpportunityAction(comp.id, 'archive')}
+                            className="flex-1 h-7 bg-transparent text-muted-foreground font-bold text-[9px] uppercase tracking-wider hover:bg-muted border border-border transition-all"
+                          >
+                            ✗ No, Archive
+                          </button>
+                          <button
+                            onClick={() => handleOpportunityAction(comp.id, 'snooze')}
+                            className="h-7 px-3 bg-transparent text-muted-foreground font-bold text-[9px] uppercase tracking-wider hover:bg-muted border border-border transition-all"
+                            title="Remind me in 7 days"
+                          >
+                            ⏰
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Immediate Actions Feed */}
             <div className="space-y-6">
@@ -1958,6 +2086,16 @@ function DashboardPageContent() {
               
               <div className="flex flex-wrap gap-4">
                 <button
+                  onClick={() => setShowArchivedOpportunities(prev => !prev)}
+                  className={`flex items-center justify-center gap-2 h-14 px-6 border-2 font-extrabold tracking-wider transition-all active:scale-95 uppercase text-sm ${
+                    showArchivedOpportunities
+                      ? 'border-amber-500 bg-amber-500/10 text-amber-400'
+                      : 'border-border bg-background hover:bg-muted'
+                  }`}
+                >
+                  {showArchivedOpportunities ? 'HIDE ARCHIVED' : 'SHOW ARCHIVED'}
+                </button>
+                <button
                   onClick={handleTriggerSync}
                   disabled={syncing}
                   className="flex items-center justify-center gap-2 h-14 px-6 border-2 border-border bg-background font-extrabold tracking-wider hover:bg-muted transition-all active:scale-95 uppercase text-sm disabled:opacity-50"
@@ -2230,13 +2368,17 @@ function DashboardPageContent() {
                     <tbody className="divide-y divide-border">
                       {filteredCompanies.map((c) => {
                         const app = applications[c.id];
+                        const oppState = opportunityStates[c.id];
+                        const effectiveState = oppState?.state;
                         const activeStatus = app ? app.status : "";
                         const deadlineDate = c.registration_deadline ? new Date(c.registration_deadline) : null;
+                        const isDeadlinePast = deadlineDate ? deadlineDate < new Date() : false;
                         const isAppSnoozed = app ? isSnoozed(app) : false;
                         const isRowChecked = selectedCompanyIds.includes(c.id);
+                        const isArchived = effectiveState === 'archived' || effectiveState === 'auto_archived';
                         
                         return (
-                          <tr key={c.id} className={`hover:bg-muted/15 transition-colors ${isRowChecked ? 'bg-accent/5' : ''}`}>
+                          <tr key={c.id} className={`hover:bg-muted/15 transition-colors ${isRowChecked ? 'bg-accent/5' : ''} ${isArchived ? 'opacity-60' : ''}`}>
                             <td className="py-5 px-6">
                               <input
                                 type="checkbox"
@@ -2318,11 +2460,19 @@ function DashboardPageContent() {
                                     </span>
                                   )}
                                   {app.user_decision === 'archived' && (
-                                    <span className="text-[8px] font-bold text-muted-foreground uppercase">
-                                      ARCHIVED
-                                    </span>
+                                    <span className="text-[8px] font-bold text-muted-foreground uppercase">ARCHIVED</span>
                                   )}
                                 </div>
+                              ) : effectiveState === 'decision_pending' ? (
+                                <span className="text-[9px] font-black text-amber-400 uppercase px-2 py-0.5 bg-amber-950/40 border border-amber-500/50">
+                                  ⏰ DECISION PENDING
+                                </span>
+                              ) : effectiveState === 'archived' || effectiveState === 'auto_archived' ? (
+                                <span className="text-[9px] font-bold text-muted-foreground uppercase px-2 py-0.5 bg-muted border border-border">
+                                  📦 {effectiveState === 'auto_archived' ? 'AUTO-ARCHIVED' : 'ARCHIVED'}
+                                </span>
+                              ) : isDeadlinePast ? (
+                                <span className="text-[9px] font-bold text-red-400 uppercase">EXPIRED</span>
                               ) : (
                                 <span className="text-xs text-muted-foreground uppercase">NOT TRACKING</span>
                               )}
@@ -2330,7 +2480,31 @@ function DashboardPageContent() {
 
                             <td className="py-5 px-6 text-right">
                               <div className="flex justify-end gap-3 items-center">
-                                {encryptionKey ? (
+                                {isArchived ? (
+                                  // Archived drives: show Restore button
+                                  <button
+                                    onClick={() => handleOpportunityAction(c.id, 'restore')}
+                                    className="h-10 px-4 border-2 border-amber-500/60 bg-amber-500/10 text-amber-400 text-xs font-bold tracking-wider uppercase hover:bg-amber-500/20 transition-all"
+                                  >
+                                    ↩ RESTORE
+                                  </button>
+                                ) : effectiveState === 'decision_pending' ? (
+                                  // Decision pending: show quick decision buttons
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => handleOpportunityAction(c.id, 'track')}
+                                      className="h-10 px-3 border-2 border-accent bg-accent text-black text-xs font-bold tracking-wider uppercase hover:bg-accent/80 transition-all"
+                                    >
+                                      ✅ Applied
+                                    </button>
+                                    <button
+                                      onClick={() => handleOpportunityAction(c.id, 'archive')}
+                                      className="h-10 px-3 border-2 border-border bg-background text-xs font-bold tracking-wider uppercase hover:bg-muted transition-all"
+                                    >
+                                      ✗ Skip
+                                    </button>
+                                  </div>
+                                ) : encryptionKey ? (
                                   <div className="relative inline-block text-left group">
                                     <button className="h-10 px-4 border-2 border-border bg-background hover:bg-muted text-xs font-bold tracking-wider uppercase flex items-center gap-2">
                                       <span>{app && app.user_decision === 'tracking' ? "UPDATE ROUND" : "TRACK WORKSPACE"}</span>
