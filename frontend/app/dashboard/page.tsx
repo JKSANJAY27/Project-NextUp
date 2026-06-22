@@ -25,7 +25,10 @@ import {
   Pin,
   TrendingUp,
   Award,
-  AlertTriangle
+  AlertTriangle,
+  Megaphone,
+  Download,
+  Eye
 } from "lucide-react";
 
 interface ImportantLink {
@@ -136,6 +139,27 @@ interface CompanyEvent {
   user_notification_msg: string | null;
 }
 
+interface AttachmentMetadata {
+  id: string;
+  file_name: string;
+  file_type: string;
+  storage_path?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  parsed_meta?: Record<string, any>;
+  uploaded_at: string;
+}
+
+interface Announcement {
+  id: string;
+  title: string;
+  body: string;
+  announcement_type: string;
+  deadline: string | null;
+  source_email_id: string | null;
+  created_at: string;
+  attachments: AttachmentMetadata[];
+}
+
 const KANBAN_COLUMNS = [
   { id: "Applied", name: "APPLIED" },
   { id: "Shortlisted", name: "SHORTLISTED" },
@@ -232,6 +256,8 @@ function DashboardPageContent() {
   const [companies, setCompanies] = useState<CompanyWithEligibility[]>([]);
   const [applications, setApplications] = useState<Record<string, Application>>({});
   const [notificationBundles, setNotificationBundles] = useState<NotificationBundle[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [selectedAnnouncement, setSelectedAnnouncement] = useState<Announcement | null>(null);
   
   const [loading, setLoading] = useState(true);
   const [showAddCompany, setShowAddCompany] = useState(false);
@@ -351,6 +377,27 @@ function DashboardPageContent() {
           console.error("Failed to fetch notification bundles:", err);
         }
       }
+
+      // 5. Fetch general announcements
+      if (user) {
+        try {
+          const annRes = await api.get("/announcements");
+          const data = annRes.data || [];
+          setAnnouncements(data);
+          if (data.length > 0) {
+            setSelectedAnnouncement((prev) => {
+              if (prev) {
+                // If we already had one selected, see if it's still in the list and update it
+                const found = data.find((a: Announcement) => a.id === prev.id);
+                if (found) return found;
+              }
+              return data[0];
+            });
+          }
+        } catch (err) {
+          console.error("Failed to fetch announcements:", err);
+        }
+      }
     } catch (err) {
       console.error("Error fetching dashboard data", err);
     } finally {
@@ -392,6 +439,19 @@ function DashboardPageContent() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, encryptionKey]);
+
+  // Auto-select announcement if id parameter is in URL
+  useEffect(() => {
+    if (activeTab === "announcements" && announcements.length > 0) {
+      const idParam = searchParams.get("id");
+      if (idParam) {
+        const found = announcements.find(a => a.id === idParam);
+        if (found) {
+          setSelectedAnnouncement(found);
+        }
+      }
+    }
+  }, [activeTab, searchParams, announcements]);
 
   // Decrypt notes whenever selectedCompany changes or encryption key is available
   useEffect(() => {
@@ -1079,6 +1139,44 @@ function DashboardPageContent() {
               </div>
             </div>
 
+            {/* Urgent Announcement Deadline Alerts */}
+            {announcements
+              .filter(ann => {
+                const deadline = ann.deadline;
+                if (!deadline) return false;
+                const dlTime = new Date(deadline).getTime();
+                const now = Date.now();
+                return dlTime > now && (dlTime - now) <= 24 * 60 * 60 * 1000;
+              })
+              .map(ann => {
+                const deadline = ann.deadline;
+                const dlTime = deadline ? new Date(deadline) : new Date();
+                return (
+                  <div key={ann.id} className="border-2 border-red-500 bg-red-500/10 p-6 flex flex-col md:flex-row items-center justify-between gap-6 animate-pulse">
+                    <div className="flex items-center gap-4">
+                      <div className="h-10 w-10 bg-red-500 text-black flex items-center justify-center border-2 border-black shrink-0">
+                        <AlertTriangle size={20} />
+                      </div>
+                      <div>
+                        <p className="text-sm font-black uppercase tracking-wider text-red-500">
+                          🚨 URGENT ANNOUNCEMENT DEADLINE
+                        </p>
+                        <p className="text-xs text-muted-foreground uppercase tracking-tight leading-snug">
+                          The deadline for &ldquo;{ann.title}&rdquo; is in less than 24 hours: {dlTime.toLocaleString("en-IN")}.
+                        </p>
+                      </div>
+                    </div>
+                    <Link 
+                      href={`/dashboard?tab=announcements&id=${ann.id}`}
+                      className="border-2 border-red-500 bg-red-500 text-black text-xs font-bold tracking-widest px-6 py-3 hover:bg-transparent hover:text-red-500 transition-colors uppercase block whitespace-nowrap"
+                    >
+                      VIEW ANNOUNCEMENT
+                    </Link>
+                  </div>
+                );
+              })
+            }
+
             {/* Side-by-Side: Today's Timeline & Notifications Triage */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
               {/* Today timeline */}
@@ -1223,6 +1321,74 @@ function DashboardPageContent() {
               </div>
             </div>
 
+            {/* Recent Announcements Widget */}
+            <div className="border-2 border-border p-6 bg-muted/10 space-y-6">
+              <div className="border-b border-border pb-3 flex justify-between items-center">
+                <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
+                  📢 LATEST GENERAL ANNOUNCEMENTS
+                </h4>
+                <Link
+                  href="/dashboard?tab=announcements"
+                  className="text-[10px] font-bold text-accent hover:underline uppercase flex items-center gap-1"
+                >
+                  View All Announcements <ArrowRight size={10} />
+                </Link>
+              </div>
+
+              {announcements.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground uppercase font-bold text-[10px]">
+                  No announcements posted.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {announcements.slice(0, 3).map((ann) => {
+                    const deadline = ann.deadline;
+                    const deadlineDate = deadline ? new Date(deadline) : null;
+                    const formattedDate = new Date(ann.created_at).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                    });
+                    return (
+                      <Link
+                        key={ann.id}
+                        href={`/dashboard?tab=announcements&id=${ann.id}`}
+                        className="border-2 border-border p-4 bg-background hover:border-accent transition-all duration-300 flex flex-col justify-between space-y-3 group"
+                      >
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className={`text-[8px] font-black uppercase px-2 py-0.5 border ${
+                              ann.announcement_type === 'MANDATORY_REQUIREMENT'
+                                ? 'bg-red-950/40 border-red-500/50 text-red-400'
+                                : ann.announcement_type === 'TRAINING'
+                                ? 'bg-purple-950/40 border-purple-500/50 text-purple-400'
+                                : ann.announcement_type === 'PLACEMENT_REGISTRATION'
+                                ? 'bg-amber-950/40 border-amber-500/50 text-amber-400'
+                                : 'bg-muted border-border text-muted-foreground'
+                            }`}>
+                              {ann.announcement_type.replace('_', ' ')}
+                            </span>
+                            <span className="text-[9px] font-mono text-muted-foreground">{formattedDate}</span>
+                          </div>
+                          <h5 className="font-extrabold text-sm uppercase tracking-tight text-foreground line-clamp-1 group-hover:text-accent transition-colors">
+                            {ann.title}
+                          </h5>
+                          <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
+                            {ann.body}
+                          </p>
+                        </div>
+                        {deadlineDate && (
+                          <div className="text-[9px] font-bold text-amber-500 flex items-center gap-1 pt-2 border-t border-border/40">
+                            <Clock size={10} />
+                            <span>Deadline: {deadlineDate.toLocaleDateString("en-IN", { month: "short", day: "numeric" })}</span>
+                          </div>
+                        )}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             {/* Immediate Actions Feed */}
             <div className="space-y-6">
               <div className="border-b-2 border-border pb-3">
@@ -1318,6 +1484,228 @@ function DashboardPageContent() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ==================== 1b. ANNOUNCEMENTS CENTER TAB ==================== */}
+        {activeTab === "announcements" && (
+          <div className="space-y-12 animate-fade-in">
+            <div className="border-b-2 border-border pb-6 flex justify-between items-end">
+              <div className="space-y-1">
+                <h1 className="text-[clamp(2rem,6vw,4rem)] font-extrabold tracking-tighter uppercase leading-none">
+                  ANNOUNCEMENTS
+                </h1>
+                <p className="text-xs text-muted-foreground uppercase tracking-widest">
+                  Important notices, training completion deadlines, and policy updates from the CDC
+                </p>
+              </div>
+              <button
+                onClick={handleTriggerSync}
+                disabled={syncing}
+                className="flex items-center justify-center h-14 px-6 border-2 border-border bg-background font-extrabold tracking-wider hover:bg-muted transition-all active:scale-95 uppercase text-sm disabled:opacity-50"
+              >
+                <span>{syncing ? "SYNCING..." : "SYNC PLACEMENTS"}</span>
+              </button>
+            </div>
+
+            {announcements.length === 0 ? (
+              <div className="flex flex-col items-center justify-center text-center py-32 border-2 border-dashed border-border bg-muted/10 gap-3">
+                <div className="h-12 w-12 bg-muted text-muted-foreground flex items-center justify-center border-2 border-border">
+                  <Megaphone size={24} />
+                </div>
+                <div>
+                  <p className="text-sm font-black uppercase tracking-wider text-muted-foreground">NO ANNOUNCEMENTS YET</p>
+                  <p className="text-[10px] text-muted-foreground/80 uppercase">General updates and notices from CDC will appear here.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                
+                {/* Left Column: Announcements List */}
+                <div className="lg:col-span-5 space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+                  {announcements.map((ann) => {
+                    const isSelected = selectedAnnouncement?.id === ann.id;
+                    const formattedDate = new Date(ann.created_at).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric"
+                    });
+                    const deadline = ann.deadline;
+                    const deadlineDate = deadline ? new Date(deadline) : null;
+                    const isDeadlinePassed = deadlineDate ? deadlineDate.getTime() < Date.now() : false;
+
+                    return (
+                      <div
+                        key={ann.id}
+                        onClick={() => setSelectedAnnouncement(ann)}
+                        className={`border-2 p-4 cursor-pointer transition-all duration-200 relative ${
+                          isSelected
+                            ? "border-accent bg-accent/5"
+                            : "border-border hover:border-muted-foreground/50 bg-card"
+                        }`}
+                      >
+                        <div className="flex justify-between items-start mb-2">
+                          <span className={`text-[8px] font-black uppercase px-2 py-0.5 border ${
+                            ann.announcement_type === 'MANDATORY_REQUIREMENT'
+                              ? 'bg-red-950 border-red-500 text-red-400'
+                              : ann.announcement_type === 'TRAINING'
+                              ? 'bg-purple-950 border-purple-500 text-purple-400'
+                              : ann.announcement_type === 'PLACEMENT_REGISTRATION'
+                              ? 'bg-amber-950 border-amber-500 text-amber-400'
+                              : 'bg-muted border-border text-muted-foreground'
+                          }`}>
+                            {ann.announcement_type.replace('_', ' ')}
+                          </span>
+                          <span className="text-[9px] font-mono text-muted-foreground">
+                            {formattedDate}
+                          </span>
+                        </div>
+                        <h4 className="font-extrabold text-sm uppercase tracking-tight text-foreground line-clamp-1 mb-1">
+                          {ann.title}
+                        </h4>
+                        <p className="text-[11px] text-muted-foreground line-clamp-2 leading-snug mb-3">
+                          {ann.body}
+                        </p>
+                        
+                        {deadlineDate && (
+                          <div className={`flex items-center gap-1.5 text-[9px] font-bold uppercase mt-2 pt-2 border-t border-border/40 ${
+                            isDeadlinePassed ? "text-muted-foreground" : "text-amber-500"
+                          }`}>
+                            <Clock size={10} />
+                            <span>
+                              Deadline: {deadlineDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Right Column: Detailed View */}
+                <div className="lg:col-span-7 border-2 border-border p-6 bg-card space-y-6">
+                  {selectedAnnouncement ? (
+                    <>
+                      <div className="space-y-4">
+                        <div className="flex flex-wrap gap-2 items-center justify-between border-b border-border pb-4">
+                          <span className={`text-[9px] font-black uppercase px-2 py-0.5 border ${
+                            selectedAnnouncement.announcement_type === 'MANDATORY_REQUIREMENT'
+                              ? 'bg-red-950/40 border-red-500/50 text-red-400'
+                              : selectedAnnouncement.announcement_type === 'TRAINING'
+                              ? 'bg-purple-950/40 border-purple-500/50 text-purple-400'
+                              : selectedAnnouncement.announcement_type === 'PLACEMENT_REGISTRATION'
+                              ? 'bg-amber-950/40 border-amber-500/50 text-amber-400'
+                              : 'bg-muted border-border text-muted-foreground'
+                          }`}>
+                            {selectedAnnouncement.announcement_type.replace('_', ' ')}
+                          </span>
+                          <span className="text-xs font-mono text-muted-foreground">
+                            Received: {new Date(selectedAnnouncement.created_at).toLocaleString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit"
+                            })}
+                          </span>
+                        </div>
+                        
+                        <h2 className="text-xl md:text-2xl font-black uppercase tracking-tight text-foreground leading-snug">
+                          {selectedAnnouncement.title}
+                        </h2>
+
+                        {selectedAnnouncement.deadline && (
+                          <div className="border-2 border-amber-500/30 bg-amber-500/5 p-4 flex items-center gap-3">
+                            <Clock size={18} className="text-amber-500 animate-pulse" />
+                            <div>
+                              <p className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">ACTION DEADLINE</p>
+                              <p className="text-xs font-black uppercase text-foreground">
+                                {new Date(selectedAnnouncement.deadline).toLocaleString("en-US", {
+                                  weekday: "short",
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit"
+                                })}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="border-t border-border pt-4">
+                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">BODY // DETAILS</p>
+                        <div className="text-sm text-foreground/90 whitespace-pre-wrap leading-relaxed border-2 border-border p-4 bg-muted/10 font-medium">
+                          {selectedAnnouncement.body}
+                        </div>
+                      </div>
+
+                      {/* Attachments Section */}
+                      <div className="border-t border-border pt-4">
+                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">
+                          📄 ATTACHMENTS ({selectedAnnouncement.attachments.length})
+                        </p>
+                        {selectedAnnouncement.attachments.length === 0 ? (
+                          <p className="text-xs text-muted-foreground uppercase italic pl-2">No attachments available for this announcement.</p>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {selectedAnnouncement.attachments.map((att) => {
+                              const isExcel = att.file_name.toLowerCase().endsWith('.xlsx') || att.file_name.toLowerCase().endsWith('.xls');
+                              const downloadUrl = `${api.defaults.baseURL}/announcements/attachment/${att.id}`;
+                              return (
+                                <div key={att.id} className="border border-border p-3 flex flex-col justify-between bg-muted/10">
+                                  <div className="flex items-start gap-2.5 mb-3">
+                                    <span className={`text-[9px] font-mono font-black border px-1.5 py-0.5 ${
+                                      isExcel ? "bg-emerald-950 border-emerald-500 text-emerald-400" : "bg-red-950 border-red-500 text-red-400"
+                                    }`}>
+                                      {isExcel ? "XLSX" : "PDF"}
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-xs font-bold text-foreground truncate uppercase" title={att.file_name}>
+                                        {att.file_name}
+                                      </p>
+                                      <p className="text-[10px] text-muted-foreground font-mono">
+                                        {att.file_type.replace('_', ' ')}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <a
+                                      href={downloadUrl}
+                                      download
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="flex-1 flex items-center justify-center gap-1.5 h-8 border border-border bg-background hover:bg-muted font-bold text-[10px] uppercase tracking-wider transition-colors"
+                                    >
+                                      <Download size={12} />
+                                      <span>Download</span>
+                                    </a>
+                                    <a
+                                      href={downloadUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="flex items-center justify-center h-8 w-8 border border-border bg-background hover:bg-muted font-bold transition-colors"
+                                      title="Open in new window"
+                                    >
+                                      <Eye size={12} />
+                                    </a>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center text-center py-40 text-muted-foreground">
+                      <Megaphone size={32} className="mb-2 text-muted-foreground/60" />
+                      <p className="text-xs font-bold uppercase">Select an announcement to view details</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

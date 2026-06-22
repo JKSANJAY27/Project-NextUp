@@ -152,3 +152,27 @@ class NotificationBundle(BaseModel):
     category: str
     unread_count: int
     notifications: List[NotificationDetail]
+
+class AttachmentMetadataOut(BaseModel):
+    id: UUID
+    file_name: str
+    file_type: str
+    storage_path: Optional[str] = None
+    parsed_meta: Optional[Dict[str, Any]] = None
+    uploaded_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class AnnouncementOut(BaseModel):
+    id: UUID
+    title: str
+    body: str
+    announcement_type: str
+    deadline: Optional[datetime] = None
+    source_email_id: Optional[str] = None
+    created_at: datetime
+    attachments: List[AttachmentMetadataOut] = []
+
+    class Config:
+        from_attributes = True
