@@ -152,3 +152,47 @@ class NotificationBundle(BaseModel):
     category: str
     unread_count: int
     notifications: List[NotificationDetail]
+
+
+# Calendar Event Schemas
+class CalendarEventCreate(BaseModel):
+    title: str
+    event_type: str  # 'registration_deadline', 'online_assessment', 'interview', 'offer_result', 'manual'
+    date: datetime
+    location_platform: Optional[str] = None
+    notes: Optional[str] = None
+    company_id: Optional[UUID] = None
+
+class CalendarEventUpdate(BaseModel):
+    title: Optional[str] = None
+    event_type: Optional[str] = None
+    date: Optional[datetime] = None
+    location_platform: Optional[str] = None
+    notes: Optional[str] = None
+    company_id: Optional[UUID] = None
+    completed: Optional[bool] = None
+
+class CalendarEventOut(BaseModel):
+    id: UUID
+    user_id: UUID
+    company_id: Optional[UUID] = None
+    company_event_id: Optional[UUID] = None
+    title: str
+    company_name: Optional[str] = None
+    role: Optional[str] = None
+    event_type: str
+    date: datetime
+    location_platform: Optional[str] = None
+    notes: Optional[str] = None
+    completed: bool
+    is_manual: bool
+    is_deleted: bool
+    is_user_modified: bool
+    source: str
+    source_key: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+

@@ -334,4 +334,39 @@ ALTER TABLE attachments_metadata ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingestion_audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notification_jobs ENABLE ROW LEVEL SECURITY;
 
+-- 19. Calendar Events Table
+CREATE TABLE IF NOT EXISTS calendar_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+    company_event_id UUID REFERENCES company_events(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    company_name VARCHAR(255),
+    role VARCHAR(255),
+    event_type VARCHAR(100) NOT NULL CHECK (event_type IN ('registration_deadline', 'online_assessment', 'interview', 'offer_result', 'manual')),
+    date TIMESTAMP WITH TIME ZONE NOT NULL,
+    location_platform VARCHAR(255),
+    notes TEXT,
+    completed BOOLEAN DEFAULT FALSE,
+    is_manual BOOLEAN DEFAULT TRUE,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    is_user_modified BOOLEAN DEFAULT FALSE,
+    source VARCHAR(50) NOT NULL CHECK (source IN ('application_timeline', 'manual')),
+    source_key VARCHAR(255) UNIQUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE calendar_events ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can manage their own calendar events" 
+    ON calendar_events FOR ALL 
+    USING (auth.uid() = user_id);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_calendar_user_date ON calendar_events(user_id, date);
+CREATE INDEX IF NOT EXISTS idx_calendar_source_key ON calendar_events(source_key);
+CREATE INDEX IF NOT EXISTS idx_calendar_company ON calendar_events(user_id, company_id);
+
+
 

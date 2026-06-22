@@ -238,3 +238,33 @@ class StudentDocument(Base):
     version = Column(Integer, default=1, nullable=False)
     content = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CalendarEvent(Base):
+    __tablename__ = "calendar_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=True)
+    company_event_id = Column(UUID(as_uuid=True), ForeignKey("company_events.id", ondelete="CASCADE"), nullable=True)
+    title = Column(String, nullable=False)
+    company_name = Column(String, nullable=True)
+    role = Column(String, nullable=True)
+    event_type = Column(String, nullable=False)  # 'registration_deadline', 'online_assessment', 'interview', 'offer_result', 'manual'
+    date = Column(DateTime, nullable=False)
+    location_platform = Column(String, nullable=True)
+    notes = Column(String, nullable=True)
+    completed = Column(Boolean, default=False)
+    is_manual = Column(Boolean, default=True)
+    is_deleted = Column(Boolean, default=False)
+    is_user_modified = Column(Boolean, default=False)
+    source = Column(String, default="manual")  # 'application_timeline', 'manual'
+    source_key = Column(String, unique=True, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User")
+    company = relationship("Company")
+    company_event = relationship("CompanyEvent")
+

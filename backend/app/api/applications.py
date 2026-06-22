@@ -59,6 +59,10 @@ def create_application(
     db.commit()
     db.refresh(new_app)
     
+    # Sync calendar events for the newly tracked workspace
+    from app.services.calendar_sync import sync_user_calendar_events
+    sync_user_calendar_events(db, current_user.id, app_in.company_id)
+    
     # Reload with company and events loaded for score computations
     new_app_loaded = db.query(Application).options(
         joinedload(Application.company).joinedload(Company.events)
@@ -128,6 +132,10 @@ def update_application(
     db.commit()
     db.refresh(app)
     
+    # Sync calendar events for the modified application workspace
+    from app.services.calendar_sync import sync_user_calendar_events
+    sync_user_calendar_events(db, current_user.id, app.company_id)
+    
     # Reload with company and events loaded for score computations
     app_loaded = db.query(Application).options(
         joinedload(Application.company).joinedload(Company.events)
@@ -154,6 +162,16 @@ def delete_application(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Application tracker not found."
         )
+    company_id = app.company_id
     db.delete(app)
+    db.commit()
+    
+    # Clean up associated calendar events from application timeline
+    from app.models.models import CalendarEvent
+    db.query(CalendarEvent).filter(
+        CalendarEvent.user_id == current_user.id,
+        CalendarEvent.company_id == company_id,
+        CalendarEvent.source == 'application_timeline'
+    ).delete(synchronize_session=False)
     db.commit()
     return None
