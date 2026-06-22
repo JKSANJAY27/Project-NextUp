@@ -3071,19 +3071,14 @@ function DashboardPageContent() {
                 </button>
               </div>
 
-              <button
-                onClick={() => setSelectedCompany(null)}
-                className="hidden md:block h-14 border-t border-border bg-muted/30 hover:bg-red-650 hover:text-white transition-colors text-xs font-bold uppercase tracking-widest"
-              >
-                CLOSE WORKSPACE
-              </button>
+
             </div>
 
             {/* Right Content Pane */}
             <div className="flex-1 flex flex-col min-h-0 bg-background relative">
               <button
                 onClick={() => setSelectedCompany(null)}
-                className="absolute top-4 right-4 z-10 border border-border p-2 bg-card hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 md:hidden"
+                className="absolute top-4 right-4 z-10 border border-border p-2 bg-card hover:bg-red-500/10 hover:text-red-500 hover:border-red-500 transition-all active:scale-95"
                 aria-label="Close modal"
               >
                 <X size={16} />
@@ -3109,10 +3104,15 @@ function DashboardPageContent() {
                       </div>
                     )}
                     {/* Header Summary */}
-                    <div className="border-b border-border pb-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="border-b border-border pb-4 pr-12 flex flex-col md:flex-row md:items-start justify-between gap-4">
                       <div>
                         <h2 className="text-2xl font-black uppercase tracking-tighter leading-none">{selectedCompany.name} Workspace</h2>
-                        <p className="text-xs text-muted-foreground uppercase mt-1">{selectedCompany.role} ✦ {selectedCompany.job_location || "Unknown location"}</p>
+                        <div className="flex items-center flex-wrap gap-3 mt-2">
+                          <span className="bg-accent px-2 py-0.5 border border-accent text-[9px] font-black text-black uppercase w-max">
+                            {selectedCompany.category}
+                          </span>
+                          <p className="text-xs text-muted-foreground uppercase">{selectedCompany.role} ✦ {selectedCompany.job_location || "Unknown location"}</p>
+                        </div>
                       </div>
                       <div className="flex items-center gap-3">
                         {selectedApp && selectedApp.user_decision === 'tracking' && (
@@ -3136,9 +3136,6 @@ function DashboardPageContent() {
                             </select>
                           </div>
                         )}
-                        <span className="bg-accent px-2 py-1 border border-accent text-[9px] font-black text-black uppercase w-max">
-                          {selectedCompany.category}
-                        </span>
                       </div>
                     </div>
 
@@ -3221,68 +3218,7 @@ function DashboardPageContent() {
                       </div>
                     </div>
 
-                    {/* Collapsible Action & Health Accordion */}
-                    <div className="border-2 border-border overflow-hidden">
-                      <button
-                        onClick={() => setIsPrepPanelExpanded(!isPrepPanelExpanded)}
-                        className="w-full flex items-center justify-between p-4 bg-muted/10 hover:bg-muted/20 transition-all text-left"
-                      >
-                        <span className="text-xs font-black tracking-widest text-foreground uppercase flex items-center gap-2">
-                          ⚡ PREPARATION TOOLKIT & HEALTH STATUS
-                        </span>
-                        <span className="text-muted-foreground">
-                          {isPrepPanelExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                        </span>
-                      </button>
-                      
-                      {isPrepPanelExpanded && (
-                        <div className="p-5 border-t border-border bg-background grid grid-cols-1 md:grid-cols-12 gap-6 items-stretch animate-in slide-in-from-top-1 duration-200">
-                          {/* Next Action */}
-                          <div className="md:col-span-8 border border-border p-4 bg-gradient-to-r from-accent/5 to-transparent relative overflow-hidden flex flex-col justify-between">
-                            <div className="absolute -right-12 -top-12 w-32 h-32 bg-accent/10 rounded-full blur-2xl" />
-                            <span className="text-[9px] font-black tracking-widest text-accent uppercase block">⚡ NEXT RECOMMENDATION</span>
-                            <p className="text-sm font-bold text-foreground uppercase leading-relaxed mt-2 relative z-10">
-                              👉 {selectedNextAction}
-                            </p>
-                          </div>
 
-                          {/* Application Health Score */}
-                          <div className="md:col-span-4 border border-border p-4 bg-muted/5 flex items-center justify-between">
-                            <div>
-                              <span className="text-[9px] font-black tracking-widest text-muted-foreground uppercase block">HEALTH SCORE</span>
-                              <span className="text-xs font-bold text-muted-foreground uppercase block mt-1">Application readiness</span>
-                            </div>
-                            {selectedApp ? (
-                              <div className="relative flex items-center justify-center h-16 w-16">
-                                <svg className="w-full h-full transform -rotate-90">
-                                  <circle
-                                    cx="32"
-                                    cy="32"
-                                    r={radius}
-                                    className="stroke-muted"
-                                    strokeWidth="5"
-                                    fill="transparent"
-                                  />
-                                  <circle
-                                    cx="32"
-                                    cy="32"
-                                    r={radius}
-                                    className="stroke-accent transition-all duration-500"
-                                    strokeWidth="5"
-                                    fill="transparent"
-                                    strokeDasharray={circumference}
-                                    strokeDashoffset={strokeDashoffset}
-                                  />
-                                </svg>
-                                <span className="absolute text-xs font-black">{healthVal}%</span>
-                              </div>
-                            ) : (
-                              <span className="text-xs font-bold text-muted-foreground uppercase">NOT TRACKED</span>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
 
                     {/* Timeline & Notes list */}
                     <div className="space-y-4">
