@@ -21,6 +21,8 @@ const config: Config = {
         accent: "var(--accent)",
         "accent-foreground": "var(--accent-foreground)",
         border: "var(--border)",
+        card: "var(--card)",
+        "card-foreground": "var(--card-foreground)",
       },
       animation: {
         marquee: "marquee 25s linear infinite",

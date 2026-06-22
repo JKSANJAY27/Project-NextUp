@@ -2801,13 +2801,7 @@ function DashboardPageContent() {
               onClick={() => handleBulkAction("tracking")}
               className="h-9 px-4 border border-border bg-foreground text-background font-bold text-xs hover:bg-accent hover:text-black hover:border-accent uppercase tracking-wider transition-all"
             >
-              🎯 Track Selected
-            </button>
-            <button
-              onClick={() => handleBulkAction("interested")}
-              className="h-9 px-4 border border-border bg-transparent text-foreground font-bold text-xs hover:bg-muted uppercase tracking-wider transition-all"
-            >
-              🎯 Mark Interested
+              ✅ Apply
             </button>
             <button
               onClick={() => handleBulkAction("archived")}

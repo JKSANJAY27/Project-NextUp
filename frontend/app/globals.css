@@ -5,6 +5,8 @@
 :root {
   --background: #FAFAFA;
   --foreground: #09090B;
+  --card: #FAFAFA;
+  --card-foreground: #09090B;
   --muted: #F4F4F5;
   --muted-foreground: #71717A;
   --accent: #DFE104;
@@ -15,6 +17,8 @@
 .dark {
   --background: #09090B;
   --foreground: #FAFAFA;
+  --card: #09090B;
+  --card-foreground: #FAFAFA;
   --muted: #27272A;
   --muted-foreground: #A1A1AA;
   --accent: #DFE104;
