@@ -103,6 +103,10 @@ def refresh_materialized_views(db: Session):
     """
     Refreshes performance materialized views concurrently.
     """
+    if os.getenv("SKIP_VIEW_REFRESH", "").lower() == "true":
+        logger.info("Skipping materialized view refresh via SKIP_VIEW_REFRESH env var.")
+        return
+        
     # Bypass for SQLite local dev environments
     if "sqlite" in settings.DATABASE_URL.lower():
         logger.info("Skipping materialized view refresh (SQLite database does not support it).")
@@ -132,6 +136,21 @@ def refresh_views_cron():
         refresh_materialized_views(db)
     finally:
         db.close()
+
+def is_placeholder_or_empty(val) -> bool:
+    if val is None:
+        return True
+    if isinstance(val, bool):
+        return False
+    if isinstance(val, (int, float)):
+        return False
+    if isinstance(val, str):
+        val_clean = val.strip().lower()
+        if not val_clean or "announced later" in val_clean or val_clean == "refer jd" or val_clean == "none":
+            return True
+    if isinstance(val, (list, dict, set)) and not val:
+        return True
+    return False
 
 def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
     """
@@ -483,12 +502,19 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 db.flush()
                 logger.info(f"Created new company registry: {company_name} - {role}")
             else:
+                # Only update registration deadline/link if it's a registration drive or deadline extension
+                current_deadline = registration_deadline
+                current_link = registration_link
+                if event_type not in ("REGISTRATION", "DEADLINE_EXTENSION"):
+                    current_deadline = None
+                    current_link = None
+
                 updates = {
                     "ctc": ctc,
                     "stipend": stipend,
                     "job_location": location,
-                    "registration_deadline": registration_deadline,
-                    "registration_link": registration_link,
+                    "registration_deadline": current_deadline,
+                    "registration_link": current_link,
                     "eligibility_rules": eligibility_rules,
                     "eligibility_raw_text": eligibility_raw_text,
                     "eligible_branches": eligible_branches,
@@ -496,6 +522,19 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 }
                 for key, val in updates.items():
                     old_val = getattr(company, key)
+                    
+                    # Merge eligibility_rules dict instead of full overwrite
+                    if key == "eligibility_rules" and isinstance(old_val, dict) and isinstance(val, dict):
+                        merged_rules = dict(old_val)
+                        for r_key, r_val in val.items():
+                            if not is_placeholder_or_empty(r_val) or is_placeholder_or_empty(merged_rules.get(r_key)):
+                                merged_rules[r_key] = r_val
+                        val = merged_rules
+
+                    # Avoid overwriting a valid/non-empty old value with a placeholder/empty new value
+                    if not is_placeholder_or_empty(old_val) and is_placeholder_or_empty(val):
+                        continue
+
                     if isinstance(old_val, (dict, list)) or isinstance(val, (dict, list)):
                         has_changed = json.dumps(old_val, sort_keys=True) != json.dumps(val, sort_keys=True)
                     else:

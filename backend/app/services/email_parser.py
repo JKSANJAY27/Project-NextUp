@@ -451,55 +451,148 @@ def is_high_confidence(parsed: Dict[str, Any]) -> bool:
 def extract_company_from_subject(subject: str) -> str:
     if not subject:
         return "Unknown Company"
-    s = subject.replace('\u200b', '').strip()
+    
+    # Remove zero-width spaces and clean outer whitespace
+    s = subject.replace('\u200b', '').replace('\xa0', ' ').replace('_', ' ').strip()
+    
+    # Prefix patterns to completely discard at the start of subject
+    # Loop to strip nested prefixes
     prev_s = None
     while s != prev_s:
         prev_s = s
         s = re.sub(
-            r'^(?:congratulations|congrats|kind\s+attn|kind\s+attention|summer\s+sem|updated|update|re|fwd|urgnt|urgent|notice|report\s+immediately)\b[:\s!]*',
+            r'^(?:congratulations|congrats|kind\s+attn|kind\s+attention|summer\s+sem|updated|update|re|fwd|urgnt|urgent|notice|report\s+immediately|reminder|gentle\s+reminder|webinar)\b[:\s!]*',
             '',
             s,
             flags=re.I
         ).strip()
         s = re.sub(r'^[:\s!]+', '', s)
-    parts = re.split(r'[-–—|:(]', s)
-    first_part = parts[0].strip()
-    clean = re.sub(
-        r'\b(?:next\s+round|tech\s+talk|super\s+dream|dream|regular|mass|recruitment|recruiter|drive|drives|internship|placement|hiring|registration|selection|shortlist|online\s+test|oa|interview|offers?|applied|announcement|results?|list|batch|\d{4})\b.*$',
-        '',
-        first_part,
-        flags=re.I
-    ).strip()
-    clean = re.sub(r'[*_#]', '', clean).strip()
+        
+    # Split by colon, dash, or pipe, but ignore if it's within a date/time (e.g. 10:00 AM) or a decimal (e.g. 3.0)
+    # Let's split by major separators: ':', '|', '-'
+    # But only split on ':' if it is not followed by digits (like 10:00)
+    parts = []
+    colon_parts = re.split(r':(?!\d)', s)
+    if len(colon_parts) > 1:
+        # Check if the first part is a generic instructions prefix, like "Updated timings & Instructions"
+        p0_lower = colon_parts[0].lower()
+        generic_words = ["timings", "instructions", "update", "registration form", "schedule", "scheduled", "venue", "details", "webinar"]
+        is_generic = any(w in p0_lower for w in generic_words)
+        if is_generic:
+            s = ":".join(colon_parts[1:]).strip()
+        else:
+            s = colon_parts[0].strip()
+            
+    # Now split on other separators: '|', '-' (but only if surrounded by spaces)
+    s = s.split('|')[0].strip()
+    s = re.split(r'\s+[-–—]\s+', s)[0].strip()
+    
+    # If there is a '(' at the start of any suffix, split there
+    s = s.split('(')[0].strip()
+
+    # Clean up standard suffix keywords (e.g. "online test", "selection list", "hiring", etc.)
+    suffix_pattern = r'\b(?:next\s+round|tech\s+talk|super\s+dream|dream|regular|mass|recruitment|recruiter|drive|drives|internship|placement|hiring|registration|selection|shortlist|online\s+test|online\s+coding\s+test|coding\s+test|assignment\s+round|assignment|round|oa|interview|offers?|applied|announcement|results?|list|batch|pre-placement|connect|is\s+scheduled|scheduled|ppt|presentation|talk|webinar|test)\b.*$'
+    clean = re.sub(suffix_pattern, '', s, flags=re.I).strip()
+    
+    # Strip campus names and other VIT specific words
+    campus_pattern = r'\b(?:vit\s+vellore|vit\s+vellore\s+campus|vit|vellore|chennai\s+campus|chennai|campus|engineering\s+college|college|university)\b'
+    clean = re.sub(campus_pattern, '', clean, flags=re.I).strip()
+    
+    # Clean up trailing date or year patterns (e.g., 2027 batch)
+    clean = re.sub(r'\b(?:202\d|fy2\d)\b.*$', '', clean, flags=re.I).strip()
+    
+    # Strip any leftover punctuation / markdown / symbols / operators (but keep &)
+    clean = re.sub(r'[*_#/\-–—]', ' ', clean).strip()
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    
+    # Clean up trailing ampersands or spaces
+    clean = re.sub(r'\s+[&]\s*$', '', clean).strip()
+    
     if len(clean) >= 2:
         return clean
-    if len(first_part) >= 2:
-        return first_part
+    
+    # Final fallbacks
+    s_clean = re.sub(r'[*_#]', '', s).strip()
+    if len(s_clean) >= 2:
+        return s_clean
     return "Unknown Company"
 
+def clean_val(val: str) -> Optional[str]:
+    if not val:
+        return None
+    val = re.sub(r'[*_#\u00d8]', '', val)  # strip markdown & bullet characters
+    return val.strip()
+
+def get_branches_from_text(text: str) -> List[str]:
+    branches = set()
+    text_lower = text.lower()
+    
+    mapping = {
+        "computer science": "CSE",
+        "cse": "CSE",
+        "software engineering": "SWE",
+        "swe": "SWE",
+        "information technology": "IT",
+        "it": "IT",
+        "electronics": "ECE",
+        "ece": "ECE",
+        "vlsi": "ECE",
+        "embedded": "ECE",
+        "electrical": "EEE",
+        "eee": "EEE",
+        "mechanical": "MECH",
+        "mech": "MECH",
+        "mechatronics": "MECH",
+        "cad/cam": "MECH",
+        "civil": "CIVIL",
+        "mca": "MCA",
+        "mtech": "MTECH",
+        "mba": "MBA",
+        "artificial intelligence": "AIML",
+        "aiml": "AIML",
+        "ai": "AIML",
+        "data science": "AIDS",
+        "datascience": "AIDS",
+        "aids": "AIDS"
+    }
+    
+    for word, branch in mapping.items():
+        if re.search(r'\b' + re.escape(word) + r'\b', text_lower):
+            branches.add(branch)
+            
+    return list(branches)
 
 def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, Any]:
     """
     Rule-based extraction using regular expressions as a last-resort fallback.
+    Supports multiline parsing, flexible colon/markdown formatting, and joint X/XII marks.
     """
     data = {}
 
     # 1. Company Name
     comp_match = re.search(
-        r"(?:Name of the Company|Company Name|Company|Name of the Organisation|Organisation):\s*([^\n\r]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Name of the Company|Company Name|Company|Name of the Organisation|Organisation)\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
         email_body,
         re.IGNORECASE
     )
     if comp_match:
-        data["company"] = comp_match.group(1).strip()
+        data["company"] = clean_val(comp_match.group(1))
     else:
+        # Fallback to subject line parsing
         sub_company = extract_company_from_subject(subject)
         if sub_company and sub_company != "Unknown Company":
             data["company"] = sub_company
         else:
             lines = [line.strip() for line in email_body.split("\n") if line.strip()]
-            if lines:
-                data["company"] = lines[0].replace("**", "").strip()
+            # Filter out salutations/valedictions or generic subjects
+            cleaned_lines = [
+                l for l in lines 
+                if not any(w in l.lower() for w in ["dear", "regards", "warm", "hi", "hello", "respected", "attention", "attn", "reminder", "congratulations", "webinar", "instructions", "timings"])
+            ]
+            if cleaned_lines and len(clean_val(cleaned_lines[0])) >= 2:
+                data["company"] = clean_val(cleaned_lines[0])
+            else:
+                data["company"] = "Unknown Company"
 
     # 2. Category — check internship FIRST before dream/regular
     cat_match = re.search(
@@ -524,36 +617,40 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 
     # 3. Role
     role_match = re.search(
-        r"(?:Designation|Role|Job Title|Profile|Position):\s*([^\n\r]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Designation|Role|Job Title|Profile|Position|Job Title/Role)\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
         email_body,
         re.IGNORECASE
     )
     if role_match:
-        data["role"] = role_match.group(1).strip()
+        data["role"] = clean_val(role_match.group(1))
+    else:
+        data["role"] = "Software Engineer"
 
     # 4. CTC
     ctc_match = re.search(
-        r"(?:CTC|Salary|Package|Annual CTC):\s*([^\n\r]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:CTC|Salary|Package|Annual\s*CTC)\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
         email_body,
         re.IGNORECASE
     )
     if ctc_match:
-        data["ctc"] = ctc_match.group(1).strip()
+        data["ctc"] = clean_val(ctc_match.group(1))
     else:
         ctc_num_match = re.search(r"(\d+(?:\.\d+)?\s*(?:LPA|Lakhs|Lakh|INR|Rs\.?))", email_body, re.IGNORECASE)
         if ctc_num_match:
-            data["ctc"] = ctc_num_match.group(1).strip()
+            data["ctc"] = clean_val(ctc_num_match.group(1))
+        else:
+            data["ctc"] = "Will be announced later"
 
     # 5. Stipend
     stipend_match = re.search(
-        r"(?:Stipend|Internship\s*[Ss]tipend):\s*([^\n\r]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Stipend|Internship\s*Stipend|Monthly\s*Stipend)\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
         email_body,
         re.IGNORECASE
     )
     if stipend_match:
-        data["stipend"] = stipend_match.group(1).strip()
+        data["stipend"] = clean_val(stipend_match.group(1))
     else:
-        # Look for standalone amounts near "stipend" keyword (within 200 chars following it)
+        # Search for digits near "stipend" keyword (within 200 chars following it)
         idx = email_body.lower().find("stipend")
         if idx != -1:
             stipend_sub = email_body[idx:]
@@ -564,117 +661,189 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
             )
             if stipend_num_match:
                 data["stipend"] = stipend_num_match.group(1).replace(",", "").strip()
+            else:
+                data["stipend"] = "Will be announced later"
+        else:
+            data["stipend"] = "Will be announced later"
 
     # 6. Registration Deadline
     deadline_match = re.search(
-        r"(?:Last\s*date\s*for\s*Registration|Last\s*Date\s*to\s*Apply|Registration\s*Deadline|Last\s*Date|Deadline|Last\s*date):\s*([^\n\r]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Last\s*date\s*for\s*Registration|Last\s*Date\s*to\s*Apply|Registration\s*Deadline|Last\s*Date|Deadline|Last\s*date)\s*[:\-\–\—\s]\s*[\n\r]*\s*([^\n\r]+)",
         email_body,
         re.IGNORECASE
     )
     if deadline_match:
-        raw_date = deadline_match.group(1).strip()
+        raw_date = clean_val(deadline_match.group(1))
         parsed_date = dateparser.parse(raw_date)
         if parsed_date:
             data["deadline_iso"] = parsed_date.isoformat()
-
-    # 7. Eligible Branches — extended list
-    branches_match = re.search(
-        r"(?:Eligible\s*Branches|Eligibility\s*Branches|Branches|Eligible\s*Departments?):\s*([^\n]{1,300})",
-        email_body,
-        re.IGNORECASE
-    )
-    if branches_match:
-        branches_raw = branches_match.group(1)
-        found = re.findall(
-            r"\b(CSE|IT|ECE|EEE|MECH|CIVIL|SWE|MCA|MTECH|MBA|AIDS|AIML|CSD|IOT|CSBS|VLSI|BME|AERO)\b",
-            branches_raw,
-            re.IGNORECASE
+    else:
+        # Try inline "register on or before [date]"
+        on_or_before = re.search(
+            r"(?:register|apply|submission|submit)\s*(?:[^\n\r]{0,50}?)(?:on\s*or\s*before|before|by|on)\s*\*?([^\n\r]{5,40})",
+            email_body,
+            re.I
         )
-        if found:
-            data["eligible_branches"] = list(set([b.upper() for b in found]))
+        if on_or_before:
+            raw_date = clean_val(on_or_before.group(1))
+            parsed_date = dateparser.parse(raw_date)
+            if parsed_date:
+                data["deadline_iso"] = parsed_date.isoformat()
 
+    # 7. Eligible Branches block extraction
+    branches_block_match = re.search(
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Eligible\s*Branches|Eligibility\s*Branches|Branches|Eligible\s*Departments?)\s*[:\-\–\—\s]\s*[\n\r]*(.*?)(?:Eligibility Criteria|Eligibility|Criteria|CTC|Stipend|Last date|Website|Job location|Designation|$)",
+        email_body,
+        re.IGNORECASE | re.DOTALL
+    )
+    branches_text = branches_block_match.group(1) if branches_block_match else email_body
+    data["eligible_branches"] = get_branches_from_text(branches_text)
+
+    # Degree types
     found_degrees = []
-    if re.search(r'\b(b\.?\s*tech|bachelor\s+of\s+tech)\b', email_body, re.I):
+    if re.search(r'\b(b\.?\s*tech|bachelor\s+of\s+tech)\b', branches_text, re.I):
         found_degrees.append("BTECH")
-    if re.search(r'\b(m\.?\s*tech|master\s+of\s+tech)\b', email_body, re.I):
+    if re.search(r'\b(m\.?\s*tech|master\s+of\s+tech)\b', branches_text, re.I):
         found_degrees.append("MTECH")
-    if re.search(r'\b(m\.?\s*c\.?\s*a|master\s+of\s+computer\s+app)\b', email_body, re.I):
+    if re.search(r'\b(m\.?\s*c\.?\s*a|master\s+of\s+computer\s+app)\b', branches_text, re.I):
         found_degrees.append("MCA")
-    if re.search(r'\b(m\.?\s*sc|master\s+of\s+sci)\b', email_body, re.I):
+    if re.search(r'\b(m\.?\s*sc|master\s+of\s+sci)\b', branches_text, re.I):
         found_degrees.append("MSC")
+    # If no degree types found in branches block, search whole email
+    if not found_degrees:
+        if re.search(r'\b(b\.?\s*tech|bachelor\s+of\s+tech)\b', email_body, re.I):
+            found_degrees.append("BTECH")
+        if re.search(r'\b(m\.?\s*tech|master\s+of\s+tech)\b', email_body, re.I):
+            found_degrees.append("MTECH")
+        if re.search(r'\b(m\.?\s*c\.?\s*a|master\s+of\s+computer\s+app)\b', email_body, re.I):
+            found_degrees.append("MCA")
+        if re.search(r'\b(m\.?\s*sc|master\s+of\s+sci)\b', email_body, re.I):
+            found_degrees.append("MSC")
     data["degree_types"] = found_degrees
 
+    # Specializations
     found_specializations = []
-    if re.search(r'\b(core|computer\s*science|cse)\b', email_body, re.I):
+    if re.search(r'\b(core|computer\s*science|cse)\b', branches_text, re.I):
         found_specializations.append("CSE_CORE")
-    if re.search(r'\b(info(rmation)?\s*sec(urity)?|cyber\s*sec(urity)?|is)\b', email_body, re.I):
+    if re.search(r'\b(info(rmation)?\s*sec(urity)?|cyber\s*sec(urity)?|is)\b', branches_text, re.I):
         found_specializations.append("CSE_INFO_SEC")
-    if re.search(r'\b(iot|internet\s+of\s+things)\b', email_body, re.I):
+    if re.search(r'\b(iot|internet\s+of\s+things)\b', branches_text, re.I):
         found_specializations.append("CSE_IOT")
-    if re.search(r'\b(data\s*science|ds)\b', email_body, re.I):
+    if re.search(r'\b(data\s*science|ds)\b', branches_text, re.I):
         found_specializations.append("CSE_DATA_SCIENCE")
-    if re.search(r'\b(blockchain|block\s*chain)\b', email_body, re.I):
+    if re.search(r'\b(blockchain|block\s*chain)\b', branches_text, re.I):
         found_specializations.append("CSE_BLOCKCHAIN")
-    if re.search(r'\b(ai|ml|artificial\s*intel|machine\s*learn)\b', email_body, re.I):
+    if re.search(r'\b(ai|ml|artificial\s*intel|machine\s*learn)\b', branches_text, re.I):
         found_specializations.append("CSE_AI_ML")
+    # If no specializations found in branches block, search whole email
+    if not found_specializations:
+        if re.search(r'\b(core|computer\s*science|cse)\b', email_body, re.I):
+            found_specializations.append("CSE_CORE")
+        if re.search(r'\b(info(rmation)?\s*sec(urity)?|cyber\s*sec(urity)?|is)\b', email_body, re.I):
+            found_specializations.append("CSE_INFO_SEC")
+        if re.search(r'\b(iot|internet\s+of\s+things)\b', email_body, re.I):
+            found_specializations.append("CSE_IOT")
+        if re.search(r'\b(data\s*science|ds)\b', email_body, re.I):
+            found_specializations.append("CSE_DATA_SCIENCE")
+        if re.search(r'\b(blockchain|block\s*chain)\b', email_body, re.I):
+            found_specializations.append("CSE_BLOCKCHAIN")
+        if re.search(r'\b(ai|ml|artificial\s*intel|machine\s*learn)\b', email_body, re.I):
+            found_specializations.append("CSE_AI_ML")
     data["specializations"] = found_specializations
 
-    # 10th / 12th percentages
-    tenth_match = re.search(r'(?:10th|xth|class\s*10|matriculation)(?:\s*marks|\s*percentage|\s*%)?(?:\s*(?:>=|>|:|-|of|\b)\s*)(\d{2})', email_body, re.I)
-    data["min_tenth_marks"] = float(tenth_match.group(1)) if tenth_match else None
+    # 8. Eligibility Criteria block extraction
+    elig_block_match = re.search(
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Eligibility Criteria|Eligibility|Criteria)\s*[:\-\–\—\s]\s*[\n\r]*(.*?)(?:CTC|Stipend|Last date|Website|Job location|Designation|$)",
+        email_body,
+        re.IGNORECASE | re.DOTALL
+    )
+    elig_text = elig_block_match.group(1) if elig_block_match else email_body
     
-    twelfth_match = re.search(r'(?:12th|xiith|class\s*12|hs|higher\s*secondary)(?:\s*marks|\s*percentage|\s*%)?(?:\s*(?:>=|>|:|-|of|\b)\s*)(\d{2})', email_body, re.I)
-    data["min_twelfth_marks"] = float(twelfth_match.group(1)) if twelfth_match else None
+    elig_lines = elig_text.strip().split("\n")
+    cleaned_elig_lines = [clean_val(line) for line in elig_lines if clean_val(line)]
+    data["eligibility_raw_text"] = "\n".join(cleaned_elig_lines) if cleaned_elig_lines else None
+
+    # Min CGPA (exclusing percentage % values from matches)
+    pursuing_cgpa = re.search(
+        r"(?:pursuing|current|college|degree|cgpa\s*in\s*degree|graduation)\s*(?:degree)?\s*[\-–—:]?\s*(?:>=|>|:)?\s*([\d.]+)(?!\s*%)",
+        elig_text,
+        re.IGNORECASE
+    )
+    if pursuing_cgpa:
+        data["min_cgpa"] = float(pursuing_cgpa.group(1))
+    else:
+        cgpa_patterns = [
+            r"(?:min(?:imum)?\s+CGPA\s*(?:of|:)?\s*)([\d.]+)(?!\s*%)",
+            r"CGPA\s*(?:>=|>|:)?\s*([\d.]+)(?!\s*%)",
+            r"([\d.]+)\s*(?:CGPA|or\s+above\s+CGPA|or\s+higher\s+CGPA|cgpa)",
+        ]
+        data["min_cgpa"] = None
+        for pattern in cgpa_patterns:
+            cgpa_match = re.search(pattern, elig_text, re.IGNORECASE)
+            if cgpa_match:
+                try:
+                    val = float(cgpa_match.group(1))
+                    if 0.0 <= val <= 10.0:
+                        data["min_cgpa"] = val
+                        break
+                except ValueError:
+                    pass
+
+    # 10th / 12th percentages
+    # Joint check: e.g. "X and XII – 75%"
+    joint_match = re.search(
+        r"(?:10th\s*(?:and|&)\s*12th|x\s*(?:and|&)\s*xii)\s*[\-–—:]?\s*(\d{2})",
+        elig_text,
+        re.IGNORECASE
+    )
+    if joint_match:
+        val = float(joint_match.group(1))
+        data["min_tenth_marks"] = val
+        data["min_twelfth_marks"] = val
+    else:
+        tenth_match = re.search(r'(?:10th|xth|class\s*10|matriculation)(?:\s*marks|\s*percentage|\s*%)?[\-–—:]?\s*(\d{2})', elig_text, re.I)
+        data["min_tenth_marks"] = float(tenth_match.group(1)) if tenth_match else None
+        
+        twelfth_match = re.search(r'(?:12th|xiith|class\s*12|hs|higher\s*secondary)(?:\s*marks|\s*percentage|\s*%)?[\-–—:]?\s*(\d{2})', elig_text, re.I)
+        data["min_twelfth_marks"] = float(twelfth_match.group(1)) if twelfth_match else None
 
     # PG UG CGPA
-    ug_cgpa_match = re.search(r'(?:ug\s*cgpa|undergrad\s*cgpa)(?:\s*(?:>=|>|:|-|of|\b)\s*)(\d+(?:\.\d+)?)', email_body, re.I)
-    data["min_ug_cgpa"] = float(ug_cgpa_match.group(1)) if ug_cgpa_match else None
+    ug_cgpa_match = re.search(
+        r'(?:in\s+ug|ug\s*cgpa|undergrad\s*cgpa)[^\n\r]*?(\d+(?:\.\d+)?)\s*cgpa',
+        elig_text,
+        re.I
+    )
+    if ug_cgpa_match:
+        data["min_ug_cgpa"] = float(ug_cgpa_match.group(1))
+    else:
+        ug_cgpa_match = re.search(r'(?:ug\s*cgpa|undergrad\s*cgpa)(?:\s*(?:>=|>|:|-|of|\b)\s*)(\d+(?:\.\d+)?)', elig_text, re.I)
+        data["min_ug_cgpa"] = float(ug_cgpa_match.group(1)) if ug_cgpa_match else None
 
-    # raw eligibility text
-    raw_text_match = re.search(r'(?:eligibility|eligible|criteria|branches).*?(\n.*){1,4}', email_body, re.I)
-    data["eligibility_raw_text"] = raw_text_match.group(0).strip() if raw_text_match else None
-
-    # 8. Min CGPA — handles both "6.0 CGPA", "CGPA >= 7.5", "min CGPA 8", "60% or 6.0 CGPA"
-    cgpa_patterns = [
-        r"(?:min(?:imum)?\s+CGPA\s*(?:of|:)?\s*)([\d.]+)",
-        r"CGPA\s*(?:>=|>|≥|of)\s*([\d.]+)",
-        r"([\d.]+)\s*(?:CGPA|or\s+above\s+CGPA|or\s+higher\s+CGPA|cgpa)",
-        r"in\s+Pursuing\s+Degree\s*[–—-]\s*([\d.]+)\s*(?:CGPA|or)",
-    ]
-    for pattern in cgpa_patterns:
-        cgpa_match = re.search(pattern, email_body, re.IGNORECASE)
-        if cgpa_match:
-            try:
-                val = float(cgpa_match.group(1))
-                if 0.0 <= val <= 10.0:
-                    data["min_cgpa"] = val
-                    break
-            except ValueError:
-                pass
-
-    # 9. Arrear condition
+    # Arrears
     arrears_match = re.search(
         r"(No\s+Standing\s+Arrears|No\s+active\s+backlogs|No\s+backlogs|No\s+standing\s+backlogs|No\s+History\s+of\s+Arrears)",
-        email_body,
+        elig_text,
         re.IGNORECASE
     )
     data["requires_no_arrears"] = True if arrears_match else False
 
-    # 10. Job location
+    # 9. Job location
     location_match = re.search(
-        r"(?:Job\s*Location|Location|Work\s*Location|Place\s*of\s*Posting):\s*([^\n\r]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Job\s*Location|Location|Work\s*Location|Place\s*of\s*Posting)\s*[:\-\–\—\s]\s*[\n\r]*\s*(.+)",
         email_body,
         re.IGNORECASE
     )
     if location_match:
-        data["job_location"] = location_match.group(1).strip()
+        data["job_location"] = clean_val(location_match.group(1))
     else:
-        # Try inline: "Location - Chennai"
-        loc_inline = re.search(r"Location\s*[-–]\s*([A-Za-z ,]+)", email_body, re.IGNORECASE)
+        # Try inline "Location - Chennai"
+        loc_inline = re.search(r"Location\s*[-–]\s*([A-Za-z ,&]+)", email_body, re.IGNORECASE)
         if loc_inline:
-            data["job_location"] = loc_inline.group(1).strip()
+            data["job_location"] = clean_val(loc_inline.group(1))
+        else:
+            data["job_location"] = "Will be announced later"
 
-    # 11. Registration Link
+    # 10. Registration Link
     link_match = re.search(
         r"(?:Register|Apply|Registration\s*Link|NEOPAT|portal).*?(https?://[^\s\)\"'<>]+)",
         email_body,
@@ -689,14 +858,14 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
                 data["registration_link"] = url
                 break
 
-    # 12. Date of Visit
+    # 11. Date of Visit
     visit_match = re.search(
-        r"(?:Date of Visit|Visit Date|Date of recruitment|Recruitment Date):\s*([^\n\r]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Date of Visit|Visit Date|Date of recruitment|Recruitment Date)\s*[:\-\–\—\s]\s*[\n\r]*\s*(.+)",
         email_body,
         re.IGNORECASE
     )
     if visit_match:
-        data["date_of_visit"] = visit_match.group(1).strip()
+        data["date_of_visit"] = clean_val(visit_match.group(1))
     else:
         data["date_of_visit"] = "Will be announced later"
 
@@ -752,7 +921,15 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
     date_of_visit = parsed.get("date_of_visit", "Will be announced later")
 
     # Determine email category and event type from subject and body heuristics
-    text_to_check = (subject + " " + email_body).lower()
+    sub_lower = subject.lower() if subject else ""
+    body_clean = email_body.lower()
+    for delimiter in ["warm regards", "mandatory note", "disclaimer", "please update your resume"]:
+        idx = body_clean.find(delimiter)
+        if idx != -1:
+            body_clean = body_clean[:idx]
+            
+    # Combine subject and clean body for general keywords check
+    text_to_check = (sub_lower + " " + body_clean).strip()
     
     # Check for GENERAL_ANNOUNCEMENT keywords
     general_keywords = [
@@ -762,7 +939,11 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
         r"all interested students", r"completion of"
     ]
     
-    is_general = force_announcement or any(re.search(pat, text_to_check) for pat in general_keywords)
+    # Only classify as general if it matches general keywords and does NOT specify standard drive terms in subject
+    is_general = force_announcement or (
+        any(re.search(pat, text_to_check) for pat in general_keywords) and
+        not any(kw in sub_lower for kw in ["registration", "drive", "online test", "interview"])
+    )
     
     if is_general:
         email_category = "GENERAL_ANNOUNCEMENT"
@@ -809,30 +990,60 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
     event_type = "NEW_DRIVE"
     email_category = "NEW_DRIVE"
     
-    if "deadline extended" in text_to_check or "extension" in text_to_check:
-        event_type = "DEADLINE_EXTENSION"
-        email_category = "DRIVE_UPDATE"
-    elif "shortlist" in text_to_check or "short-listed" in text_to_check:
+    # Check subject first (strongest signal)
+    if re.search(r'\b(?:shortlist|short-listed|selection\s+list|selected\s+list|shortlisted)\b', sub_lower):
         event_type = "SHORTLIST_RELEASED"
         email_category = "DRIVE_UPDATE"
-    elif "oa result" in text_to_check or "online test result" in text_to_check or "assessment result" in text_to_check:
-        event_type = "OA_RESULT"
-        email_category = "DRIVE_UPDATE"
-    elif "online test" in text_to_check or "assessment" in text_to_check or " oa " in (" " + text_to_check + " ") or "online assessment" in text_to_check:
-        event_type = "OA_SCHEDULED"
-        email_category = "DRIVE_UPDATE"
-    elif "interview result" in text_to_check or "interview select" in text_to_check:
-        event_type = "INTERVIEW_RESULT"
-        email_category = "DRIVE_UPDATE"
-    elif "interview" in text_to_check:
-        event_type = "INTERVIEW_SCHEDULED"
-        email_category = "DRIVE_UPDATE"
-    elif "offer" in text_to_check or "congratulations" in text_to_check or "selection list" in text_to_check or "selected candidates" in text_to_check:
+    elif re.search(r'\b(?:congratulations|congrats|offer|placed|selected)\b', sub_lower):
         event_type = "OFFER_RELEASED"
         email_category = "DRIVE_UPDATE"
-    elif "regret" in text_to_check or "not selected" in text_to_check or "rejection" in text_to_check:
+    elif re.search(r'\b(?:oa\s+result|test\s+result|assessment\s+result)\b', sub_lower):
+        event_type = "OA_RESULT"
+        email_category = "DRIVE_UPDATE"
+    elif re.search(r'\b(?:online\s+test|online\s+assessment|coding\s+test|\boa\b|scheduled|assessment\s+link|test\s+link|slot\s+booking)\b', sub_lower):
+        event_type = "OA_SCHEDULED"
+        email_category = "DRIVE_UPDATE"
+    elif re.search(r'\b(?:interview\s+result|interview\s+select)\b', sub_lower):
+        event_type = "INTERVIEW_RESULT"
+        email_category = "DRIVE_UPDATE"
+    elif re.search(r'\b(?:interview)\b', sub_lower):
+        event_type = "INTERVIEW_SCHEDULED"
+        email_category = "DRIVE_UPDATE"
+    elif re.search(r'\b(?:extended|extension)\b', sub_lower):
+        event_type = "DEADLINE_EXTENSION"
+        email_category = "DRIVE_UPDATE"
+    elif re.search(r'\b(?:regret|not\s+selected|rejection)\b', sub_lower):
         event_type = "REJECTION_RELEASED"
         email_category = "DRIVE_UPDATE"
+    elif re.search(r'\b(?:registration|register|apply|hiring|recruitment|enrollment|drive|internship)\b', sub_lower):
+        event_type = "NEW_DRIVE"
+        email_category = "NEW_DRIVE"
+    else:
+        # Fallback to body checks on cleaned body
+        if re.search(r'\b(?:deadline\s+extended|date\s+extended|last\s+date\s+extended|extended\s+the\s+deadline|extended\s+the\s+date|extension\s+of\s+deadline|extension\s+of\s+last\s+date)\b', body_clean):
+            event_type = "DEADLINE_EXTENSION"
+            email_category = "DRIVE_UPDATE"
+        elif "shortlist" in body_clean or "short-listed" in body_clean or "shortlisted" in body_clean:
+            event_type = "SHORTLIST_RELEASED"
+            email_category = "DRIVE_UPDATE"
+        elif "oa result" in body_clean or "online test result" in body_clean or "assessment result" in body_clean:
+            event_type = "OA_RESULT"
+            email_category = "DRIVE_UPDATE"
+        elif "online test" in body_clean or "assessment" in body_clean or re.search(r'\boa\b', body_clean) or "online assessment" in body_clean:
+            event_type = "OA_SCHEDULED"
+            email_category = "DRIVE_UPDATE"
+        elif "interview result" in body_clean or "interview select" in body_clean:
+            event_type = "INTERVIEW_RESULT"
+            email_category = "DRIVE_UPDATE"
+        elif "interview" in body_clean:
+            event_type = "INTERVIEW_SCHEDULED"
+            email_category = "DRIVE_UPDATE"
+        elif "offer" in body_clean or "congratulations" in body_clean or "selection list" in body_clean or "selected candidates" in body_clean:
+            event_type = "OFFER_RELEASED"
+            email_category = "DRIVE_UPDATE"
+        elif "regret" in body_clean or "not selected" in body_clean or "rejection" in body_clean:
+            event_type = "REJECTION_RELEASED"
+            email_category = "DRIVE_UPDATE"
 
     return {
         "parser_metadata": {

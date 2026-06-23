@@ -9,12 +9,13 @@ load_dotenv()
 
 # Clear HF API token to bypass slow/depleted Hugging Face calls during batch reprocessing
 os.environ["HF_API_TOKEN"] = ""
+os.environ["SKIP_VIEW_REFRESH"] = "true"
 
 # Add parent path to import app modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app.core.database import SessionLocal
-from app.services.gmail_sync import process_queued_jobs
+from app.services.gmail_sync import process_queued_jobs, refresh_materialized_views
 from app.models.models import RawIngestionJob, Company, CompanyEvent
 
 logging.basicConfig(level=logging.INFO)
@@ -113,6 +114,11 @@ def main():
         print(f"Total Jobs Found: {total_jobs}")
         print(f"Successfully Reprocessed: {processed_count}")
         print(f"Failed: {failed_count}")
+        
+        print("\n=== STEP 4: REFRESHING MATERIALIZED VIEWS ===")
+        os.environ["SKIP_VIEW_REFRESH"] = "false"
+        refresh_materialized_views(db)
+        print("Materialized views refreshed successfully.")
         
     except Exception as e:
         db.rollback()
