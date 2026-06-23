@@ -213,6 +213,8 @@ CREATE TABLE IF NOT EXISTS notifications (
         notification_type IN ('company_update', 'deadline', 'shortlist', 'offer', 'system')
     ),
     severity INT DEFAULT 1, -- 1=low, 2=medium-low, 3=medium, 4=high, 5=critical
+    notification_scope VARCHAR(50) DEFAULT 'ACTIVE',
+    expires_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, company_event_id)
 );
