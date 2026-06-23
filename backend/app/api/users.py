@@ -2,10 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.models import User, StudentProfile
+from app.models.models import User, StudentProfile, Resume, Application
 from app.schemas.schemas import UserOut, UserUpdate
 from app.core.security import generate_blind_index
 from app.core.config import settings
+from pydantic import BaseModel
+import uuid
+from datetime import datetime
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -92,5 +95,38 @@ def update_user_me(
             if hasattr(profile, field):
                 setattr(profile, field, value)
             
+    db.commit()
+    return get_merged_user_data(current_user, db)
+
+
+class ResetVaultRequest(BaseModel):
+    new_neo_id_enc: str
+
+@router.post("/reset-vault", response_model=UserOut)
+def reset_user_vault(
+    payload: ResetVaultRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Clears all encrypted data for the user (resumes, application notes, tailored resumes)
+    due to password reset, and sets the new encrypted Neo ID while keeping academic profile intact.
+    """
+    profile = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    if profile:
+        profile.neo_id_enc = payload.new_neo_id_enc
+        profile.neo_id_hash = "RESET-" + uuid.uuid4().hex
+        db.add(profile)
+        
+    # Delete Resume record (wipes resume_json_enc, raw_text_enc, pdf_file_enc, pdf_filename_enc)
+    db.query(Resume).filter(Resume.user_id == current_user.id).delete(synchronize_session=False)
+    
+    # Clear Application encrypted fields
+    applications = db.query(Application).filter(Application.user_id == current_user.id).all()
+    for app in applications:
+        app.notes_enc = None
+        app.tailored_resume_enc = None
+        db.add(app)
+        
     db.commit()
     return get_merged_user_data(current_user, db)

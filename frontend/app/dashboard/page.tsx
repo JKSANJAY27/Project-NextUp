@@ -13,8 +13,6 @@ import {
   XCircle, 
   HelpCircle,
   ExternalLink,
-  ChevronDown,
-  ChevronUp,
   Globe,
   AlertCircle,
   X,
@@ -231,7 +229,6 @@ function DashboardPageContent() {
   const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
   const [decryptedNotes, setDecryptedNotes] = useState<Record<string, string>>({});
   const [companyEvents, setCompanyEvents] = useState<CompanyEvent[]>([]);
-  const [isPrepPanelExpanded, setIsPrepPanelExpanded] = useState(false);
 
   // Manual Company Form State
   const [compName, setCompName] = useState("");
@@ -955,12 +952,6 @@ function DashboardPageContent() {
   const workspaceEvents = getTimelineEvents();
   const selectedApp = selectedCompany ? applications[selectedCompany.id] : undefined;
   const healthVal = getHealthScore(selectedApp);
-  const selectedNextAction = selectedCompany && selectedApp ? getNextActionMessage(selectedApp, selectedCompany) : "Track this workspace to begin preparation.";
-
-  // circular progress SVG values
-  const radius = 30;
-  const circumference = 2 * Math.PI * radius;
-  const strokeDashoffset = circumference - (healthVal / 100) * circumference;
 
   return (
     <div className="flex-1 bg-background flex flex-col min-h-screen">
