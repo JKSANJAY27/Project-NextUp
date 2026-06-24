@@ -2232,7 +2232,7 @@ function DashboardPageContent() {
                   <select
                     value={filterCategory}
                     onChange={(e) => setFilterCategory(e.target.value)}
-                    className="bg-transparent text-xs font-bold uppercase outline-none cursor-pointer text-foreground"
+                    className="bg-background text-xs font-bold uppercase outline-none cursor-pointer text-foreground"
                   >
                     <option value="ALL">ALL OFFERS</option>
                     <option value="Dream">DREAM</option>
@@ -2248,7 +2248,7 @@ function DashboardPageContent() {
                   <select
                     value={filterEligibility}
                     onChange={(e) => setFilterEligibility(e.target.value)}
-                    className="bg-transparent text-xs font-bold uppercase outline-none cursor-pointer text-foreground"
+                    className="bg-background text-xs font-bold uppercase outline-none cursor-pointer text-foreground"
                   >
                     <option value="ALL">ALL STATUSES</option>
                     <option value="ELIGIBLE">ELIGIBLE</option>

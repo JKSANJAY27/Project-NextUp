@@ -220,6 +220,8 @@ class Notification(Base):
     is_read = Column(Boolean, default=False)
     notification_type = Column(String, default="company_update")
     severity = Column(Integer, default=1)  # 1=low, 3=medium, 4=high, 5=critical
+    notification_scope = Column(String, default="ACTIVE")
+    expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="notifications")
