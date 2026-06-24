@@ -625,12 +625,17 @@ def extract_multiple_roles_from_body(email_body: str) -> List[Dict[str, Any]]:
         """
         Find a section labeled by label_pattern and extract the lines following it
         until the next section header (a line that is not indented/bulleted).
+        Normalizes double CRLF (\r\r\n) and standard CRLF (\r\n) to \n first.
         """
+        # Normalize all CR/CRLF variants to plain \n
+        norm_body = body.replace('\r\r\n', '\n').replace('\r\n', '\n').replace('\r', '\n')
+        # Collapse multiple blank lines into one so the regex can skip them
+        norm_body = re.sub(r'\n{2,}', '\n', norm_body)
         # Match the label line, then capture indented/bulleted lines that follow
         m = re.search(
-            r'(?:^|[\n\r])\s*[*\-\u00d8]?\s*' + label_pattern +
-            r'\s*[:\-\u2013\u2014]?\s*[\n\r]((?:(?:[ \t*\-\u00d8\u2022][^\n\r]*|[^\n\r]+(?:LPA|Lpa|lpa|\d{4,})[^\n\r]*)[\n\r])+)',
-            body,
+            r'(?:^|[\n])\s*[*\-\u00d8]?\s*' + label_pattern +
+            r'\s*[:\-\u2013\u2014]?\s*[\n]((?:(?:[ \t*\-\u00d8\u2022][^\n]*|[^\n]+(?:LPA|Lpa|lpa|\d{4,})[^\n]*)[\n])+)',
+            norm_body,
             re.IGNORECASE | re.MULTILINE
         )
         return m.group(1) if m else ""

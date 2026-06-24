@@ -701,6 +701,9 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                         role_score = 20
                     elif len(c.role) >= 3 and (c.role.lower() in role.lower() or role.lower() in c.role.lower()):
                         role_score = 10
+                    else:
+                        continue
+                        
                         
                     db_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', c.name, flags=re.I).strip().lower()
                     ext_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', company_name, flags=re.I).strip().lower()
