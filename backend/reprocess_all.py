@@ -40,6 +40,7 @@ def main():
             "company_events",
             "company_change_logs",
             "applications",
+            "pending_company_events",
             "companies"
         ]
         

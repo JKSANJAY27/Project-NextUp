@@ -114,6 +114,18 @@ class CompanyEvent(Base):
     notification_jobs = relationship("NotificationJob", back_populates="company_event", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="company_event", cascade="all, delete-orphan")
 
+class PendingCompanyEvent(Base):
+    __tablename__ = "pending_company_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    raw_ingestion_job_id = Column(UUID(as_uuid=True), ForeignKey("raw_ingestion_jobs.id", ondelete="CASCADE"), nullable=False)
+    company_name = Column(String, nullable=False)
+    role_name = Column(String, nullable=True)
+    event_type = Column(String, nullable=False)
+    status = Column(String, default="PENDING_PARENT") # PENDING_PARENT, RECONCILED, FAILED
+    parsed_payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 class Application(Base):
     __tablename__ = "applications"
     __table_args__ = (UniqueConstraint('user_id', 'company_id', name='uq_application_user_company'),)
