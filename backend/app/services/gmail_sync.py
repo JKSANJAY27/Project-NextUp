@@ -957,7 +957,9 @@ def update_recruitment_states(db: Session, company: Company, event_type: str, ev
             pass
 
         elif event_type == 'OA':
-            is_past = event_timestamp < datetime.utcnow()
+            # Normalize event_timestamp to naive UTC for comparison
+            ts = event_timestamp.replace(tzinfo=None) if event_timestamp.tzinfo else event_timestamp
+            is_past = ts < datetime.utcnow()
             if is_past or any(k in email_body.lower() for k in ["completed", "results", "conducted", "held"]):
                 app.recruitment_state = 'Awaiting OA Result'
             else:
@@ -972,7 +974,8 @@ def update_recruitment_states(db: Session, company: Company, event_type: str, ev
                 app.recruitment_state = 'Awaiting OA Result'
 
         elif event_type == 'INTERVIEW':
-            is_past = event_timestamp < datetime.utcnow()
+            ts = event_timestamp.replace(tzinfo=None) if event_timestamp.tzinfo else event_timestamp
+            is_past = ts < datetime.utcnow()
             if is_past or any(k in email_body.lower() for k in ["completed", "results", "conducted", "held", "feedback"]):
                 app.recruitment_state = 'Awaiting Interview Result'
             else:
