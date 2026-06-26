@@ -12,6 +12,7 @@ from app.services.stale_detector import is_application_stale
 from app.services.opportunity_lifecycle import (
     set_tracking, set_archived, set_snooze, restore_state, _upsert_opportunity_state
 )
+from app.core.redis import get_cache, set_cache, get_user_version, bump_user_version
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
@@ -82,6 +83,7 @@ def create_application(
     from app.services.calendar_sync import sync_user_calendar_events
     sync_user_calendar_events(db, current_user.id, app_in.company_id)
     
+    bump_user_version(current_user.id)
     return _load_application_with_score(db, new_app)
 
 
@@ -97,6 +99,12 @@ def list_applications(
 
     Lifecycle jobs (expiry detection, auto-archive) run in the background scheduler, NOT here.
     """
+    version = get_user_version(current_user.id)
+    cache_key = f"nextup:cache:user:{current_user.id}:applications:v{version}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
+
     # Fetch all real applications for this user
     apps = db.query(Application).options(
         joinedload(Application.company).joinedload(Company.events)
@@ -148,6 +156,7 @@ def list_applications(
             "company": company_out,
         })
 
+    set_cache(cache_key, result, expire_seconds=30)
     return result
 
 
@@ -200,6 +209,8 @@ def update_application(
     from app.services.calendar_sync import sync_user_calendar_events
     sync_user_calendar_events(db, current_user.id, app.company_id)
     
+    bump_user_version(current_user.id)
+    
     loaded = _load_application_with_score(db, app)
     result = ApplicationOut.from_orm(loaded).dict()
     result["record_type"] = "application"
@@ -229,6 +240,7 @@ def delete_application(
         CalendarEvent.source == 'application_timeline'
     ).delete(synchronize_session=False)
     db.commit()
+    bump_user_version(current_user.id)
     return None
 
 
@@ -276,6 +288,7 @@ def upsert_opportunity_state(
 
         set_tracking(db=db, user_id=current_user.id, company_id=company_id)
         db.commit()
+        bump_user_version(current_user.id)
         return {"status": "tracking", "company_id": str(company_id)}
 
     elif action == "archive":
@@ -290,11 +303,13 @@ def upsert_opportunity_state(
         archive_reason = reason or "MANUAL_NOT_INTERESTED"
         set_archived(db=db, user_id=current_user.id, company_id=company_id, reason=archive_reason)
         db.commit()
+        bump_user_version(current_user.id)
         return {"status": "archived", "company_id": str(company_id), "archive_reason": archive_reason}
 
     elif action == "snooze":
         set_snooze(db=db, user_id=current_user.id, company_id=company_id)
         db.commit()
+        bump_user_version(current_user.id)
         return {"status": "snoozed", "company_id": str(company_id)}
 
     elif action == "restore":
@@ -321,6 +336,7 @@ def upsert_opportunity_state(
                 )
                 db.add(new_app)
         db.commit()
+        bump_user_version(current_user.id)
         return {"status": opp_state.state, "company_id": str(company_id)}
 
     else:

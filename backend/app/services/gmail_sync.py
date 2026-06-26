@@ -27,6 +27,7 @@ from app.services.pdf_extractor import parse_job_description
 from app.services.ai_service import precompute_jd_intelligence_deterministic
 from app.services.validator import validate_and_normalize_parsed_data, normalize_role_name
 from app.services.eligibility import check_eligibility
+from app.core.redis import bump_companies_list_version, bump_announcements_version, bump_user_version
 
 logger = logging.getLogger(__name__)
 
@@ -1092,8 +1093,25 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             job.error_message = f"Suspended: non-announcement email ({event_type}) — stored as PendingCompanyEvent, awaiting parent announcement for '{company_name}'."
         db.commit()
         logger.info(f"Job {job.id} processed successfully.")
-        
-        # 8. Refresh views
+
+        # 8a. Bump Redis cache versions so next page load reflects new data.
+        # Always bump companies list since company data may have been created/updated.
+        try:
+            if processed_events:
+                bump_companies_list_version()
+                # Bump each affected company's individual cache
+                affected_company_ids = {e.company_id for e in processed_events}
+                for cid in affected_company_ids:
+                    from app.core.redis import bump_company_version
+                    bump_company_version(cid)
+                logger.info(f"Bumped company cache versions for {len(affected_company_ids)} companies.")
+            elif email_category == "GENERAL_ANNOUNCEMENT":
+                bump_announcements_version()
+                logger.info("Bumped announcements cache version.")
+        except Exception as cache_err:
+            logger.warning(f"Cache version bump failed (non-critical): {cache_err}")
+
+        # 8b. Refresh views
         refresh_materialized_views(db)
         
         # Process notification jobs queue immediately
@@ -1343,6 +1361,14 @@ def update_recruitment_states(db: Session, company: Company, event_type: str, ev
 
     db.commit()
 
+    # Bump Redis cache versions for all users whose applications were updated
+    try:
+        affected_user_ids = {app.user_id for app in apps}
+        for uid in affected_user_ids:
+            bump_user_version(uid)
+    except Exception as cache_err:
+        logger.warning(f"Cache version bump failed in update_recruitment_states (non-critical): {cache_err}")
+
     # Synchronize calendar events for all users tracking this company
     from app.services.calendar_sync import sync_user_calendar_events
     for app in apps:
@@ -1350,6 +1376,7 @@ def update_recruitment_states(db: Session, company: Company, event_type: str, ev
             sync_user_calendar_events(db, app.user_id, company.id)
         except Exception as sync_err:
             logger.error(f"Error triggering calendar sync for user {app.user_id} and company {company.id}: {str(sync_err)}")
+
 
 
 def check_if_student_shortlisted(db: Session, user_id: UUID, event: CompanyEvent) -> bool:

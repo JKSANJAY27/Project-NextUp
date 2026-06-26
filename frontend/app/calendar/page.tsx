@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect } from "react";
 import api from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCalendarEvents, useApplications } from "@/lib/queries";
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -50,6 +52,7 @@ interface Application {
 }
 
 export default function CalendarPage() {
+  const queryClient = useQueryClient();
 
   // State
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -77,26 +80,30 @@ export default function CalendarPage() {
   const [formCompanyId, setFormCompanyId] = useState('');
   const [formError, setFormError] = useState('');
 
-  // Initial Load
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const [eventsRes, appsRes] = await Promise.all([
-        api.get("/calendar"),
-        api.get("/applications")
-      ]);
-      setEvents(eventsRes.data);
-      setApplications(appsRes.data);
-    } catch (err) {
-      console.error("Failed to load calendar data:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Query Hooks
+  const { data: eventsData, isLoading: eventsLoading } = useCalendarEvents();
+  const { data: applicationsData, isLoading: applicationsLoading } = useApplications();
 
   useEffect(() => {
-    loadData();
-  }, []);
+    setLoading(eventsLoading || applicationsLoading);
+  }, [eventsLoading, applicationsLoading]);
+
+  useEffect(() => {
+    if (eventsData) {
+      setEvents(eventsData);
+    }
+  }, [eventsData]);
+
+  useEffect(() => {
+    if (applicationsData) {
+      setApplications(applicationsData);
+    }
+  }, [applicationsData]);
+
+  // Initial Load (kept for backwards compatibility/manual trigger)
+  const loadData = async () => {
+    queryClient.invalidateQueries();
+  };
 
   // Set today's date selected by default on load
   useEffect(() => {

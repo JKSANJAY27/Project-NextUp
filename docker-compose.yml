@@ -32,6 +32,7 @@ services:
       - DATABASE_URL=postgresql://nextup:nextup_secure_password_123@db:5432/nextup
       - JWT_SECRET=supersecret_nextupai_key_change_me_in_prod
       - ACCESS_TOKEN_EXPIRE_MINUTES=10080
+      - REDIS_URL=redis://redis:6379
     depends_on:
       - db
       - redis
