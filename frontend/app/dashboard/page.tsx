@@ -274,6 +274,7 @@ function DashboardPageContent() {
     if (applicationsData) {
       const appMap: Record<string, Application> = {};
       const oppStateMap: Record<string, OpportunityState> = {};
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (applicationsData || []).forEach((record: any) => {
         if (record.record_type === "opportunity_state") {
           oppStateMap[record.company_id] = record as OpportunityState;

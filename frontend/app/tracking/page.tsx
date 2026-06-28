@@ -44,6 +44,7 @@ export default function TrackingPage() {
   useEffect(() => {
     if (applicationsData) {
       const appMap: Record<string, Application> = {};
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (applicationsData || []).forEach((record: any) => {
         if (record.record_type === "application") {
           appMap[record.company_id] = record;

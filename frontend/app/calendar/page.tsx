@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import api from "@/lib/api";
-import { useQueryClient } from "@tanstack/react-query";
+
 import { useCalendarEvents, useApplications } from "@/lib/queries";
 import { 
   ChevronLeft, 
@@ -52,7 +52,7 @@ interface Application {
 }
 
 export default function CalendarPage() {
-  const queryClient = useQueryClient();
+
 
   // State
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -100,10 +100,6 @@ export default function CalendarPage() {
     }
   }, [applicationsData]);
 
-  // Initial Load (kept for backwards compatibility/manual trigger)
-  const loadData = async () => {
-    queryClient.invalidateQueries();
-  };
 
   // Set today's date selected by default on load
   useEffect(() => {
