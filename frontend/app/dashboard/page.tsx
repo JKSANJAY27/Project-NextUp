@@ -100,6 +100,7 @@ interface CompanyWithEligibility extends Company {
   eligibility_reason: string | null;
   eligibility_explanation?: EligibilityExplanation | null;
   eligibility_raw_text?: string | null;
+  deadline_label?: string | null;
 }
 
 interface Application {
