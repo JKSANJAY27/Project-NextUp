@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 
 from app.models.models import Company, OpportunityState, Application, User
+from app.core.redis import bump_user_version
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,7 @@ def update_expired_opportunities(db: Session, user_id: UUID):
 
     if moved_count > 0:
         db.commit()
+        bump_user_version(user_id)
         logger.info(f"Moved {moved_count} opportunities to 'decision_pending' for user {user_id}")
 
 
@@ -143,6 +145,7 @@ def auto_archive_expired_decisions(db: Session, user_id: UUID):
 
     if archived_count > 0:
         db.commit()
+        bump_user_version(user_id)
         logger.info(f"Auto-archived {archived_count} expired decisions for user {user_id}")
 
 

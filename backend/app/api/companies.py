@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, status, File, UploadFile, Form
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -15,7 +16,12 @@ from app.services.pdf_extractor import parse_job_description
 from app.services.excel_parser import extract_neo_ids_from_excel
 from app.services.match_scorer import calculate_match_score
 from app.core.security import decrypt_field, encrypt_field
+from app.core.redis import (
+    get_cache, set_cache, get_companies_list_version, bump_companies_list_version,
+    get_company_version, bump_company_version, get_user_version, bump_user_version
+)
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/companies", tags=["companies"])
 
 @router.post("", response_model=CompanyOut)
@@ -28,6 +34,7 @@ def create_company(
     db.add(new_company)
     db.commit()
     db.refresh(new_company)
+    bump_companies_list_version()
     return new_company
 
 @router.post("/import")
@@ -75,6 +82,7 @@ async def import_placement_file(
         db.add(new_company)
         db.commit()
         db.refresh(new_company)
+        bump_companies_list_version()
         return {"message": "Email imported successfully", "company": new_company}
 
     elif import_type == "jd":
@@ -111,6 +119,9 @@ async def import_placement_file(
                 
         db.commit()
         db.refresh(company)
+        bump_company_version(company_id)
+        for app in applications:
+            bump_user_version(app.user_id)
         return {"message": "Job description parsed and matched successfully", "skills_extracted": company.jd_required_skills}
 
     elif import_type == "shortlist":
@@ -152,12 +163,14 @@ async def import_placement_file(
                         )
                     db.add(app)
                     db.commit()
+                    bump_user_version(current_user.id)
                 else:
                     # User not in shortlist, set status to Likely Rejected if they were previously active
                     if app and app.status in ('Applied', 'Shortlisted', 'OA', 'Interview'):
                         app.status = "Likely Rejected"
                         db.add(app)
                         db.commit()
+                        bump_user_version(current_user.id)
             except Exception as e:
                 logger.error(f"Failed to decrypt user neo_id or shortlist check: {str(e)}")
                 
@@ -171,25 +184,53 @@ async def import_placement_file(
     else:
         raise HTTPException(status_code=400, detail="Invalid import_type. Must be 'email', 'jd', or 'shortlist'.")
 
+class CachedCompanyMock:
+    def __init__(self, eligibility_rules):
+        self.eligibility_rules = eligibility_rules
+
 @router.get("", response_model=List[CompanyWithEligibilityOut])
 def list_companies(
     x_client_key: Optional[str] = Header(None, alias="X-Client-Key"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    companies = db.query(Company).all()
+    list_version = get_companies_list_version()
+    cache_key = f"nextup:cache:companies:list:v{list_version}"
+    cached_list = get_cache(cache_key)
+    
+    if cached_list is None:
+        companies = db.query(Company).all()
+        # Sort by latest event timestamp or created_at (descending)
+        companies = sorted(
+            companies,
+            key=lambda c: c.latest_event.timestamp if c.latest_event and c.latest_event.timestamp else c.created_at,
+            reverse=True
+        )
+        # Cache raw company data without eligibility check
+        cached_list = [CompanyOut.from_orm(company).dict() for company in companies]
+        set_cache(cache_key, cached_list, expire_seconds=600) # 10 min TTL
+
     results = []
-    for company in companies:
+    for company_data in cached_list:
+        mock_company = CachedCompanyMock(company_data.get("eligibility_rules"))
         if current_user.profile:
-            status, reason, explanation = check_eligibility(current_user.profile, company)
+            status, reason, explanation = check_eligibility(current_user.profile, mock_company)
         else:
             status, reason, explanation = "CHECK", "Student profile not set up.", None
-        # Create a dict compatible with CompanyWithEligibilityOut
-        company_data = CompanyOut.from_orm(company).dict()
-        company_data["eligibility_status"] = status
-        company_data["eligibility_reason"] = reason
-        company_data["eligibility_explanation"] = explanation
-        results.append(company_data)
+        
+        # Merge eligibility fields
+        comp_res = dict(company_data)
+        comp_res["eligibility_status"] = status
+        comp_res["eligibility_reason"] = reason
+        comp_res["eligibility_explanation"] = explanation
+        
+        latest_evt = comp_res.get("latest_event")
+        if latest_evt and latest_evt.get("parsed_metadata"):
+            comp_res["deadline_label"] = latest_evt["parsed_metadata"].get("deadline_label")
+        if not comp_res.get("deadline_label") and comp_res.get("registration_deadline"):
+            comp_res["deadline_label"] = "Registration Deadline"
+            
+        results.append(comp_res)
     return results
 
 @router.get("/{id}", response_model=CompanyWithEligibilityOut)
@@ -199,21 +240,38 @@ def get_company(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    company = db.query(Company).filter(Company.id == id).first()
-    if not company:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Company not found."
-        )
+    company_version = get_company_version(id)
+    cache_key = f"nextup:cache:company:{id}:v{company_version}"
+    cached_company = get_cache(cache_key)
+    
+    if cached_company is None:
+        company = db.query(Company).filter(Company.id == id).first()
+        if not company:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Company not found."
+            )
+        cached_company = CompanyOut.from_orm(company).dict()
+        set_cache(cache_key, cached_company, expire_seconds=600) # 10 min TTL
+
+    mock_company = CachedCompanyMock(cached_company.get("eligibility_rules"))
     if current_user.profile:
-        status_elig, reason_elig, explanation_elig = check_eligibility(current_user.profile, company)
+        status_elig, reason_elig, explanation_elig = check_eligibility(current_user.profile, mock_company)
     else:
         status_elig, reason_elig, explanation_elig = "CHECK", "Student profile not set up.", None
-    company_data = CompanyOut.from_orm(company).dict()
-    company_data["eligibility_status"] = status_elig
-    company_data["eligibility_reason"] = reason_elig
-    company_data["eligibility_explanation"] = explanation_elig
-    return company_data
+        
+    company_res = dict(cached_company)
+    company_res["eligibility_status"] = status_elig
+    company_res["eligibility_reason"] = reason_elig
+    company_res["eligibility_explanation"] = explanation_elig
+    
+    latest_evt = company_res.get("latest_event")
+    if latest_evt and latest_evt.get("parsed_metadata"):
+        company_res["deadline_label"] = latest_evt["parsed_metadata"].get("deadline_label")
+    if not company_res.get("deadline_label") and company_res.get("registration_deadline"):
+        company_res["deadline_label"] = "Registration Deadline"
+        
+    return company_res
 
 
 @router.get("/{id}/events")
@@ -222,6 +280,13 @@ def get_company_events(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    comp_version = get_company_version(id)
+    user_version = get_user_version(current_user.id)
+    cache_key = f"nextup:cache:user:{current_user.id}:company:{id}:events:cv{comp_version}:uv{user_version}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
+
     events = (
         db.query(CompanyEvent)
         .filter(CompanyEvent.company_id == id)
@@ -259,4 +324,5 @@ def get_company_events(
             "user_notification_msg": notif_map.get(e.id)
         })
         
+    set_cache(cache_key, results, expire_seconds=600)
     return results

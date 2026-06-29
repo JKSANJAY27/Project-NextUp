@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models.models import User, Announcement
 from app.schemas.schemas import AnnouncementOut
+from app.core.redis import get_cache, set_cache, get_announcements_version
 
 router = APIRouter(prefix="/announcements", tags=["announcements"])
 
@@ -16,12 +17,21 @@ def get_announcements(
     db: Session = Depends(get_db)
 ):
     """Fetch all announcements, ordered by created_at desc."""
+    version = get_announcements_version()
+    cache_key = f"nextup:cache:global:announcements:v{version}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
+
     announcements = (
         db.query(Announcement)
         .options(joinedload(Announcement.attachments))
         .order_by(Announcement.created_at.desc())
         .all()
     )
+    # Serialize to dict list using schema helper
+    serialized = [AnnouncementOut.from_orm(ann).dict() for ann in announcements]
+    set_cache(cache_key, serialized, expire_seconds=1800) # 30 min TTL
     return announcements
 
 @router.get("/{announcement_id}", response_model=AnnouncementOut)

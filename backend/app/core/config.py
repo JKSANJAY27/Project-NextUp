@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     
     # Database (local dev defaults to SQLite)
     DATABASE_URL: str = "sqlite:///./nextup.db"
+    REDIS_URL: str = "redis://localhost:6379"
     
     # Google Credentials
     GOOGLE_CLIENT_ID: str = ""

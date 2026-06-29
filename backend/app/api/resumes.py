@@ -10,6 +10,7 @@ from app.models.models import User, Resume
 from app.core.security import encrypt_field, decrypt_field
 from app.core.gmail_token_cache import get_session_key
 from app.services.resume_parser import parse_resume_pdf
+from app.core.redis import get_cache, set_cache, get_user_version, bump_user_version
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/resumes", tags=["resumes"])
@@ -47,12 +48,18 @@ def get_user_resume(
     if not derived_key:
         raise HTTPException(status_code=400, detail="Vault session key missing. Please log in.")
 
+    version = get_user_version(current_user.id)
+    cache_key = f"nextup:cache:user:{current_user.id}:resumes_me:v{version}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
+
     resume = db.query(Resume).filter(Resume.user_id == current_user.id).first()
     if not resume or not resume.resume_json_enc:
         profile = current_user.profile
         full_name = profile.full_name if profile else ""
         skills = profile.skills if profile else []
-        return {
+        res = {
             "template": "Classic",
             "resume_data": {
                 "personal": {"name": full_name, "email": current_user.email},
@@ -62,17 +69,21 @@ def get_user_resume(
                 "skills": skills
             }
         }
+        set_cache(cache_key, res, expire_seconds=300) # 5 min TTL
+        return res
         
     try:
         decrypted_json_str = decrypt_field(resume.resume_json_enc, derived_key)
         resume_data = json.loads(decrypted_json_str)
-        return {
+        res = {
             "template": resume.latex_template,
             "resume_data": resume_data,
             "raw_text_enc": resume.raw_text_enc,
             "pdf_file_enc": resume.pdf_file_enc,
             "pdf_filename_enc": resume.pdf_filename_enc
         }
+        set_cache(cache_key, res, expire_seconds=300) # 5 min TTL
+        return res
     except Exception as e:
         logger.error(f"Failed to decrypt resume for user {current_user.id}: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to decrypt secure resume database records.")
@@ -128,4 +139,5 @@ def update_user_resume(
             resume.pdf_filename_enc = pdf_filename_enc
         
     db.commit()
+    bump_user_version(current_user.id)
     return {"status": "success", "message": "Resume updated and encrypted successfully."}

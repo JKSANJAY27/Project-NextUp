@@ -4,6 +4,8 @@ import React, { useState, useEffect } from "react";
 
 import { useAppStore } from "@/lib/store";
 import api from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCompanies, useApplications } from "@/lib/queries";
 import { Company, Application, CompanyEvent } from "./types";
 import TrackingStats from "@/components/TrackingStats";
 import TrackingSection from "@/components/TrackingSection";
@@ -15,6 +17,8 @@ type FilterMode = "ALL" | "ACTIVE_ROUNDS" | "UPCOMING_7_DAYS" | "INTERVIEWS" | "
 
 export default function TrackingPage() {
   const { user } = useAppStore();
+  const queryClient = useQueryClient();
+
   const [companies, setCompanies] = useState<Company[]>([]);
   const [applications, setApplications] = useState<Record<string, Application>>({});
   const [loading, setLoading] = useState(true);
@@ -24,32 +28,35 @@ export default function TrackingPage() {
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [companyEvents, setCompanyEvents] = useState<Record<string, CompanyEvent[]>>({});
 
-  const fetchTrackingData = async () => {
-    setLoading(true);
-    try {
-      const resCompanies = await api.get("/companies");
-      setCompanies(resCompanies.data || []);
-      
-      const resApps = await api.get("/applications");
+  const { data: companiesData, isLoading: companiesLoading } = useCompanies(!!user);
+  const { data: applicationsData, isLoading: applicationsLoading } = useApplications(!!user);
+
+  useEffect(() => {
+    setLoading(companiesLoading || applicationsLoading);
+  }, [companiesLoading, applicationsLoading]);
+
+  useEffect(() => {
+    if (companiesData) {
+      setCompanies(companiesData);
+    }
+  }, [companiesData]);
+
+  useEffect(() => {
+    if (applicationsData) {
       const appMap: Record<string, Application> = {};
-      (resApps.data || []).forEach((record: Application) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (applicationsData || []).forEach((record: any) => {
         if (record.record_type === "application") {
           appMap[record.company_id] = record;
         }
       });
       setApplications(appMap);
-    } catch (err) {
-      console.error("Failed to fetch tracking data", err);
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [applicationsData]);
 
-  useEffect(() => {
-    if (user) {
-      fetchTrackingData();
-    }
-  }, [user]);
+  const fetchTrackingData = async () => {
+    queryClient.invalidateQueries();
+  };
 
   useEffect(() => {
     if (selectedCompanyId && !companyEvents[selectedCompanyId]) {

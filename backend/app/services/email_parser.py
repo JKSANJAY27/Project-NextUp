@@ -197,7 +197,7 @@ Required JSON Output Format:
         "stipend": {{ "value": null, "confidence": 0.99 }},
         "min_cgpa": {{ "value": 8.0, "confidence": 0.97 }},
         "requires_no_arrears": {{ "value": true, "confidence": 0.96 }},
-        "eligible_branches": {{ "value": ["CSE", "CSE AI/ML", "M.Tech CSE", "M.Tech Data Science"], "confidence": 0.94 }},
+        "eligible_branches": {{ "value": ["CSE", "M.Tech CSE", "MCA"], "confidence": 0.94 }},
         "degree_types": {{ "value": ["BTECH", "MTECH"], "confidence": 0.95 }},
         "specializations": {{ "value": ["CSE_CORE", "CSE_AI_ML", "CSE_DATA_SCIENCE"], "confidence": 0.95 }},
         "min_tenth_marks": {{ "value": 60.0, "confidence": 0.95 }},
@@ -237,10 +237,12 @@ Multi-role rules:
 - Never merge multiple roles into one object.
 - Each role object must have its own ctc, stipend, min_cgpa, eligible_branches, requires_no_arrears, degree_types, specializations, min_tenth_marks, min_twelfth_marks, min_ug_cgpa.
 
-Eligibility Rules:
-- eligibility_raw_text: Extract the exact raw text block or sentence describing the eligibility criteria, eligible branches, cgpa, and backlogs directly from the email body.
-- degree_types: A list of strings containing values from: BTECH, MTECH, MCA, MSC. If the email mentions B.Tech or M.Tech generally, output BTECH, MTECH.
-- specializations: A list of string values from: CSE_CORE, CSE_INFO_SEC, CSE_IOT, CSE_DATA_SCIENCE, CSE_BLOCKCHAIN, CSE_AI_ML. Map the branches mentioned. If it says "B.Tech CSE" generally, list all specializations or extract what's listed.
+Eligibility Rules — IMPORTANT:
+- This system is for a CSE-focused university placement cell. All eligible branches will be subsets of: CSE, IT, MCA, M.Tech CSE, M.Tech Data Science, M.Tech AI/ML, Integrated M.Tech (CSE/IT related), and similar CSE-family branches.
+- DO NOT add branches like ECE, EEE, EIE, Mechanical, Civil, Aerospace, or any non-CSE branches unless they are EXPLICITLY named as eligible in the email's "Eligible Branches" section.
+- eligible_branches: Extract ONLY the branches explicitly listed in the "Eligible Branches" or "Eligible Departments" section of the email. Do NOT infer branches from job title or role description.
+- degree_types: A list of strings from: BTECH, MTECH, MCA, MSC. Parse from the Eligible Branches section only.
+- specializations: A list of strings from: CSE_CORE, CSE_INFO_SEC, CSE_IOT, CSE_DATA_SCIENCE, CSE_BLOCKCHAIN, CSE_AI_ML. If the email says "B.Tech CSE (all specializations)" or just "B.Tech CSE" without listing specific specializations, use ["CSE_CORE"] and set allow_all_specializations=true. ONLY add specific specializations if they are explicitly listed.
 - min_tenth_marks: Extract the minimum percentage required for Class 10 (e.g. 60.0 or 70.0). Null if not mentioned.
 - min_twelfth_marks: Extract the minimum percentage required for Class 12 (e.g. 60.0 or 70.0). Null if not mentioned.
 - min_ug_cgpa: Only for PG programs (e.g. M.Tech, MCA) if they mention a minimum UG CGPA (e.g. "UG CGPA >= 7.0"). Null if not mentioned.
@@ -523,44 +525,152 @@ def clean_val(val: str) -> Optional[str]:
     val = re.sub(r'[*_#\u00d8]', '', val)  # strip markdown & bullet characters
     return val.strip()
 
-def get_branches_from_text(text: str) -> List[str]:
+def get_branches_from_text(text: str, strict: bool = False) -> List[str]:
+    """
+    Extract CSE-family eligible branches from a text block.
+    
+    This system is CSE-only. We never return ECE, EEE, MECH, CIVIL etc.
+    
+    If strict=True (used when no dedicated "Eligible Branches" block was found),
+    only match unambiguous full-form names (e.g. "computer science", "information technology")
+    to avoid false positives from body text like "AI model" or "it is required".
+    
+    If strict=False (used on the isolated branches block), broader abbreviations are accepted.
+    """
     branches = set()
     text_lower = text.lower()
     
-    mapping = {
-        "computer science": "CSE",
-        "cse": "CSE",
-        "software engineering": "SWE",
-        "swe": "SWE",
-        "information technology": "IT",
-        "it": "IT",
-        "electronics": "ECE",
-        "ece": "ECE",
-        "vlsi": "ECE",
-        "embedded": "ECE",
-        "electrical": "EEE",
-        "eee": "EEE",
-        "mechanical": "MECH",
-        "mech": "MECH",
-        "mechatronics": "MECH",
-        "cad/cam": "MECH",
-        "civil": "CIVIL",
-        "mca": "MCA",
-        "mtech": "MTECH",
-        "mba": "MBA",
-        "artificial intelligence": "AIML",
-        "aiml": "AIML",
-        "ai": "AIML",
-        "data science": "AIDS",
-        "datascience": "AIDS",
-        "aids": "AIDS"
-    }
+    # --- Always-on matches (safe even in full body) ---
+    if re.search(r'\b(computer\s*science(?:\s*(?:and|&)\s*engineering)?|cse)\b', text_lower):
+        branches.add("CSE")
+    if re.search(r'\binformation\s+technology\b', text_lower):
+        branches.add("IT")
+    if re.search(r'\b(master\s+of\s+computer\s+app(?:lications?)?|m\.?c\.?a)\b', text_lower):
+        branches.add("MCA")
+    if re.search(r'\bintegrated\s+m\.?\s*tech\b', text_lower):
+        branches.add("MTECH_INT")
     
-    for word, branch in mapping.items():
-        if re.search(r'\b' + re.escape(word) + r'\b', text_lower):
-            branches.add(branch)
-            
+    if not strict:
+        # Abbreviation matches — only safe when scanning an isolated branches block
+        # "it" deliberately excluded — too ambiguous (matches "it is", "submit it", etc.)
+        if re.search(r'\bit\b', text_lower):
+            # Only count "IT" if it appears as a branch token (preceded/followed by branch-style context)
+            if re.search(r'(?:branch(?:es)?\s*[:\-]?.*?\bit\b|\bit\b.*?branch|eligible.*?\bit\b)', text_lower):
+                branches.add("IT")
+        if re.search(r'\bmca\b', text_lower):
+            branches.add("MCA")
+        if re.search(r'\bm\.?\s*tech\b', text_lower):
+            branches.add("MTECH")
+        if re.search(r'\b(aids|ai\s*(?:and|&|/)\s*ds)\b', text_lower):
+            branches.add("AIDS")
+        if re.search(r'\baiml\b', text_lower):
+            branches.add("AIML")
+        if re.search(r'\bswe\b', text_lower):
+            branches.add("SWE")
+    
     return list(branches)
+
+def extract_multiple_roles_from_body(email_body: str) -> List[Dict[str, Any]]:
+    """
+    Detects and parses multi-role CTC/Stipend blocks from email bodies.
+    
+    Handles varied formats:
+      Format 1 (indented, no spaces around dash):
+          CTC
+            Full Stack Developer Intern & Business Analysis-3.5 LPA
+            Prompt Engineer Intern- 4-5 LPA (If converted)
+      
+      Format 2 (spaced dash):
+          CTC:
+            Software Engineer - 18 LPA
+            Data Analyst - 12 LPA
+      
+      Format 3 (bullet points):
+          CTC:
+          * Role A: 10 LPA
+          * Role B: 8 LPA
+    
+    Returns list of {role, ctc, stipend} dicts if >= 2 distinct roles found, else [].
+    """
+    roles: Dict[str, Dict[str, Any]] = {}
+
+    def parse_role_value_block(block_text: str) -> Dict[str, str]:
+        """
+        Parse a block of text where each line is 'Role Name - Value' or 'Role Name: Value'
+        or 'Role Name-Value' (no spaces). Returns {role_name: value}.
+        """
+        found = {}
+        for line in block_text.strip().splitlines():
+            # Strip leading whitespace, bullets, asterisks
+            line = re.sub(r'^[\s*\-\u00d8\u2022]+', '', line).strip()
+            if not line:
+                continue
+            # Try to find a separator: optional space, then dash/colon, then value
+            # Value pattern: starts with digit (for CTC like "3.5 LPA", "4-5 LPA", "18 LPA")
+            # or digit-like (for stipend like "10000", "25,000")
+            sep = re.search(
+                r'\s*[-\u2013\u2014:]\s*(\d[\d\s,LlPpAa\.\-/()]+(?:LPA|lpa|Lakhs?|INR|K|k)?\b.*?)$',
+                line
+            )
+            if sep:
+                val = sep.group(1).strip()
+                role_name = line[:sep.start()].strip()
+                # Remove trailing dash or colon from role name
+                role_name = re.sub(r'[\s\-:]+$', '', role_name).strip()
+                if role_name and val:
+                    found[role_name] = val
+        return found
+
+    def extract_section_block(label_pattern: str, body: str) -> str:
+        """
+        Find a section labeled by label_pattern and extract the lines following it
+        until the next section header (a line that is not indented/bulleted).
+        Normalizes double CRLF (\r\r\n) and standard CRLF (\r\n) to \n first.
+        """
+        # Normalize all CR/CRLF variants to plain \n
+        norm_body = body.replace('\r\r\n', '\n').replace('\r\n', '\n').replace('\r', '\n')
+        # Collapse multiple blank lines into one so the regex can skip them
+        norm_body = re.sub(r'\n{2,}', '\n', norm_body)
+        # Match the label line, then capture indented/bulleted lines that follow
+        m = re.search(
+            r'(?:^|[\n])\s*[*\-\u00d8]?\s*' + label_pattern +
+            r'\s*[:\-\u2013\u2014]?\s*[\n]((?:(?:[ \t*\-\u00d8\u2022][^\n]*|[^\n]+(?:LPA|Lpa|lpa|\d{4,})[^\n]*)[\n])+)',
+            norm_body,
+            re.IGNORECASE | re.MULTILINE
+        )
+        return m.group(1) if m else ""
+
+    # --- Extract CTC block ---
+    ctc_block = extract_section_block(r'(?:CTC|Salary|Package|Annual\s*CTC)', email_body)
+    if ctc_block:
+        ctc_map = parse_role_value_block(ctc_block)
+        for role_name, val in ctc_map.items():
+            if role_name not in roles:
+                roles[role_name] = {}
+            roles[role_name]['ctc'] = clean_val(val)
+
+    # --- Extract Stipend block ---
+    stipend_block = extract_section_block(r'(?:Stipend|Internship\s*Stipend|Monthly\s*Stipend)', email_body)
+    if stipend_block:
+        stipend_map = parse_role_value_block(stipend_block)
+        for role_name, val in stipend_map.items():
+            if role_name not in roles:
+                roles[role_name] = {}
+            roles[role_name]['stipend'] = clean_val(val)
+
+    # Only return results if we found >= 2 distinct roles
+    if len(roles) >= 2:
+        result = []
+        for role_name, vals in roles.items():
+            result.append({
+                'role': role_name,
+                'ctc': vals.get('ctc'),
+                'stipend': vals.get('stipend'),
+            })
+        logger.debug(f"Multi-role extractor found {len(result)} roles: {[r['role'] for r in result]}")
+        return result
+    return []
+
 
 def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, Any]:
     """
@@ -571,7 +681,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 
     # 1. Company Name
     comp_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Name of the Company|Company Name|Company|Name of the Organisation|Organisation)\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Name of the Company|Company Name|Name of the Organisation|Organisation|\bCompany\b(?!\s*(?:website|profile|url|link|domain|page|site|info|description|overview|logo|details)))\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
         email_body,
         re.IGNORECASE
     )
@@ -674,7 +784,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     )
     if deadline_match:
         raw_date = clean_val(deadline_match.group(1))
-        parsed_date = dateparser.parse(raw_date)
+        parsed_date = dateparser.parse(raw_date, settings={'TIMEZONE': 'Asia/Kolkata', 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
         if parsed_date:
             data["deadline_iso"] = parsed_date.isoformat()
     else:
@@ -686,31 +796,42 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
         )
         if on_or_before:
             raw_date = clean_val(on_or_before.group(1))
-            parsed_date = dateparser.parse(raw_date)
+            parsed_date = dateparser.parse(raw_date, settings={'TIMEZONE': 'Asia/Kolkata', 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
             if parsed_date:
                 data["deadline_iso"] = parsed_date.isoformat()
 
     # 7. Eligible Branches block extraction
+    # Try to isolate the "Eligible Branches" section before scanning for branches.
+    # Stop at section headers: Eligibility Criteria, CTC, Stipend, Last date, Website, Designation, etc.
     branches_block_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Eligible\s*Branches|Eligibility\s*Branches|Branches|Eligible\s*Departments?)\s*[:\-\–\—\s]\s*[\n\r]*(.*?)(?:Eligibility Criteria|Eligibility|Criteria|CTC|Stipend|Last date|Website|Job location|Designation|$)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Eligible\s*Branches|Eligibility\s*Branches|Eligible\s*Departments?|Eligible\s*Programs?)\s*[:\-\–\—\s]\s*[\n\r]*(.*?)(?=\n\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Eligibility\s*Criteria|Eligibility|Criteria|CTC|Salary|Stipend|Last\s+date|Last\s+Date|Website|Job\s+location|Designation|Date\s+of\s+Visit)|$)",
         email_body,
         re.IGNORECASE | re.DOTALL
     )
-    branches_text = branches_block_match.group(1) if branches_block_match else email_body
-    data["eligible_branches"] = get_branches_from_text(branches_text)
+    
+    branches_block_found = branches_block_match is not None
+    branches_text = branches_block_match.group(1).strip() if branches_block_found else ""
+    
+    # Only scan full body as strict fallback if no dedicated block was found.
+    # strict=True prevents short abbreviations like 'it', 'ai', 'is' from false-matching body text.
+    if branches_text:
+        data["eligible_branches"] = get_branches_from_text(branches_text, strict=False)
+    else:
+        data["eligible_branches"] = get_branches_from_text(email_body, strict=True)
 
-    # Degree types
+    # Degree types — search branches block first, then whole email as fallback
+    degree_search_text = branches_text if branches_text else email_body
     found_degrees = []
-    if re.search(r'\b(b\.?\s*tech|bachelor\s+of\s+tech)\b', branches_text, re.I):
+    if re.search(r'\b(b\.?\s*tech|bachelor\s+of\s+tech)\b', degree_search_text, re.I):
         found_degrees.append("BTECH")
-    if re.search(r'\b(m\.?\s*tech|master\s+of\s+tech)\b', branches_text, re.I):
+    if re.search(r'\b(m\.?\s*tech|master\s+of\s+tech)\b', degree_search_text, re.I):
         found_degrees.append("MTECH")
-    if re.search(r'\b(m\.?\s*c\.?\s*a|master\s+of\s+computer\s+app)\b', branches_text, re.I):
+    if re.search(r'\b(m\.?\s*c\.?\s*a|master\s+of\s+computer\s+app)\b', degree_search_text, re.I):
         found_degrees.append("MCA")
-    if re.search(r'\b(m\.?\s*sc|master\s+of\s+sci)\b', branches_text, re.I):
+    if re.search(r'\b(m\.?\s*sc|master\s+of\s+sci)\b', degree_search_text, re.I):
         found_degrees.append("MSC")
-    # If no degree types found in branches block, search whole email
-    if not found_degrees:
+    # If still no degree types found and we searched a limited block, search full email
+    if not found_degrees and branches_text:
         if re.search(r'\b(b\.?\s*tech|bachelor\s+of\s+tech)\b', email_body, re.I):
             found_degrees.append("BTECH")
         if re.search(r'\b(m\.?\s*tech|master\s+of\s+tech)\b', email_body, re.I):
@@ -721,34 +842,27 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
             found_degrees.append("MSC")
     data["degree_types"] = found_degrees
 
-    # Specializations
+    # Specializations — only from branches block (strict), or whole body if none found
+    # IMPORTANT: Never infer specializations from role names (e.g., "Prompt Engineer" ≠ AI/ML branch)
     found_specializations = []
-    if re.search(r'\b(core|computer\s*science|cse)\b', branches_text, re.I):
-        found_specializations.append("CSE_CORE")
-    if re.search(r'\b(info(rmation)?\s*sec(urity)?|cyber\s*sec(urity)?|is)\b', branches_text, re.I):
-        found_specializations.append("CSE_INFO_SEC")
-    if re.search(r'\b(iot|internet\s+of\s+things)\b', branches_text, re.I):
-        found_specializations.append("CSE_IOT")
-    if re.search(r'\b(data\s*science|ds)\b', branches_text, re.I):
-        found_specializations.append("CSE_DATA_SCIENCE")
-    if re.search(r'\b(blockchain|block\s*chain)\b', branches_text, re.I):
-        found_specializations.append("CSE_BLOCKCHAIN")
-    if re.search(r'\b(ai|ml|artificial\s*intel|machine\s*learn)\b', branches_text, re.I):
-        found_specializations.append("CSE_AI_ML")
-    # If no specializations found in branches block, search whole email
-    if not found_specializations:
-        if re.search(r'\b(core|computer\s*science|cse)\b', email_body, re.I):
+    spec_search = branches_text if branches_text else ""
+    if spec_search:
+        # Explicit specialization keywords in the branches block
+        if re.search(r'\b(computer\s*science(?:\s*(?:and|&)\s*engineering)?|cse)\b', spec_search, re.I):
             found_specializations.append("CSE_CORE")
-        if re.search(r'\b(info(rmation)?\s*sec(urity)?|cyber\s*sec(urity)?|is)\b', email_body, re.I):
+        if re.search(r'\b(information?\s*sec(?:urity)?|cyber\s*sec(?:urity)?)\b', spec_search, re.I):
             found_specializations.append("CSE_INFO_SEC")
-        if re.search(r'\b(iot|internet\s+of\s+things)\b', email_body, re.I):
+        if re.search(r'\b(iot|internet\s+of\s+things)\b', spec_search, re.I):
             found_specializations.append("CSE_IOT")
-        if re.search(r'\b(data\s*science|ds)\b', email_body, re.I):
+        if re.search(r'\b(data\s+science)\b', spec_search, re.I):
             found_specializations.append("CSE_DATA_SCIENCE")
-        if re.search(r'\b(blockchain|block\s*chain)\b', email_body, re.I):
+        if re.search(r'\b(blockchain|block\s*chain)\b', spec_search, re.I):
             found_specializations.append("CSE_BLOCKCHAIN")
-        if re.search(r'\b(ai|ml|artificial\s*intel|machine\s*learn)\b', email_body, re.I):
+        if re.search(r'\b(artificial\s*intelligence|machine\s*learning|ai\s*(?:and|&|/)\s*ml|aiml)\b', spec_search, re.I):
             found_specializations.append("CSE_AI_ML")
+    # If specializations not found in a block, default to CSE_CORE (safest assumption for CSE-only system)
+    if not found_specializations:
+        found_specializations.append("CSE_CORE")
     data["specializations"] = found_specializations
 
     # 8. Eligibility Criteria block extraction
@@ -819,12 +933,17 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
         ug_cgpa_match = re.search(r'(?:ug\s*cgpa|undergrad\s*cgpa)(?:\s*(?:>=|>|:|-|of|\b)\s*)(\d+(?:\.\d+)?)', elig_text, re.I)
         data["min_ug_cgpa"] = float(ug_cgpa_match.group(1)) if ug_cgpa_match else None
 
-    # Arrears
-    arrears_match = re.search(
-        r"(No\s+Standing\s+Arrears|No\s+active\s+backlogs|No\s+backlogs|No\s+standing\s+backlogs|No\s+History\s+of\s+Arrears)",
-        elig_text,
-        re.IGNORECASE
+    # Arrears — search eligibility block first, then full body as fallback
+    # Also handle "History of Arrears" with percentage/CGPA threshold that means the same thing
+    ARREARS_PATTERN = (
+        r"(No\s+Standing\s+Arrears|No\s+active\s+backlogs|No\s+backlogs|No\s+standing\s+backlogs"
+        r"|No\s+History\s+of\s+Arrears|No\s+Arrears|Zero\s+Backlogs|Backlogs\s+not\s+allowed"
+        r"|should\s+not\s+have\s+(?:any\s+)?(?:active\s+)?backlogs|no\s+current\s+backlogs)"
     )
+    arrears_match = re.search(ARREARS_PATTERN, elig_text, re.IGNORECASE)
+    if not arrears_match:
+        # Fallback: search the full email body
+        arrears_match = re.search(ARREARS_PATTERN, email_body, re.IGNORECASE)
     data["requires_no_arrears"] = True if arrears_match else False
 
     # 9. Job location
@@ -899,7 +1018,7 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
 
         if "deadline_iso" not in parsed and dates:
             for d in dates:
-                p_date = dateparser.parse(d)
+                p_date = dateparser.parse(d, settings={'TIMEZONE': 'Asia/Kolkata', 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
                 if p_date:
                     parsed["deadline_iso"] = p_date.isoformat()
                     break
@@ -1045,6 +1164,39 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
             event_type = "REJECTION_RELEASED"
             email_category = "DRIVE_UPDATE"
 
+    # Build the shared eligibility data applicable to all roles
+    shared_role_data = {
+        "eligible_branches": {"value": eligible_branches, "confidence": 0.45},
+        "degree_types": {"value": parsed.get("degree_types", []), "confidence": 0.45},
+        "specializations": {"value": parsed.get("specializations", []), "confidence": 0.45},
+        "min_tenth_marks": {"value": parsed.get("min_tenth_marks"), "confidence": 0.45},
+        "min_twelfth_marks": {"value": parsed.get("min_twelfth_marks"), "confidence": 0.45},
+        "min_ug_cgpa": {"value": parsed.get("min_ug_cgpa"), "confidence": 0.45},
+        "min_cgpa": {"value": min_cgpa, "confidence": 0.45},
+        "requires_no_arrears": {"value": requires_no_arrears, "confidence": 0.45},
+    }
+
+    # Attempt multi-role extraction (used when email lists multiple roles with their own CTC/Stipend)
+    multi_roles = extract_multiple_roles_from_body(email_body)
+    if multi_roles:
+        roles_list = []
+        for mr in multi_roles:
+            roles_list.append({
+                "role": {"value": mr["role"], "confidence": 0.45},
+                "ctc": {"value": mr.get("ctc") or ctc, "confidence": 0.45},
+                "stipend": {"value": mr.get("stipend") or stipend, "confidence": 0.45},
+                **shared_role_data,
+            })
+        logger.info(f"Regex fallback detected {len(roles_list)} roles from multi-role block.")
+    else:
+        # Single role (standard case)
+        roles_list = [{
+            "role": {"value": role, "confidence": 0.45},
+            "ctc": {"value": ctc, "confidence": 0.45},
+            "stipend": {"value": stipend, "confidence": 0.45},
+            **shared_role_data,
+        }]
+
     return {
         "parser_metadata": {
             "parser_version": "v5-regex-fallback",
@@ -1060,21 +1212,7 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
             "registration_link": {"value": registration_link, "confidence": 0.45},
             "date_of_visit": {"value": date_of_visit, "confidence": 0.45},
             "eligibility_raw_text": {"value": parsed.get("eligibility_raw_text"), "confidence": 0.45},
-            "roles": [
-                {
-                    "role": {"value": role, "confidence": 0.45},
-                    "ctc": {"value": ctc, "confidence": 0.45},
-                    "stipend": {"value": stipend, "confidence": 0.45},
-                    "eligible_branches": {"value": eligible_branches, "confidence": 0.45},
-                    "degree_types": {"value": parsed.get("degree_types", []), "confidence": 0.45},
-                    "specializations": {"value": parsed.get("specializations", []), "confidence": 0.45},
-                    "min_tenth_marks": {"value": parsed.get("min_tenth_marks"), "confidence": 0.45},
-                    "min_twelfth_marks": {"value": parsed.get("min_twelfth_marks"), "confidence": 0.45},
-                    "min_ug_cgpa": {"value": parsed.get("min_ug_cgpa"), "confidence": 0.45},
-                    "min_cgpa": {"value": min_cgpa, "confidence": 0.45},
-                    "requires_no_arrears": {"value": requires_no_arrears, "confidence": 0.45}
-                }
-            ],
+            "roles": roles_list,
             "announcement": None
         }
     }

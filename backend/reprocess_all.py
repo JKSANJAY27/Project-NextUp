@@ -32,6 +32,7 @@ def main():
         # We delete from child tables first to respect foreign keys, or let postgres handle cascades.
         # But we do NOT delete from users or student_profiles, to keep user logins intact.
         tables_to_clear = [
+            "ingestion_execution_logs",
             "notifications",
             "notification_jobs",
             "ingestion_audit_logs",
@@ -40,6 +41,7 @@ def main():
             "company_events",
             "company_change_logs",
             "applications",
+            "pending_company_events",
             "companies"
         ]
         

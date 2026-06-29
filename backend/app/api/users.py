@@ -6,6 +6,7 @@ from app.models.models import User, StudentProfile, Resume, Application
 from app.schemas.schemas import UserOut, UserUpdate
 from app.core.security import generate_blind_index
 from app.core.config import settings
+from app.core.redis import get_cache, set_cache, get_user_version, bump_user_version, bump_companies_list_version
 from pydantic import BaseModel
 import uuid
 from datetime import datetime
@@ -54,7 +55,14 @@ def read_user_me(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    return get_merged_user_data(current_user, db)
+    version = get_user_version(current_user.id)
+    cache_key = f"nextup:cache:user:{current_user.id}:me:v{version}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
+    data = get_merged_user_data(current_user, db)
+    set_cache(cache_key, data, expire_seconds=300) # 5 min TTL
+    return data
 
 @router.put("/me", response_model=UserOut)
 def update_user_me(
@@ -96,7 +104,16 @@ def update_user_me(
                 setattr(profile, field, value)
             
     db.commit()
-    return get_merged_user_data(current_user, db)
+    bump_user_version(current_user.id)
+    # Eligibility checks on companies could also change when user profile updates,
+    # so we should bump companies list version to force recalculation.
+    bump_companies_list_version()
+    
+    # Also invalidate cached profile
+    version = get_user_version(current_user.id)
+    data = get_merged_user_data(current_user, db)
+    set_cache(f"nextup:cache:user:{current_user.id}:me:v{version}", data, expire_seconds=300)
+    return data
 
 
 class ResetVaultRequest(BaseModel):
@@ -129,4 +146,10 @@ def reset_user_vault(
         db.add(app)
         
     db.commit()
-    return get_merged_user_data(current_user, db)
+    bump_user_version(current_user.id)
+    bump_companies_list_version()
+    
+    version = get_user_version(current_user.id)
+    data = get_merged_user_data(current_user, db)
+    set_cache(f"nextup:cache:user:{current_user.id}:me:v{version}", data, expire_seconds=300)
+    return data

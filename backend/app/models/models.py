@@ -67,14 +67,11 @@ class Company(Base):
     job_location = Column(String)
     eligible_branches = Column(ARRAY(String), default=list)
     eligibility_rules = Column(JSON, default=dict)
-    registration_deadline = Column(DateTime)
+    registration_deadline_db = Column("registration_deadline", DateTime)
     registration_link = Column(String)
     website = Column(String)
     jd_text = Column(String)
-    jd_required_skills = Column(ARRAY(String), default=list)
-    jd_preferred_skills = Column(ARRAY(String), default=list)
-    jd_ats_keywords = Column(ARRAY(String), default=list)
-    interview_topics = Column(ARRAY(String), default=list)
+    jd_analysis = Column(JSON, default=dict)
     recruitment_cycle = Column(String, default="Default")
     fingerprint = Column(String(64), unique=True, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -85,6 +82,85 @@ class Company(Base):
     events = relationship("CompanyEvent", back_populates="company", cascade="all, delete-orphan")
     change_logs = relationship("CompanyChangeLog", back_populates="company", cascade="all, delete-orphan")
     opportunity_states = relationship("OpportunityState", back_populates="company", cascade="all, delete-orphan")
+
+    @property
+    def jd_required_skills(self):
+        if not self.jd_analysis:
+            return []
+        return self.jd_analysis.get("required_skills") or []
+
+    @jd_required_skills.setter
+    def jd_required_skills(self, value):
+        if not self.jd_analysis:
+            self.jd_analysis = {}
+        self.jd_analysis["required_skills"] = value
+
+    @property
+    def jd_preferred_skills(self):
+        if not self.jd_analysis:
+            return []
+        return self.jd_analysis.get("preferred_skills") or []
+
+    @jd_preferred_skills.setter
+    def jd_preferred_skills(self, value):
+        if not self.jd_analysis:
+            self.jd_analysis = {}
+        self.jd_analysis["preferred_skills"] = value
+
+    @property
+    def jd_ats_keywords(self):
+        if not self.jd_analysis:
+            return []
+        return self.jd_analysis.get("ats_keywords") or []
+
+    @jd_ats_keywords.setter
+    def jd_ats_keywords(self, value):
+        if not self.jd_analysis:
+            self.jd_analysis = {}
+        self.jd_analysis["ats_keywords"] = value
+
+    @property
+    def interview_topics(self):
+        if not self.jd_analysis:
+            return []
+        return self.jd_analysis.get("interview_topics") or []
+
+    @interview_topics.setter
+    def interview_topics(self, value):
+        if not self.jd_analysis:
+            self.jd_analysis = {}
+        self.jd_analysis["interview_topics"] = value
+
+    @property
+    def latest_event(self):
+        if not self.events:
+            return None
+        # Sort events by timestamp descending, using a fallback min datetime for sorting
+        sorted_events = sorted(self.events, key=lambda e: e.timestamp or datetime.min, reverse=True)
+        return sorted_events[0]
+
+    @property
+    def effective_deadline(self):
+        if self.events:
+            # Sort events by timestamp descending
+            sorted_events = sorted(self.events, key=lambda e: e.timestamp or datetime.min, reverse=True)
+            for e in sorted_events:
+                if e.parsed_metadata and isinstance(e.parsed_metadata, dict):
+                    ev_date = e.parsed_metadata.get("deadline_iso")
+                    if ev_date:
+                        try:
+                            return datetime.fromisoformat(ev_date)
+                        except ValueError:
+                            pass
+        return self.registration_deadline_db
+
+    @property
+    def registration_deadline(self):
+        return self.effective_deadline
+
+    @registration_deadline.setter
+    def registration_deadline(self, value):
+        self.registration_deadline_db = value
 
 class CompanyChangeLog(Base):
     __tablename__ = "company_change_logs"
@@ -108,11 +184,27 @@ class CompanyEvent(Base):
     sender = Column(String)
     body = Column(String)
     timestamp = Column(DateTime, default=datetime.utcnow)
+    parsed_metadata = Column(JSON, default=dict)
 
     company = relationship("Company", back_populates="events")
     attachments = relationship("AttachmentMetadata", back_populates="company_event", cascade="all, delete-orphan")
     notification_jobs = relationship("NotificationJob", back_populates="company_event", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="company_event", cascade="all, delete-orphan")
+
+class PendingCompanyEvent(Base):
+    __tablename__ = "pending_company_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    raw_ingestion_job_id = Column(UUID(as_uuid=True), ForeignKey("raw_ingestion_jobs.id", ondelete="CASCADE"), nullable=False)
+    company_name = Column(String, nullable=False)
+    role_name = Column(String, nullable=True)
+    event_type = Column(String, nullable=False)
+    status = Column(String, default="PENDING_PARENT") # PENDING_PARENT, RECONCILED, FAILED
+    parsed_payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    matched_company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True)
+
+    matched_company = relationship("Company")
 
 class Application(Base):
     __tablename__ = "applications"
@@ -242,6 +334,7 @@ class RawIngestionJob(Base):
     processed_at = Column(DateTime)
     parsed_output = Column(JSON, default=None)
     validated_output = Column(JSON, default=None)
+    final_classification = Column(String(100), nullable=True)
 
     source = relationship("IngestionSource", back_populates="jobs")
 
@@ -314,4 +407,17 @@ class CalendarEvent(Base):
     user = relationship("User")
     company = relationship("Company")
     company_event = relationship("CompanyEvent")
+
+
+class IngestionExecutionLog(Base):
+    __tablename__ = "ingestion_execution_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("raw_ingestion_jobs.id", ondelete="CASCADE"), nullable=False)
+    stage = Column(String(100), nullable=False)
+    status = Column(String(50), nullable=False)
+    message = Column(String, nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+    job = relationship("RawIngestionJob")
 

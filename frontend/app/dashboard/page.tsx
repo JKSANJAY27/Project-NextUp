@@ -6,6 +6,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
 import api from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCompanies, useApplications, useNotifications, useAnnouncements } from "@/lib/queries";
 import { 
   Plus, 
   Lock, 
@@ -79,6 +81,12 @@ interface Company {
   source_email_body: string | null;
   additional_info: AdditionalInfo | null;
   requires_review?: boolean;
+  latest_event?: {
+    id: string;
+    event_type: string;
+    subject: string;
+    timestamp: string | null;
+  } | null;
 }
 
 interface EligibilityExplanation {
@@ -92,6 +100,7 @@ interface CompanyWithEligibility extends Company {
   eligibility_reason: string | null;
   eligibility_explanation?: EligibilityExplanation | null;
   eligibility_raw_text?: string | null;
+  deadline_label?: string | null;
 }
 
 interface Application {
@@ -247,35 +256,36 @@ function DashboardPageContent() {
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
 
-  const fetchDashboardData = async () => {
-    setLoading(true);
-    try {
-      // 1. Fetch companies from API (FastAPI calculates eligibility)
-      const resCompanies = await api.get("/companies");
-      const compData = resCompanies.data || [];
-      setCompanies(compData);
+  const queryClient = useQueryClient();
 
-      // 3. Fetch applications from FastAPI to get computed priority scoring and stale status
-      let appData = [];
-      try {
-        const res = await api.get("/applications");
-        appData = res.data;
-      } catch (err) {
-        console.error("FastAPI applications endpoint failed, falling back to Supabase", err);
-        const { data: sbData } = await supabase
-          .from("applications")
-          .select("*");
-        appData = sbData || [];
-      }
+  // 1. TanStack Query hooks
+  const { data: companiesData, isLoading: companiesQueryLoading } = useCompanies(!!user);
+  const { data: applicationsData, isLoading: applicationsQueryLoading } = useApplications(!!user);
+  const { data: notificationsData, isLoading: notificationsQueryLoading } = useNotifications(!!user);
+  const { data: announcementsData, isLoading: announcementsQueryLoading } = useAnnouncements(!!user);
 
+  // Sync loading state
+  useEffect(() => {
+    setLoading(companiesQueryLoading || applicationsQueryLoading || notificationsQueryLoading || announcementsQueryLoading);
+  }, [companiesQueryLoading, applicationsQueryLoading, notificationsQueryLoading, announcementsQueryLoading]);
+
+  // Sync companies state
+  useEffect(() => {
+    if (companiesData) {
+      setCompanies(companiesData);
+    }
+  }, [companiesData]);
+
+  // Sync applications state
+  useEffect(() => {
+    if (applicationsData) {
       const appMap: Record<string, Application> = {};
       const oppStateMap: Record<string, OpportunityState> = {};
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (appData || []).forEach((record: any) => {
+      (applicationsData || []).forEach((record: any) => {
         if (record.record_type === "opportunity_state") {
           oppStateMap[record.company_id] = record as OpportunityState;
         } else {
-          // Real application tracker
           appMap[record.company_id] = {
             id: record.id,
             record_type: "application",
@@ -296,47 +306,38 @@ function DashboardPageContent() {
       });
       setApplications(appMap);
       setOpportunityStates(oppStateMap);
-
-      // 4. Fetch notifications bundled by company workspace
-      if (user) {
-        try {
-          const notifRes = await api.get("/notifications");
-          setNotificationBundles(notifRes.data || []);
-        } catch (err) {
-          console.error("Failed to fetch notification bundles:", err);
-        }
-      }
-
-      // 5. Fetch general announcements
-      if (user) {
-        try {
-          const annRes = await api.get("/announcements");
-          const data = annRes.data || [];
-          setAnnouncements(data);
-          if (data.length > 0) {
-            setSelectedAnnouncement((prev) => {
-              if (prev) {
-                // If we already had one selected, see if it's still in the list and update it
-                const found = data.find((a: Announcement) => a.id === prev.id);
-                if (found) return found;
-              }
-              return data[0];
-            });
-          }
-        } catch (err) {
-          console.error("Failed to fetch announcements:", err);
-        }
-      }
-    } catch (err) {
-      console.error("Error fetching dashboard data", err);
-    } finally {
-      setLoading(false);
     }
+  }, [applicationsData]);
+
+  // Sync notifications state
+  useEffect(() => {
+    if (notificationsData) {
+      setNotificationBundles(notificationsData);
+    }
+  }, [notificationsData]);
+
+  // Sync announcements state
+  useEffect(() => {
+    if (announcementsData) {
+      setAnnouncements(announcementsData);
+      if (announcementsData.length > 0) {
+        setSelectedAnnouncement((prev) => {
+          if (prev) {
+            const found = announcementsData.find((a: Announcement) => a.id === prev.id);
+            if (found) return found;
+          }
+          return announcementsData[0];
+        });
+      }
+    }
+  }, [announcementsData]);
+
+  // Mock function for backwards compatibility with any remaining manual triggers
+  const fetchDashboardData = async () => {
+    queryClient.invalidateQueries();
   };
 
   useEffect(() => {
-    fetchDashboardData();
-
     // Set up real-time subscription for realtime updates from Supabase
     const companiesChannel = supabase
       .channel("supabase-realtime-dashboard")
@@ -344,21 +345,21 @@ function DashboardPageContent() {
         "postgres_changes",
         { event: "*", schema: "public", table: "companies" },
         () => {
-          fetchDashboardData();
+          queryClient.invalidateQueries({ queryKey: ["companies"] });
         }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "applications" },
         () => {
-          fetchDashboardData();
+          queryClient.invalidateQueries({ queryKey: ["applications"] });
         }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "notifications" },
         () => {
-          fetchDashboardData();
+          queryClient.invalidateQueries({ queryKey: ["notifications"] });
         }
       )
       .subscribe();
@@ -366,8 +367,7 @@ function DashboardPageContent() {
     return () => {
       supabase.removeChannel(companiesChannel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, encryptionKey]);
+  }, [user, encryptionKey, queryClient]);
 
   // Auto-select announcement if id parameter is in URL
   useEffect(() => {
@@ -2325,8 +2325,15 @@ function DashboardPageContent() {
                               className="py-5 px-6 cursor-pointer group"
                               onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}
                             >
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <p className="font-bold text-base uppercase tracking-tighter text-foreground group-hover:text-accent transition-colors">{c.name}</p>
+                                {c.latest_event && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-black bg-amber-500/20 text-amber-500 border border-amber-500/30 animate-pulse tracking-wider">
+                                    {["REGISTRATION", "NEW_DRIVE"].includes(c.latest_event.event_type)
+                                      ? "✨ NEW"
+                                      : `⚡ ${c.latest_event.event_type.replace(/_/g, ' ')}`}
+                                  </span>
+                                )}
                                 {c.jd_required_skills && c.jd_required_skills.length > 0 && (
                                   <div className="relative group/tooltip inline-block">
                                     <span className="text-[10px] text-accent cursor-help">💡</span>
@@ -2353,6 +2360,7 @@ function DashboardPageContent() {
                             <td className="py-5 px-6">
                               {deadlineDate ? (
                                 <>
+                                  <p className="text-[9px] text-muted-foreground uppercase mb-0.5 tracking-widest">{c.deadline_label || "REG. DEADLINE"}</p>
                                   <p className="text-xs font-bold uppercase">{deadlineDate.toLocaleDateString("en-IN", { day: '2-digit', month: 'short' })}</p>
                                   <p className="text-[10px] text-muted-foreground">{deadlineDate.toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })}</p>
                                 </>

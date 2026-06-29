@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models.models import User, CalendarEvent, Company
 from app.schemas.schemas import CalendarEventCreate, CalendarEventUpdate, CalendarEventOut
+from app.core.redis import get_cache, set_cache, get_user_version, bump_user_version
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/calendar", tags=["calendar"])
@@ -21,10 +22,20 @@ def list_calendar_events(
     Retrieves all non-deleted calendar events for the current user.
     Pure read endpoint - does not trigger sync.
     """
+    version = get_user_version(current_user.id)
+    cache_key = f"nextup:cache:user:{current_user.id}:calendar:v{version}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
+
     events = db.query(CalendarEvent).filter(
         CalendarEvent.user_id == current_user.id,
         CalendarEvent.is_deleted == False
     ).order_by(CalendarEvent.date.asc()).all()
+    
+    # Serialize response list using CalendarEventOut schema to avoid Pydantic serialization issues
+    serialized_events = [CalendarEventOut.from_orm(e).dict() for e in events]
+    set_cache(cache_key, serialized_events, expire_seconds=30)
     return events
 
 @router.post("", response_model=CalendarEventOut)
@@ -64,6 +75,7 @@ def create_calendar_event(
     db.add(new_event)
     db.commit()
     db.refresh(new_event)
+    bump_user_version(current_user.id)
     return new_event
 
 @router.put("/{id}", response_model=CalendarEventOut)
@@ -114,6 +126,7 @@ def update_calendar_event(
     db.add(event)
     db.commit()
     db.refresh(event)
+    bump_user_version(current_user.id)
     return event
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -143,4 +156,5 @@ def delete_calendar_event(
         db.add(event)
         
     db.commit()
+    bump_user_version(current_user.id)
     return None
