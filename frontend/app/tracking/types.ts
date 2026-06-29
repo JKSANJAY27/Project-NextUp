@@ -29,6 +29,12 @@ export interface Company {
   source_email_body: string | null;
   additional_info: AdditionalInfo | null;
   requires_review?: boolean;
+  latest_event?: {
+    id: string;
+    event_type: string;
+    subject: string;
+    timestamp: string | null;
+  } | null;
 }
 
 export interface Application {

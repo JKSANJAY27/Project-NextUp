@@ -44,6 +44,15 @@ class UserOut(BaseModel):
         from_attributes = True
 
 # Company Schemas
+class LatestEventSchema(BaseModel):
+    id: UUID
+    event_type: str
+    subject: str
+    timestamp: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
 class CompanyCreate(BaseModel):
     name: str
     category: Optional[str] = None
@@ -67,6 +76,7 @@ class CompanyCreate(BaseModel):
 class CompanyOut(CompanyCreate):
     id: UUID
     created_at: datetime
+    latest_event: Optional[LatestEventSchema] = None
 
     class Config:
         from_attributes = True

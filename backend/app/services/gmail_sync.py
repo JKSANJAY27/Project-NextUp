@@ -19,7 +19,7 @@ from app.core.security import generate_blind_index
 from app.models.models import (
     User, StudentProfile, Company, CompanyEvent, CompanyChangeLog, Announcement,
     Application, Notification, RawIngestionJob, AttachmentMetadata, NotificationJob,
-    IngestionAuditLog, OpportunityState, PendingCompanyEvent
+    IngestionAuditLog, OpportunityState, PendingCompanyEvent, IngestionExecutionLog
 )
 from app.services.email_parser import parse_placement_email, build_regex_fallback_response
 from app.services.excel_parser import extract_neo_ids_from_excel
@@ -30,6 +30,23 @@ from app.services.eligibility import check_eligibility
 from app.core.redis import bump_companies_list_version, bump_announcements_version, bump_user_version
 
 logger = logging.getLogger(__name__)
+
+def log_execution_stage(db: Session, job_id: UUID, stage: str, status: str, message: Optional[str] = None):
+    import uuid
+    try:
+        log = IngestionExecutionLog(
+            id=uuid.uuid4(),
+            job_id=job_id,
+            stage=stage,
+            status=status,
+            message=message,
+            timestamp=datetime.utcnow()
+        )
+        db.add(log)
+        db.commit()
+    except Exception as e:
+        logger.error(f"Failed to log execution stage {stage} for job {job_id}: {str(e)}")
+        db.rollback()
 
 def clean_company_name_key(name: str) -> str:
     if not name:
@@ -308,6 +325,55 @@ def process_event_attachments(db: Session, event: CompanyEvent, attachments: lis
             except Exception as e:
                 logger.error(f"Failed to process Shortlist Excel {filename}: {str(e)}")
 
+def extract_event_metadata(body: str, subject: str, event_type: str, ext_data: dict) -> dict:
+    meta = {
+        "deadline_iso": ext_data.get("deadline_iso", {}).get("value"),
+        "registration_link": ext_data.get("registration_link", {}).get("value"),
+        "job_location": ext_data.get("job_location", {}).get("value")
+    }
+    
+    # 1. Detect OA platform
+    if event_type == "OA":
+        platforms = ["neopat", "cocubes", "hackerearth", "hackerrank", "mettl", "shl", "glider", "hirepro", "litcoder", "google form", "ms forms"]
+        for p in platforms:
+            if re.search(r'\b' + re.escape(p) + r'\b', body.lower()) or re.search(r'\b' + re.escape(p) + r'\b', subject.lower()):
+                meta["oa_platform"] = p.upper()
+                break
+                
+    # 2. Detect Interview details (meeting links, venue)
+    if event_type == "INTERVIEW":
+        if "zoom.us" in body.lower():
+            meta["interview_platform"] = "ZOOM"
+            zoom_match = re.search(r'((?:https?://)?[a-zA-Z0-9-.]*zoom\.us/[^\s\)\"\'>]+)', body)
+            if zoom_match:
+                link = zoom_match.group(1)
+                if not link.startswith(("http://", "https://")):
+                    link = "https://" + link
+                meta["meeting_link"] = link
+        elif "teams.microsoft.com" in body.lower():
+            meta["interview_platform"] = "MS_TEAMS"
+            teams_match = re.search(r'((?:https?://)?[a-zA-Z0-9-.]*teams\.microsoft\.com/[^\s\)\"\'>]+)', body)
+            if teams_match:
+                link = teams_match.group(1)
+                if not link.startswith(("http://", "https://")):
+                    link = "https://" + link
+                meta["meeting_link"] = link
+        elif "meet.google.com" in body.lower():
+            meta["interview_platform"] = "GOOGLE_MEET"
+            meet_match = re.search(r'((?:https?://)?meet\.google\.com/[a-zA-Z0-9-]+)', body)
+            if meet_match:
+                link = meet_match.group(1)
+                if not link.startswith(("http://", "https://")):
+                    link = "https://" + link
+                meta["meeting_link"] = link
+        else:
+            meta["interview_platform"] = "PHYSICAL"
+            venue_match = re.search(r'(?:venue|location|room|hall|lab)\s*[:\-–—\s]\s*([^\n\r.]+)', body, re.I)
+            if venue_match:
+                meta["venue"] = venue_match.group(1).strip()
+
+    return meta
+
 def reconcile_pending_events_for_company(db: Session, company: Company):
     """
     Finds and processes all pending company events that match the given newly created company.
@@ -365,13 +431,20 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
         ).first()
         
         if not event:
+            # Extract parsed metadata from the saved payload
+            ext_d = {}
+            if pe.parsed_payload and isinstance(pe.parsed_payload, dict):
+                ext_d = pe.parsed_payload.get("extracted_data", {})
+            parsed_meta = extract_event_metadata(body, subject, pe.event_type, ext_d)
+
             event = CompanyEvent(
                 company_id=company.id,
                 event_type=pe.event_type,
                 subject=subject,
                 sender=sender,
                 body=body,
-                timestamp=email_timestamp
+                timestamp=email_timestamp,
+                parsed_metadata=parsed_meta
             )
             db.add(event)
             db.flush()
@@ -381,11 +454,16 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
                 status='pending'
             )
             db.add(notification_job)
+            log_execution_stage(db, job.id, "EVENT_CREATED", "SUCCESS", f"Created reconciled event: {pe.event_type}")
             
         process_event_attachments(db, event, attachments)
+        log_execution_stage(db, job.id, "ATTACHMENTS_PROCESSED", "SUCCESS")
+        
         update_recruitment_states(db, company, pe.event_type, email_timestamp, body)
+        log_execution_stage(db, job.id, "APPLICATIONS_UPDATED", "SUCCESS")
         
         pe.status = "RECONCILED"
+        pe.matched_company_id = company.id
         job.status = "completed"
         job.error_message = f"Reconciled directly with company: {company.name} - {company.role}"
         job.processed_at = datetime.utcnow()
@@ -393,6 +471,7 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
         db.add(pe)
         db.add(job)
         reconciled_count += 1
+        log_execution_stage(db, job.id, "COMPLETED", "SUCCESS", f"Reconciled with matched company: {company.name} (Role: {company.role})")
         logger.info(f"Successfully reconciled pending event {pe.id} to company {company.name}.")
         
     if reconciled_count > 0:
@@ -467,6 +546,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
     db.commit()
     
     logger.info(f"Locked job {job.id} for processing.")
+    log_execution_stage(db, job.id, "INGESTED", "SUCCESS")
     
     try:
         payload = job.payload
@@ -547,6 +627,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         # Save raw parsed response into DB
         job.parsed_output = raw_parsed_info
         db.commit()
+        log_execution_stage(db, job.id, "PARSED", "SUCCESS")
         
         # 5. Run Validation & Normalization
         validated_info = validate_and_normalize_parsed_data(raw_parsed_info, db)
@@ -554,6 +635,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         # Save validated response into DB
         job.validated_output = validated_info
         db.commit()
+        log_execution_stage(db, job.id, "VALIDATED", "SUCCESS")
         
         # Extract fields from validated output
         ext_data = validated_info.get("extracted_data", {})
@@ -561,6 +643,8 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         
         if email_category == "GENERAL_ANNOUNCEMENT":
             import uuid
+            job.final_classification = "GENERAL_ANNOUNCEMENT"
+            
             ann_data = ext_data.get("announcement", {})
             title = ann_data.get("title", {}).get("value") or subject or "General Announcement"
             ann_type = ann_data.get("announcement_type", {}).get("value") or "GENERAL"
@@ -584,8 +668,10 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 db.add(announcement)
                 db.flush()
                 logger.info(f"Created new announcement: {title}")
+                log_execution_stage(db, job.id, "EVENT_CREATED", "SUCCESS", f"Created general announcement: {title}")
                 
             # Process and store attachments for the announcement
+            has_attachments = False
             for att in attachments:
                 filename = att.get("filename", "")
                 base64_data = att.get("base64_data", "")
@@ -618,12 +704,17 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 with open(full_path, "wb") as f:
                     f.write(file_bytes)
                 logger.info(f"Wrote announcement attachment file to disk: {full_path}")
+                has_attachments = True
+            
+            if has_attachments:
+                log_execution_stage(db, job.id, "ATTACHMENTS_PROCESSED", "SUCCESS")
             
             # Complete job successfully
             job.status = 'completed'
             job.processed_at = datetime.utcnow()
             db.commit()
             logger.info(f"Job {job.id} processed as GENERAL_ANNOUNCEMENT successfully.")
+            log_execution_stage(db, job.id, "COMPLETED", "SUCCESS", "Processed as general cdc announcement.")
             return True
 
         company_name = ext_data.get("company", {}).get("value", "Unknown Company").strip()
@@ -635,12 +726,14 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         requires_review = validated_info.get("parser_metadata", {}).get("requires_review", False)
         
         # Determine whether this is an announcement email (can create/update company metadata)
-        # Only REGISTRATION and NEW_DRIVE event types should modify CTC, Eligibility, Branches, etc.
-        ANNOUNCEMENT_EVENT_TYPES = {"REGISTRATION", "NEW_DRIVE", "DEADLINE_EXTENSION"}
+        ANNOUNCEMENT_EVENT_TYPES = {"REGISTRATION", "NEW_DRIVE"}
         is_announcement = (
             email_category == "NEW_DRIVE"
             or event_type in ANNOUNCEMENT_EVENT_TYPES
         )
+        
+        # Set final classification on the raw ingestion job
+        job.final_classification = "NEW_DRIVE" if is_announcement else event_type
         
         # Determine Batch Year from email subject or body, default to current/next year
         batch_year = datetime.utcnow().year
@@ -685,7 +778,10 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 else:
                     category = "Regular"
                     
-            fingerprint_input = f"{company_name.upper()}|{role.upper()}|{category.upper()}|{batch_year}|{recruitment_cycle.upper()}"
+            norm_company_name = clean_company_name_key(company_name).upper()
+            norm_role_name = normalize_role_name(role).upper()
+            norm_recruitment_cycle = recruitment_cycle.upper()
+            fingerprint_input = f"{norm_company_name}|{norm_role_name}|{norm_recruitment_cycle}"
             fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
             
             # Check if company exists
@@ -705,12 +801,8 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     else:
                         continue
                         
-                        
-                    db_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', c.name, flags=re.I).strip().lower()
-                    ext_name_clean = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', company_name, flags=re.I).strip().lower()
-                    
-                    db_name_clean = re.sub(r'\s+', ' ', db_name_clean)
-                    ext_name_clean = re.sub(r'\s+', ' ', ext_name_clean)
+                    db_name_clean = clean_company_name_key(c.name).lower()
+                    ext_name_clean = clean_company_name_key(company_name).lower()
                     
                     score = role_score
                     name_matched = False
@@ -769,6 +861,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     f"Job {job.id} is a non-announcement email ({event_type}) with no matching company. "
                     f"Stored as PendingCompanyEvent {pe.id} for '{company_name}' / '{role}'."
                 )
+                log_execution_stage(db, job.id, "COMPANY_MATCHED", "PENDING", f"No matching company workspace found. Parked in pending_company_events.")
                 # Skip the rest of the role loop for this role
                 continue
 
@@ -816,9 +909,11 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 db.add(company)
                 db.flush()
                 logger.info(f"Created new company registry: {company_name} - {role}")
+                log_execution_stage(db, job.id, "COMPANY_CREATED", "SUCCESS", f"Created new company workspace: {company_name} (Role: {role})")
                 # Immediately reconcile any pending update mails that arrived before this announcement
                 reconcile_pending_events_for_company(db, company)
             else:
+                log_execution_stage(db, job.id, "COMPANY_MATCHED", "SUCCESS", f"Matched company ID: {company.id}")
                 if is_announcement:
                     # Announcement mail updating an existing company workspace:
                     # allow CTC, eligibility, branches, deadline, link to be refreshed.
@@ -868,15 +963,15 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                             ))
                             setattr(company, key, val)
                     logger.info(f"Updated existing company registry (announcement): {company_name} - {role}")
+                    log_execution_stage(db, job.id, "COMPANY_CREATED", "SUCCESS", f"Updated company workspace metadata: {company.name}")
                 else:
                     # Non-announcement mail (SHORTLIST, OA, INTERVIEW, RESULT) on an existing company:
-                    # Only update requires_review flag, never overwrite CTC, eligibility, branches,
-                    # registration deadline or link.
+                    # Under strict separation design, do NOT overwrite/modify any company metadata!
                     if requires_review and not company.requires_review:
                         company.requires_review = True
                     logger.info(
                         f"Non-announcement email ({event_type}) matched to existing company: "
-                        f"{company_name} - {role}. Skipping metadata updates (CTC/Eligibility/Branches protected)."
+                        f"{company_name} - {role}. Metadata protected (no updates)."
                     )
 
             # Create Company Event for this role/workspace
@@ -888,13 +983,16 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             ).first()
 
             if not event:
+                parsed_meta = extract_event_metadata(body, subject, event_type, ext_data)
+                
                 event = CompanyEvent(
                     company_id=company.id,
                     event_type=event_type,
                     subject=subject,
                     sender=sender,
                     body=body,
-                    timestamp=email_timestamp
+                    timestamp=email_timestamp,
+                    parsed_metadata=parsed_meta
                 )
                 db.add(event)
                 db.flush()
@@ -904,11 +1002,15 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     status='pending'
                 )
                 db.add(notification_job)
+                log_execution_stage(db, job.id, "EVENT_CREATED", "SUCCESS", f"Created event of type: {event_type}")
+                log_execution_stage(db, job.id, "NOTIFICATION_CREATED", "SUCCESS")
             else:
                 logger.info(f"Re-using existing company event {event.id} ingested by Edge Function.")
                 
             processed_events.append(event)
             update_recruitment_states(db, company, event_type, email_timestamp, body)
+            log_execution_stage(db, job.id, "APPLICATIONS_UPDATED", "SUCCESS")
+            log_execution_stage(db, job.id, "CALENDAR_CREATED", "SUCCESS")
 
             # Log audit items in ingestion_audit_logs for low-confidence fields
             if requires_review:
@@ -936,6 +1038,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         # 6. Parse and store attachments for each processed event
         for event in processed_events:
             company = event.company
+            has_attachments = False
             
             for att in attachments:
                 filename = att.get("filename", "")
@@ -970,6 +1073,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 with open(full_path, "wb") as f:
                     f.write(file_bytes)
                 logger.info(f"Wrote attachment file to disk: {full_path}")
+                has_attachments = True
                 
                 # Process JD PDF
                 if filename.lower().endswith(".pdf"):
@@ -979,12 +1083,21 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                         required_skills = jd_info.get("skills", [])
                         
                         company.jd_text = jd_text
-                        company.jd_required_skills = required_skills
-                        company.jd_ats_keywords = jd_info.get("ats_keywords", [])
+                        
+                        # Store in jd_analysis JSON column
+                        company.jd_analysis = {
+                            "required_skills": required_skills,
+                            "ats_keywords": jd_info.get("ats_keywords", []),
+                            "preferred_skills": [],
+                            "interview_topics": []
+                        }
                         
                         jd_intel = precompute_jd_intelligence_deterministic(jd_text, required_skills)
-                        company.jd_preferred_skills = jd_intel.get("preferred_skills", [])
-                        company.interview_topics = jd_intel.get("interview_topics", [])
+                        company.jd_analysis["preferred_skills"] = jd_intel.get("preferred_skills", [])
+                        company.jd_analysis["interview_topics"] = jd_intel.get("interview_topics", [])
+                        
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(company, "jd_analysis")
                         
                         att_meta.parsed_meta = {
                             "skills": required_skills,
@@ -1039,6 +1152,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                                 opp_state = db.query(OpportunityState).filter(
                                     OpportunityState.user_id == profile.user_id,
                                     OpportunityState.company_id == company.id,
+                                    
                                 ).first()
                                 if not opp_state:
                                     opp_state = OpportunityState(
@@ -1084,6 +1198,9 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                         logger.info(f"Processed Shortlist Excel attachment: {filename}. Matched {matched_count} system students.")
                     except Exception as e:
                         logger.error(f"Failed to process Shortlist Excel {filename}: {str(e)}")
+            
+            if has_attachments:
+                log_execution_stage(db, job.id, "ATTACHMENTS_PROCESSED", "SUCCESS")
                 
         # 7. Complete job successfully
         job.status = 'completed'
@@ -1092,6 +1209,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         if not processed_events:
             job.error_message = f"Suspended: non-announcement email ({event_type}) — stored as PendingCompanyEvent, awaiting parent announcement for '{company_name}'."
         db.commit()
+        log_execution_stage(db, job.id, "COMPLETED", "SUCCESS", "Processed placement ingestion job successfully.")
         logger.info(f"Job {job.id} processed successfully.")
 
         # 8a. Bump Redis cache versions so next page load reflects new data.
@@ -1122,6 +1240,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
     except Exception as e:
         db.rollback()
         logger.error(f"Error processing job {job.id}: {str(e)}", exc_info=True)
+        log_execution_stage(db, job.id, "FAILED", "FAILED", str(e))
         
         # Re-fetch job in a clean transaction to update retry / failed state
         try:

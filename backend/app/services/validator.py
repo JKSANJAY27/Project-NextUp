@@ -197,7 +197,7 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session)
         deadline_conf = deadline_obj.get("confidence", 0.50)
         formatted_deadline = None
         if deadline_val:
-            parsed_date = dateparser.parse(deadline_val)
+            parsed_date = dateparser.parse(deadline_val, settings={'TIMEZONE': 'Asia/Kolkata', 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
             if parsed_date:
                 formatted_deadline = parsed_date.isoformat()
             else:
@@ -253,7 +253,7 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session)
     
     formatted_deadline = None
     if deadline_val:
-        parsed_date = dateparser.parse(deadline_val)
+        parsed_date = dateparser.parse(deadline_val, settings={'TIMEZONE': 'Asia/Kolkata', 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
         if parsed_date:
             formatted_deadline = parsed_date.isoformat()
         else:

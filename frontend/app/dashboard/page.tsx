@@ -81,6 +81,12 @@ interface Company {
   source_email_body: string | null;
   additional_info: AdditionalInfo | null;
   requires_review?: boolean;
+  latest_event?: {
+    id: string;
+    event_type: string;
+    subject: string;
+    timestamp: string | null;
+  } | null;
 }
 
 interface EligibilityExplanation {
@@ -2318,8 +2324,13 @@ function DashboardPageContent() {
                               className="py-5 px-6 cursor-pointer group"
                               onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}
                             >
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <p className="font-bold text-base uppercase tracking-tighter text-foreground group-hover:text-accent transition-colors">{c.name}</p>
+                                {c.latest_event && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-black bg-amber-500/20 text-amber-500 border border-amber-500/30 animate-pulse tracking-wider">
+                                    ⚡ UPDATE: {c.latest_event.event_type.replace(/_/g, ' ')}
+                                  </span>
+                                )}
                                 {c.jd_required_skills && c.jd_required_skills.length > 0 && (
                                   <div className="relative group/tooltip inline-block">
                                     <span className="text-[10px] text-accent cursor-help">💡</span>

@@ -61,8 +61,13 @@ export default function TrackingCard({
 
       {/* Main Info */}
       <div>
-        <h3 className="font-black text-base uppercase tracking-tighter truncate group-hover:text-accent transition-colors">
-          {company.name}
+        <h3 className="font-black text-base uppercase tracking-tighter truncate group-hover:text-accent transition-colors flex items-center gap-2 flex-wrap">
+          <span>{company.name}</span>
+          {company.latest_event && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[7px] font-black bg-amber-500/20 text-amber-500 border border-amber-500/30 animate-pulse tracking-wider normal-case">
+              ⚡ {company.latest_event.event_type.replace(/_/g, ' ')}
+            </span>
+          )}
         </h3>
         <p className="text-xs text-muted-foreground uppercase truncate font-bold">
           {company.role}

@@ -784,7 +784,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     )
     if deadline_match:
         raw_date = clean_val(deadline_match.group(1))
-        parsed_date = dateparser.parse(raw_date)
+        parsed_date = dateparser.parse(raw_date, settings={'TIMEZONE': 'Asia/Kolkata', 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
         if parsed_date:
             data["deadline_iso"] = parsed_date.isoformat()
     else:
@@ -796,7 +796,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
         )
         if on_or_before:
             raw_date = clean_val(on_or_before.group(1))
-            parsed_date = dateparser.parse(raw_date)
+            parsed_date = dateparser.parse(raw_date, settings={'TIMEZONE': 'Asia/Kolkata', 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
             if parsed_date:
                 data["deadline_iso"] = parsed_date.isoformat()
 
@@ -1018,7 +1018,7 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
 
         if "deadline_iso" not in parsed and dates:
             for d in dates:
-                p_date = dateparser.parse(d)
+                p_date = dateparser.parse(d, settings={'TIMEZONE': 'Asia/Kolkata', 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
                 if p_date:
                     parsed["deadline_iso"] = p_date.isoformat()
                     break
