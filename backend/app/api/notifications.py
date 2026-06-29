@@ -16,6 +16,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 def get_notifications(
     cursor: Optional[datetime] = None,
     limit: int = 100,
+    scope: str = "all_active",
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -28,6 +29,11 @@ def get_notifications(
         .filter(Notification.user_id == current_user.id)
     )
     
+    if scope == "all_active":
+        query = query.filter(Notification.notification_scope == "ACTIVE")
+    elif scope == "archived":
+        query = query.filter(Notification.notification_scope == "ARCHIVED")
+        
     if cursor:
         query = query.filter(Notification.created_at < cursor)
         
@@ -75,6 +81,9 @@ def get_notifications(
             notification_type=n.notification_type,
             created_at=n.created_at,
             company_event_id=n.company_event_id,
+            notification_scope=n.notification_scope,
+            expires_at=n.expires_at,
+            company_id=company_id,
             subject=event.subject,
             sender=event.sender,
             body=event.body,
