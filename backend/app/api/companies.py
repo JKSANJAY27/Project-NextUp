@@ -200,6 +200,12 @@ def list_companies(
     
     if cached_list is None:
         companies = db.query(Company).all()
+        # Sort by latest event timestamp or created_at (descending)
+        companies = sorted(
+            companies,
+            key=lambda c: c.latest_event.timestamp if c.latest_event and c.latest_event.timestamp else c.created_at,
+            reverse=True
+        )
         # Cache raw company data without eligibility check
         cached_list = [CompanyOut.from_orm(company).dict() for company in companies]
         set_cache(cache_key, cached_list, expire_seconds=600) # 10 min TTL

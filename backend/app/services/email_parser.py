@@ -681,7 +681,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 
     # 1. Company Name
     comp_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Name of the Company|Company Name|Company|Name of the Organisation|Organisation)\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Name of the Company|Company Name|Name of the Organisation|Organisation|\bCompany\b(?!\s*(?:website|profile|url|link|domain|page|site|info|description|overview|logo|details)))\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
         email_body,
         re.IGNORECASE
     )
