@@ -996,8 +996,8 @@ function DashboardPageContent() {
   const conversionRate = React.useMemo(() => totalAppsCount > 0 ? ((offersCount / totalAppsCount) * 100).toFixed(1) : "0.0", [totalAppsCount, offersCount]);
 
   // Timeline and Workspace Drawer computed states
-  const workspaceEvents = React.useMemo(() => getTimelineEvents(), [companyEvents, selectedApp, selectedCompany]);
   const selectedApp = React.useMemo(() => selectedCompany ? applications[selectedCompany.id] : undefined, [selectedCompany, applications]);
+  const workspaceEvents = React.useMemo(() => getTimelineEvents(), [companyEvents, selectedApp, selectedCompany]);
   const healthVal = React.useMemo(() => getHealthScore(selectedApp), [selectedApp]);
 
   return (
