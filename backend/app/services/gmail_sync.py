@@ -725,11 +725,18 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         registration_link = ext_data.get("registration_link", {}).get("value")
         requires_review = validated_info.get("parser_metadata", {}).get("requires_review", False)
         
-        # Determine whether this is an announcement email (can create/update company metadata)
-        ANNOUNCEMENT_EVENT_TYPES = {"REGISTRATION", "NEW_DRIVE"}
+        # Determine whether this is an announcement email (can create/update company metadata).
+        # IMPORTANT: Only treat as announcement if email_category is explicitly NEW_DRIVE.
+        # DO NOT rely on event_type == REGISTRATION here — the regex fallback returns REGISTRATION
+        # as a default for any unrecognized email, which would incorrectly create new company workspaces
+        # for OA/Shortlist/Interview emails that the parser failed to classify.
+        UPDATE_ONLY_EVENT_TYPES = {
+            "OA", "OA_RESULT", "SHORTLIST", "INTERVIEW", "INTERVIEW_RESULT",
+            "OFFER", "REJECTION", "DEADLINE_EXTENSION", "GENERAL_UPDATE"
+        }
         is_announcement = (
             email_category == "NEW_DRIVE"
-            or event_type in ANNOUNCEMENT_EVENT_TYPES
+            and event_type not in UPDATE_ONLY_EVENT_TYPES
         )
         
         # Set final classification on the raw ingestion job
@@ -792,6 +799,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 candidate_companies = db.query(Company).all()
                 best_match = None
                 best_score = -1
+                subject_clean = clean_company_name_key(subject).lower()
                 for c in candidate_companies:
                     role_score = 0
                     if normalize_role_name(c.role) == normalize_role_name(role):
@@ -806,16 +814,26 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     
                     score = role_score
                     name_matched = False
+
+                    # 1. Exact name match
                     if db_name_clean == ext_name_clean:
                         score += 60
                         name_matched = True
+                    # 2. Substring name match (parsed company name contains/is-contained-by DB name)
                     elif (len(db_name_clean) >= 3 and db_name_clean in ext_name_clean) or (len(ext_name_clean) >= 3 and ext_name_clean in db_name_clean):
                         overlap_ratio = len(db_name_clean) / len(ext_name_clean) if len(ext_name_clean) > 0 else 0
                         if overlap_ratio > 1:
                             overlap_ratio = 1 / overlap_ratio
                         score += int(30 * overlap_ratio) + 20
                         name_matched = True
-                    elif len(db_name_clean) >= 3 and db_name_clean in subject.lower():
+                    # 3. DB company name appears in the email subject (catches cases where the parser
+                    #    returned the subject line as the company name, e.g., regex fallback failures)
+                    elif len(db_name_clean) >= 3 and db_name_clean in subject_clean:
+                        score += 45
+                        name_matched = True
+                    # 4. Parsed company name appears in the DB company name (handles partial matches
+                    #    like 'Resmed Technology' matching 'ResMed Technology Pvt Ltd')
+                    elif len(ext_name_clean) >= 3 and ext_name_clean in db_name_clean:
                         score += 40
                         name_matched = True
                         
@@ -834,8 +852,12 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     if score > best_score:
                         best_score = score
                         best_match = c
-                        
-                if best_score >= 50:
+
+                # For update-type emails (non-announcement), use a lower threshold (40) so
+                # we prefer attaching to an existing company over creating a new one.
+                # For announcements, keep the higher threshold (50) to avoid merging distinct drives.
+                fuzzy_threshold = 40 if not is_announcement else 50
+                if best_score >= fuzzy_threshold:
                     company = best_match
                     logger.info(f"Fuzzy matched incoming email to existing company: {company.name} (ID: {company.id}, Match Score: {best_score})")
 
