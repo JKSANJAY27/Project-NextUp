@@ -14,19 +14,25 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 @router.get("", response_model=List[NotificationBundle])
 def get_notifications(
+    scope: str = "all_active",
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Fetch all notifications for the authenticated user, bundled by company/workspace."""
-    notifications = (
+    query = (
         db.query(Notification)
         .options(
             joinedload(Notification.company_event).joinedload(CompanyEvent.company)
         )
         .filter(Notification.user_id == current_user.id)
-        .order_by(Notification.created_at.desc())
-        .all()
     )
+    
+    if scope == "all_active":
+        query = query.filter(Notification.notification_scope == "ACTIVE")
+    elif scope == "archived":
+        query = query.filter(Notification.notification_scope == "ARCHIVED")
+        
+    notifications = query.order_by(Notification.created_at.desc()).all()
     
     bundles = {}
     
@@ -70,6 +76,9 @@ def get_notifications(
             notification_type=n.notification_type,
             created_at=n.created_at,
             company_event_id=n.company_event_id,
+            notification_scope=n.notification_scope,
+            expires_at=n.expires_at,
+            company_id=company_id,
             subject=event.subject,
             sender=event.sender,
             body=event.body,

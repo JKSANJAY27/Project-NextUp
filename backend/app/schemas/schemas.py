@@ -150,6 +150,8 @@ class NotificationOut(BaseModel):
     is_read: bool
     notification_type: str
     severity: int = 1  # 1=low, 3=medium, 4=high, 5=critical
+    notification_scope: str = "ACTIVE"
+    expires_at: Optional[datetime] = None
     created_at: datetime
 
     class Config:
@@ -163,6 +165,9 @@ class NotificationDetail(BaseModel):
     severity: int = 1
     created_at: datetime
     company_event_id: Optional[UUID] = None
+    notification_scope: str = "ACTIVE"
+    expires_at: Optional[datetime] = None
+    company_id: Optional[UUID] = None
     
     # Source Event Fields
     subject: Optional[str] = None
