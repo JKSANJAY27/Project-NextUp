@@ -1,9 +1,10 @@
 import logging
-from fastapi import APIRouter, Depends, Header, HTTPException, status, File, UploadFile, Form
+from fastapi import APIRouter, Depends, Header, HTTPException, status, File, UploadFile, Form, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
 import io
+from datetime import datetime
 
 from app.core.database import get_db
 from app.api.auth import get_current_user
@@ -42,6 +43,7 @@ async def import_placement_file(
     import_type: str = Form(...), # 'email', 'jd', 'shortlist'
     company_id: Optional[UUID] = Form(None),
     file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None,
     x_client_key: Optional[str] = Header(None, alias="X-Client-Key"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -85,12 +87,13 @@ async def import_placement_file(
         bump_companies_list_version()
         return {"message": "Email imported successfully", "company": new_company}
 
-    elif import_type == "jd":
-        if not company_id:
-            raise HTTPException(status_code=400, detail="company_id is required for JD imports.")
+def process_jd_background(company_id: UUID, file_bytes: bytes):
+    from app.core.database import SessionLocal
+    db = SessionLocal()
+    try:
         company = db.query(Company).filter(Company.id == company_id).first()
         if not company:
-            raise HTTPException(status_code=404, detail="Company not found.")
+            return
             
         parsed = parse_job_description(file_bytes)
         company.jd_text = parsed["jd_text"]
@@ -122,39 +125,47 @@ async def import_placement_file(
         bump_company_version(company_id)
         for app in applications:
             bump_user_version(app.user_id)
-        return {"message": "Job description parsed and matched successfully", "skills_extracted": company.jd_required_skills}
+    except Exception as e:
+        logger.error(f"Background JD parsing failed: {str(e)}")
+    finally:
+        db.close()
 
-    elif import_type == "shortlist":
+    elif import_type == "jd":
         if not company_id:
-            raise HTTPException(status_code=400, detail="company_id is required for shortlist imports.")
-        company = db.query(Company).filter(Company.id == company_id).first()
-        if not company:
-            raise HTTPException(status_code=404, detail="Company not found.")
-            
+            raise HTTPException(status_code=400, detail="company_id is required for JD imports.")
+        
+        background_tasks.add_task(process_jd_background, company_id, file_bytes)
+        return {"message": "Job description parsing started in background"}
+
+def process_shortlist_background(company_id: UUID, file_bytes: bytes, current_user_id: UUID, x_client_key: Optional[str]):
+    from app.core.database import SessionLocal
+    db = SessionLocal()
+    try:
         extracted_ids = extract_neo_ids_from_excel(file_bytes)
         
-        # Check if current user is in the shortlist
-        is_shortlisted = False
-        profile = current_user.profile
-        if x_client_key and profile and profile.neo_id_enc:
+        # For background job, we can check for all users if we had access to their keys, 
+        # but realistically this endpoint only checks the current_user because of client-side encryption.
+        user = db.query(User).filter(User.id == current_user_id).first()
+        if not user or not user.profile:
+            return
+            
+        profile = user.profile
+        if x_client_key and profile.neo_id_enc:
             try:
                 decrypted_neo = decrypt_field(profile.neo_id_enc, x_client_key).upper().strip()
                 app = db.query(Application).filter(
-                    Application.user_id == current_user.id,
+                    Application.user_id == current_user_id,
                     Application.company_id == company_id
                 ).first()
                 
                 if decrypted_neo in extracted_ids:
-                    is_shortlisted = True
-                    
-                    # Update application tracker status
                     if app:
                         app.status = "Shortlisted"
                         app.recruitment_state = "Shortlisted"
                         app.current_round = "Shortlisted"
                     else:
                         app = Application(
-                            user_id=current_user.id,
+                            user_id=current_user_id,
                             company_id=company_id,
                             status="Shortlisted",
                             recruitment_state="Shortlisted",
@@ -163,22 +174,28 @@ async def import_placement_file(
                         )
                     db.add(app)
                     db.commit()
-                    bump_user_version(current_user.id)
+                    bump_user_version(current_user_id)
                 else:
-                    # User not in shortlist, set status to Likely Rejected if they were previously active
                     if app and app.status in ('Applied', 'Shortlisted', 'OA', 'Interview'):
                         app.status = "Likely Rejected"
                         db.add(app)
                         db.commit()
-                        bump_user_version(current_user.id)
+                        bump_user_version(current_user_id)
             except Exception as e:
                 logger.error(f"Failed to decrypt user neo_id or shortlist check: {str(e)}")
-                
+    except Exception as e:
+        logger.error(f"Background Shortlist parsing failed: {str(e)}")
+    finally:
+        db.close()
+
+    elif import_type == "shortlist":
+        if not company_id:
+            raise HTTPException(status_code=400, detail="company_id is required for shortlist imports.")
+            
+        background_tasks.add_task(process_shortlist_background, company_id, file_bytes, current_user.id, x_client_key)
+        
         return {
-            "message": "Shortlist parsed successfully",
-            "is_shortlisted": is_shortlisted,
-            "total_shortlisted_students": len(extracted_ids),
-            "shortlisted_ids": extracted_ids[:10] # return top 10 for preview
+            "message": "Shortlist parsing started in background"
         }
 
     else:
@@ -190,12 +207,14 @@ class CachedCompanyMock:
 
 @router.get("", response_model=List[CompanyWithEligibilityOut])
 def list_companies(
+    skip: int = 0,
+    limit: int = 100,
     x_client_key: Optional[str] = Header(None, alias="X-Client-Key"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     list_version = get_companies_list_version()
-    cache_key = f"nextup:cache:companies:list:v{list_version}"
+    cache_key = f"nextup:cache:companies:list:v{list_version}:s{skip}:l{limit}"
     cached_list = get_cache(cache_key)
     
     if cached_list is None:
@@ -206,8 +225,12 @@ def list_companies(
             key=lambda c: c.latest_event.timestamp if c.latest_event and c.latest_event.timestamp else c.created_at,
             reverse=True
         )
+        
+        # Apply pagination after sorting
+        paginated_companies = companies[skip : skip + limit]
+        
         # Cache raw company data without eligibility check
-        cached_list = [CompanyOut.from_orm(company).dict() for company in companies]
+        cached_list = [CompanyOut.from_orm(company).dict() for company in paginated_companies]
         set_cache(cache_key, cached_list, expire_seconds=600) # 10 min TTL
 
     results = []
@@ -277,22 +300,26 @@ def get_company(
 @router.get("/{id}/events")
 def get_company_events(
     id: UUID,
+    cursor: Optional[datetime] = None,
+    limit: int = 100,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     comp_version = get_company_version(id)
     user_version = get_user_version(current_user.id)
-    cache_key = f"nextup:cache:user:{current_user.id}:company:{id}:events:cv{comp_version}:uv{user_version}"
+    cache_key = f"nextup:cache:user:{current_user.id}:company:{id}:events:cv{comp_version}:uv{user_version}:c{cursor}:l{limit}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
 
-    events = (
+    query = (
         db.query(CompanyEvent)
         .filter(CompanyEvent.company_id == id)
-        .order_by(CompanyEvent.timestamp.desc())
-        .all()
     )
+    if cursor:
+        query = query.filter(CompanyEvent.timestamp < cursor)
+        
+    events = query.order_by(CompanyEvent.timestamp.desc()).limit(limit).all()
     
     event_ids = [e.id for e in events]
     audit_map = defaultdict(dict)

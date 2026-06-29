@@ -1,8 +1,9 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.api import auth, users, companies, applications, gmail, notifications, resumes, ai, calendar, announcements
+from app.api import auth, users, companies, applications, gmail, notifications, resumes, ai, calendar, announcements, dashboard
 from app.services.gmail_sync import start_scheduler, shutdown_scheduler
 
 # Auto-create tables (for SQLite local dev convenience, production uses migrations)
@@ -22,6 +23,9 @@ async def log_requests(request: Request, call_next):
     response = await call_next(request)
     logging.warning(f"DEBUG: Response status: {response.status_code}")
     return response
+
+# Add GZip Middleware for compression
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Set CORS origins
 app.add_middleware(
@@ -48,6 +52,7 @@ app.include_router(resumes.router, prefix=settings.API_V1_STR)
 app.include_router(ai.router, prefix=settings.API_V1_STR)
 app.include_router(calendar.router, prefix=settings.API_V1_STR)
 app.include_router(announcements.router, prefix=settings.API_V1_STR)
+app.include_router(dashboard.router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")
 def on_startup():

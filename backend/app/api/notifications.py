@@ -14,19 +14,24 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 @router.get("", response_model=List[NotificationBundle])
 def get_notifications(
+    cursor: Optional[datetime] = None,
+    limit: int = 100,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Fetch all notifications for the authenticated user, bundled by company/workspace."""
-    notifications = (
+    query = (
         db.query(Notification)
         .options(
             joinedload(Notification.company_event).joinedload(CompanyEvent.company)
         )
         .filter(Notification.user_id == current_user.id)
-        .order_by(Notification.created_at.desc())
-        .all()
     )
+    
+    if cursor:
+        query = query.filter(Notification.created_at < cursor)
+        
+    notifications = query.order_by(Notification.created_at.desc()).limit(limit).all()
     
     bundles = {}
     

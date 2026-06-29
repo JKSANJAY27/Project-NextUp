@@ -89,6 +89,8 @@ def create_application(
 
 @router.get("", response_model=List[Any])
 def list_applications(
+    skip: int = 0,
+    limit: int = 100,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -100,7 +102,7 @@ def list_applications(
     Lifecycle jobs (expiry detection, auto-archive) run in the background scheduler, NOT here.
     """
     version = get_user_version(current_user.id)
-    cache_key = f"nextup:cache:user:{current_user.id}:applications:v{version}"
+    cache_key = f"nextup:cache:user:{current_user.id}:applications:v{version}:s{skip}:l{limit}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
@@ -156,8 +158,9 @@ def list_applications(
             "company": company_out,
         })
 
-    set_cache(cache_key, result, expire_seconds=30)
-    return result
+    paginated_result = result[skip : skip + limit]
+    set_cache(cache_key, paginated_result, expire_seconds=30)
+    return paginated_result
 
 
 @router.patch("/{id}", response_model=Any)

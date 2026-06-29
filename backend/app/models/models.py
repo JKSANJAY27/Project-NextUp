@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, ForeignKey, JSON, UniqueConstraint
+from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, ForeignKey, JSON, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from app.core.database import Base
@@ -67,7 +67,7 @@ class Company(Base):
     job_location = Column(String)
     eligible_branches = Column(ARRAY(String), default=list)
     eligibility_rules = Column(JSON, default=dict)
-    registration_deadline_db = Column("registration_deadline", DateTime)
+    registration_deadline_db = Column("registration_deadline", DateTime, index=True)
     registration_link = Column(String)
     website = Column(String)
     jd_text = Column(String)
@@ -178,12 +178,12 @@ class CompanyEvent(Base):
     __tablename__ = "company_events"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
-    event_type = Column(String, nullable=False)  # 'REGISTRATION', 'SHORTLIST', 'OA', 'INTERVIEW', 'OFFER'
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type = Column(String, nullable=False, index=True)  # 'REGISTRATION', 'SHORTLIST', 'OA', 'INTERVIEW', 'OFFER'
     subject = Column(String)
     sender = Column(String)
     body = Column(String)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     parsed_metadata = Column(JSON, default=dict)
 
     company = relationship("Company", back_populates="events")
@@ -196,10 +196,10 @@ class PendingCompanyEvent(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     raw_ingestion_job_id = Column(UUID(as_uuid=True), ForeignKey("raw_ingestion_jobs.id", ondelete="CASCADE"), nullable=False)
-    company_name = Column(String, nullable=False)
+    company_name = Column(String, nullable=False, index=True)
     role_name = Column(String, nullable=True)
     event_type = Column(String, nullable=False)
-    status = Column(String, default="PENDING_PARENT") # PENDING_PARENT, RECONCILED, FAILED
+    status = Column(String, default="PENDING_PARENT", index=True) # PENDING_PARENT, RECONCILED, FAILED
     parsed_payload = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     matched_company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True)
@@ -211,16 +211,16 @@ class Application(Base):
     __table_args__ = (UniqueConstraint('user_id', 'company_id', name='uq_application_user_company'),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
-    status = Column(String, default="Applied")
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String, default="Applied", index=True)
     current_round = Column(String, default="Applied")
     notes_enc = Column(String)
     tailored_resume_enc = Column(String, nullable=True)  # Encrypted client-side tailored resume JSON
     match_score = Column(Integer, default=0)
     applied_at = Column(DateTime, default=datetime.utcnow)
     user_decision = Column(String, default="unseen")
-    recruitment_state = Column(String, default="Registration")
+    recruitment_state = Column(String, default="Registration", index=True)
     last_user_activity_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     workspace_priority_override = Column(String, default=None, nullable=True)
     snoozed_until = Column(DateTime, default=None, nullable=True)
@@ -233,10 +233,10 @@ class OpportunityState(Base):
     __table_args__ = (UniqueConstraint('user_id', 'company_id', name='uq_opportunity_state_user_company'),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
     # States: unseen, tracking, decision_pending, archived, auto_archived
-    state = Column(String, default="unseen")
+    state = Column(String, default="unseen", index=True)
     # Archive metadata
     archive_reason = Column(String, default=None, nullable=True)  # MANUAL, DEADLINE_EXPIRED, AUTO_ARCHIVED, NOT_ELIGIBLE
     archived_at = Column(DateTime, default=None, nullable=True)
@@ -295,7 +295,7 @@ class NotificationJob(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     company_event_id = Column(UUID(as_uuid=True), ForeignKey("company_events.id", ondelete="CASCADE"), nullable=False)
-    status = Column(String, default="pending")
+    status = Column(String, default="pending", index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime)
 
@@ -303,18 +303,23 @@ class NotificationJob(Base):
 
 class Notification(Base):
     __tablename__ = "notifications"
-    __table_args__ = (UniqueConstraint('user_id', 'company_event_id', name='uq_notification_user_event'),)
+    __table_args__ = (
+        UniqueConstraint('user_id', 'company_event_id', name='uq_notification_user_event'),
+        Index('idx_notification_user_is_read', 'user_id', 'is_read'),
+        Index('idx_notification_user_scope', 'user_id', 'notification_scope'),
+        Index('idx_notification_user_created', 'user_id', 'created_at', postgresql_using='btree'),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     company_event_id = Column(UUID(as_uuid=True), ForeignKey("company_events.id", ondelete="CASCADE"), nullable=False)
     message = Column(String, nullable=False)
-    is_read = Column(Boolean, default=False)
+    is_read = Column(Boolean, default=False, index=True)
     notification_type = Column(String, default="company_update")
     severity = Column(Integer, default=1)  # 1=low, 3=medium, 4=high, 5=critical
-    notification_scope = Column(String, default="ACTIVE")
+    notification_scope = Column(String, default="ACTIVE", index=True)
     expires_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     user = relationship("User", back_populates="notifications")
     company_event = relationship("CompanyEvent", back_populates="notifications")
@@ -324,13 +329,13 @@ class RawIngestionJob(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     source_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_sources.id", ondelete="SET NULL"))
-    status = Column(String, default="pending")
+    status = Column(String, default="pending", index=True)
     payload = Column(JSON, nullable=False)
     retry_count = Column(Integer, default=0)
     locked_at = Column(DateTime)
     locked_by = Column(String)
     error_message = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     processed_at = Column(DateTime)
     parsed_output = Column(JSON, default=None)
     validated_output = Column(JSON, default=None)
@@ -384,14 +389,14 @@ class CalendarEvent(Base):
     __tablename__ = "calendar_events"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=True, index=True)
     company_event_id = Column(UUID(as_uuid=True), ForeignKey("company_events.id", ondelete="CASCADE"), nullable=True)
     title = Column(String, nullable=False)
     company_name = Column(String, nullable=True)
     role = Column(String, nullable=True)
     event_type = Column(String, nullable=False)  # 'registration_deadline', 'online_assessment', 'interview', 'offer_result', 'manual'
-    date = Column(DateTime, nullable=False)
+    date = Column(DateTime, nullable=False, index=True)
     location_platform = Column(String, nullable=True)
     notes = Column(String, nullable=True)
     completed = Column(Boolean, default=False)

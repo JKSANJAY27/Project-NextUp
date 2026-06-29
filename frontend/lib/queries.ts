@@ -4,6 +4,7 @@ import api from "./api";
 // Cache Keys
 export const CACHE_KEYS = {
   userProfile: ["user-profile"],
+  dashboard: ["dashboard"],
   companies: ["companies"],
   companyDetail: (id: string) => ["company", id],
   companyEvents: (id: string) => ["company-events", id],
@@ -27,6 +28,18 @@ export function useUserProfile(enabled = true) {
   });
 }
 
+// 1.5 Unified Dashboard Hook (staleTime: 5 min)
+export function useDashboard(enabled = true) {
+  return useQuery({
+    queryKey: CACHE_KEYS.dashboard,
+    queryFn: async () => {
+      const res = await api.get("/dashboard");
+      return res.data;
+    },
+    staleTime: 5 * 60 * 1000,
+    enabled,
+  });
+}
 // 2. Companies List Hook (staleTime: 5 min)
 export function useCompanies(enabled = true) {
   return useQuery({

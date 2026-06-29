@@ -7,7 +7,7 @@ import { useAppStore } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
 import api from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCompanies, useApplications, useNotifications, useAnnouncements } from "@/lib/queries";
+import { useDashboard, CACHE_KEYS } from "@/lib/queries";
 import { 
   Plus, 
   Lock, 
@@ -259,15 +259,17 @@ function DashboardPageContent() {
   const queryClient = useQueryClient();
 
   // 1. TanStack Query hooks
-  const { data: companiesData, isLoading: companiesQueryLoading } = useCompanies(!!user);
-  const { data: applicationsData, isLoading: applicationsQueryLoading } = useApplications(!!user);
-  const { data: notificationsData, isLoading: notificationsQueryLoading } = useNotifications(!!user);
-  const { data: announcementsData, isLoading: announcementsQueryLoading } = useAnnouncements(!!user);
+  const { data: dashboardData, isLoading: dashboardLoading } = useDashboard(!!user);
+
+  const companiesData = dashboardData?.companies;
+  const applicationsData = dashboardData?.applications;
+  const notificationsData = dashboardData?.notifications;
+  const announcementsData = dashboardData?.announcements;
 
   // Sync loading state
   useEffect(() => {
-    setLoading(companiesQueryLoading || applicationsQueryLoading || notificationsQueryLoading || announcementsQueryLoading);
-  }, [companiesQueryLoading, applicationsQueryLoading, notificationsQueryLoading, announcementsQueryLoading]);
+    setLoading(dashboardLoading);
+  }, [dashboardLoading]);
 
   // Sync companies state
   useEffect(() => {
@@ -345,21 +347,21 @@ function DashboardPageContent() {
         "postgres_changes",
         { event: "*", schema: "public", table: "companies" },
         () => {
-          queryClient.invalidateQueries({ queryKey: ["companies"] });
+          queryClient.invalidateQueries({ queryKey: ["dashboard"] });
         }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "applications" },
         () => {
-          queryClient.invalidateQueries({ queryKey: ["applications"] });
+          queryClient.invalidateQueries({ queryKey: ["dashboard"] });
         }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "notifications" },
         () => {
-          queryClient.invalidateQueries({ queryKey: ["notifications"] });
+          queryClient.invalidateQueries({ queryKey: ["dashboard"] });
         }
       )
       .subscribe();
@@ -368,6 +370,17 @@ function DashboardPageContent() {
       supabase.removeChannel(companiesChannel);
     };
   }, [user, encryptionKey, queryClient]);
+
+  const prefetchCompanyDetails = (companyId: string) => {
+    queryClient.prefetchQuery({
+      queryKey: CACHE_KEYS.companyEvents(companyId),
+      queryFn: async () => {
+        const res = await api.get(`/companies/${companyId}/events`);
+        return res.data || [];
+      },
+      staleTime: 5 * 60 * 1000,
+    });
+  };
 
   // Auto-select announcement if id parameter is in URL
   useEffect(() => {
@@ -505,7 +518,6 @@ function DashboardPageContent() {
     }
   };
 
-  // Generic Create or Update Application (calls FastAPI backend endpoints)
   const handleUpdateApplication = async (companyId: string, updates: {
     status?: string;
     current_round?: string;
@@ -522,35 +534,70 @@ function DashboardPageContent() {
 
     try {
       const app = applications[companyId];
-
+      
+      // OPTIMISTIC UI UPDATE
+      const previousState = { ...applications };
       if (app) {
-        // Update existing application via FastAPI PATCH endpoint
-        const res = await api.patch(`/applications/${app.id}`, updates);
         setApplications(prev => ({
           ...prev,
-          [companyId]: res.data
+          [companyId]: { ...app, ...updates }
         }));
       } else {
-        // Create new application via FastAPI POST endpoint
-        const res = await api.post(`/applications`, {
-          company_id: companyId,
-          status: updates.status || "Applied",
-          current_round: updates.current_round || "Applied",
-          notes_enc: updates.notes_enc || null,
-          user_decision: updates.user_decision || "tracking",
-          recruitment_state: updates.recruitment_state || "Registration",
-          workspace_priority_override: updates.workspace_priority_override || null,
-          snoozed_until: updates.snoozed_until || null
-        });
         setApplications(prev => ({
           ...prev,
-          [companyId]: res.data
+          [companyId]: {
+            id: "temp-id",
+            record_type: "application",
+            company_id: companyId,
+            status: updates.status || "Applied",
+            current_round: updates.current_round || "Applied",
+            notes_enc: updates.notes_enc || null,
+            user_decision: updates.user_decision || "tracking",
+            recruitment_state: updates.recruitment_state || "Registration",
+            last_user_activity_at: new Date().toISOString(),
+            workspace_priority_override: updates.workspace_priority_override || null,
+            snoozed_until: updates.snoozed_until || null,
+            priority_score: 0,
+            is_stale: false,
+            match_score: 0
+          }
         }));
       }
-      fetchDashboardData();
+
+      try {
+        if (app) {
+          // Update existing application via FastAPI PATCH endpoint
+          const res = await api.patch(`/applications/${app.id}`, updates);
+          setApplications(prev => ({
+            ...prev,
+            [companyId]: res.data
+          }));
+        } else {
+          // Create new application via FastAPI POST endpoint
+          const res = await api.post(`/applications`, {
+            company_id: companyId,
+            status: updates.status || "Applied",
+            current_round: updates.current_round || "Applied",
+            notes_enc: updates.notes_enc || null,
+            user_decision: updates.user_decision || "tracking",
+            recruitment_state: updates.recruitment_state || "Registration",
+            workspace_priority_override: updates.workspace_priority_override || null,
+            snoozed_until: updates.snoozed_until || null
+          });
+          setApplications(prev => ({
+            ...prev,
+            [companyId]: res.data
+          }));
+        }
+        fetchDashboardData();
+      } catch (err) {
+        // Rollback on error
+        console.error("Failed to update application tracker, rolling back optimistic UI update:", err);
+        setApplications(previousState);
+        alert("FAILED TO UPDATE TRACKING STATUS.");
+      }
     } catch (err) {
-      console.error("Failed to update application tracker:", err);
-      alert("FAILED TO UPDATE TRACKING STATUS.");
+      console.error("Unknown error in tracking logic:", err);
     }
   };
 
@@ -867,7 +914,7 @@ function DashboardPageContent() {
 
 
   // Filter lists based on tab selection
-  const filteredCompanies = companies.filter((c) => {
+  const filteredCompanies = React.useMemo(() => companies.filter((c) => {
     const oppState = opportunityStates[c.id];
     const effectiveState = oppState?.state;
     const app = applications[c.id];
@@ -893,20 +940,20 @@ function DashboardPageContent() {
     if (filterEligibility !== "ALL" && c.eligibility_status !== filterEligibility) return false;
 
     return true;
-  });
+  }), [companies, opportunityStates, applications, activeTab, filterCategory, filterEligibility]);
 
   // Companies awaiting user decision (deadline expired, no app workspace yet)
-  const decisionPendingCompanies = companies.filter(c => {
+  const decisionPendingCompanies = React.useMemo(() => companies.filter(c => {
     const oppState = opportunityStates[c.id];
     return oppState?.state === "decision_pending";
-  });
+  }), [companies, opportunityStates]);
 
   // Active decision-pending (not snoozed) — shown in Action Center
-  const activeDecisionPendingCompanies = decisionPendingCompanies.filter(c => {
+  const activeDecisionPendingCompanies = React.useMemo(() => decisionPendingCompanies.filter(c => {
     const oppState = opportunityStates[c.id];
     if (!oppState?.snoozed_until) return true;
     return new Date(oppState.snoozed_until) <= new Date();
-  });
+  }), [decisionPendingCompanies, opportunityStates]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -934,24 +981,24 @@ function DashboardPageContent() {
   };
 
   // Pre-calculate variables for Action Center and My Applications
-  const todayEvents = getTodayEvents();
-  const untriagedBundles = notificationBundles.filter(b => b.unread_count > 0);
-  const trackedApps = Object.values(applications)
+  const todayEvents = React.useMemo(() => getTodayEvents(), [companies, notificationBundles]);
+  const untriagedBundles = React.useMemo(() => notificationBundles.filter(b => b.unread_count > 0), [notificationBundles]);
+  const trackedApps = React.useMemo(() => Object.values(applications)
     .filter(app => app.user_decision === 'tracking' && !isSnoozed(app))
-    .sort((a, b) => b.priority_score - a.priority_score);
+    .sort((a, b) => b.priority_score - a.priority_score), [applications]);
 
   // My Applications conversion stats
-  const historyApps = Object.values(applications);
+  const historyApps = React.useMemo(() => Object.values(applications), [applications]);
   const totalAppsCount = historyApps.length;
-  const oaReachedCount = historyApps.filter(app => ["OA", "Technical", "HR", "Offer"].includes(app.status) || app.recruitment_state.includes("OA") || app.recruitment_state.includes("Interview")).length;
-  const interviewReachedCount = historyApps.filter(app => ["Technical", "HR", "Offer"].includes(app.status) || app.recruitment_state.includes("Interview")).length;
-  const offersCount = historyApps.filter(app => app.status === "Offer" || app.recruitment_state === "Offer").length;
-  const conversionRate = totalAppsCount > 0 ? ((offersCount / totalAppsCount) * 100).toFixed(1) : "0.0";
+  const oaReachedCount = React.useMemo(() => historyApps.filter(app => ["OA", "Technical", "HR", "Offer"].includes(app.status) || app.recruitment_state.includes("OA") || app.recruitment_state.includes("Interview")).length, [historyApps]);
+  const interviewReachedCount = React.useMemo(() => historyApps.filter(app => ["Technical", "HR", "Offer"].includes(app.status) || app.recruitment_state.includes("Interview")).length, [historyApps]);
+  const offersCount = React.useMemo(() => historyApps.filter(app => app.status === "Offer" || app.recruitment_state === "Offer").length, [historyApps]);
+  const conversionRate = React.useMemo(() => totalAppsCount > 0 ? ((offersCount / totalAppsCount) * 100).toFixed(1) : "0.0", [totalAppsCount, offersCount]);
 
   // Timeline and Workspace Drawer computed states
-  const workspaceEvents = getTimelineEvents();
-  const selectedApp = selectedCompany ? applications[selectedCompany.id] : undefined;
-  const healthVal = getHealthScore(selectedApp);
+  const workspaceEvents = React.useMemo(() => getTimelineEvents(), [companyEvents, selectedApp, selectedCompany]);
+  const selectedApp = React.useMemo(() => selectedCompany ? applications[selectedCompany.id] : undefined, [selectedCompany, applications]);
+  const healthVal = React.useMemo(() => getHealthScore(selectedApp), [selectedApp]);
 
   return (
     <div className="flex-1 bg-background flex flex-col min-h-screen">
@@ -1483,7 +1530,18 @@ function DashboardPageContent() {
               </div>
 
               {loading ? (
-                <div className="text-center py-12 text-muted-foreground uppercase font-bold text-xs">Loading queue...</div>
+                <div className="space-y-4 py-4">
+                  {[1, 2, 3, 4].map(i => (
+                    <div key={i} className="flex items-center space-x-4 p-4 border border-border bg-card">
+                      <div className="w-12 h-12 rounded-full bg-muted animate-pulse"></div>
+                      <div className="flex-1 space-y-2">
+                        <div className="h-4 bg-muted animate-pulse rounded w-3/4"></div>
+                        <div className="h-3 bg-muted animate-pulse rounded w-1/2"></div>
+                      </div>
+                      <div className="w-16 h-8 rounded bg-muted animate-pulse"></div>
+                    </div>
+                  ))}
+                </div>
               ) : trackedApps.length === 0 ? (
                 <div className="text-center py-12 border-2 border-dashed border-border text-muted-foreground font-bold uppercase tracking-wider text-xs">
                   You are not tracking any active companies. Visit the Opportunities tab to discover openings.
@@ -2261,9 +2319,24 @@ function DashboardPageContent() {
 
             {/* Opportunities Table View */}
             {loading ? (
-              <div className="text-center py-20 font-bold uppercase tracking-wider text-muted-foreground">
-                Parsing placement drives database...
-              </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 py-4">
+                  {[1, 2, 3, 4, 5, 6].map(i => (
+                    <div key={i} className="p-6 border border-border bg-card space-y-4">
+                      <div className="flex justify-between items-start">
+                        <div className="w-1/2 h-6 bg-muted animate-pulse rounded"></div>
+                        <div className="w-16 h-6 bg-muted animate-pulse rounded-full"></div>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="h-4 bg-muted animate-pulse rounded w-full"></div>
+                        <div className="h-4 bg-muted animate-pulse rounded w-5/6"></div>
+                      </div>
+                      <div className="flex space-x-2 pt-4">
+                        <div className="w-20 h-8 bg-muted animate-pulse rounded"></div>
+                        <div className="w-20 h-8 bg-muted animate-pulse rounded"></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
             ) : filteredCompanies.length === 0 ? (
               <div className="text-center py-20 border-2 border-dashed border-border font-bold uppercase tracking-wider text-muted-foreground">
                 No active placement drives match the current filter criteria.
@@ -2305,7 +2378,7 @@ function DashboardPageContent() {
                         const isArchived = effectiveState === 'archived' || effectiveState === 'auto_archived';
                         
                         return (
-                          <tr key={c.id} className={`hover:bg-muted/15 transition-colors ${isRowChecked ? 'bg-accent/5' : ''} ${isArchived ? 'opacity-60' : ''}`}>
+                          <tr key={c.id} className={`hover:bg-muted/15 transition-colors ${isRowChecked ? 'bg-accent/5' : ''} ${isArchived ? 'opacity-60' : ''}`} onMouseEnter={() => prefetchCompanyDetails(c.id)}>
                             <td className="py-5 px-6">
                               <input
                                 type="checkbox"
@@ -2650,7 +2723,20 @@ function DashboardPageContent() {
                   <h3 className="text-xl font-bold tracking-tight uppercase">HISTORICAL PLACEMENTS RECORD</h3>
                   
                   {loading ? (
-                    <div className="text-center py-12 text-muted-foreground font-bold">Loading records...</div>
+                    <tr>
+                      <td colSpan={7} className="p-4">
+                        <div className="space-y-3">
+                          {[1, 2, 3, 4, 5].map(i => (
+                            <div key={i} className="flex space-x-4">
+                              <div className="h-8 bg-muted animate-pulse rounded flex-1"></div>
+                              <div className="h-8 bg-muted animate-pulse rounded flex-1"></div>
+                              <div className="h-8 bg-muted animate-pulse rounded flex-1"></div>
+                              <div className="h-8 bg-muted animate-pulse rounded flex-1"></div>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
                   ) : filteredCompanies.length === 0 ? (
                     <div className="text-center py-12 border-2 border-dashed border-border text-muted-foreground uppercase font-bold text-xs">
                       No historical applications recorded yet. Past rejections or offers will list here automatically.
@@ -2675,7 +2761,7 @@ function DashboardPageContent() {
                               if (!app) return null;
                               
                               return (
-                                <tr key={c.id} className="hover:bg-muted/15 transition-colors">
+                                <tr key={c.id} className="hover:bg-muted/15 transition-colors" onMouseEnter={() => prefetchCompanyDetails(c.id)}>
                                   <td className="py-4 px-6 cursor-pointer" onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}>
                                     <p className="font-bold text-sm uppercase tracking-tight text-foreground">{c.name}</p>
                                     <p className="text-[10px] text-muted-foreground uppercase">{c.role} ✦ {c.job_location || "Unknown"}</p>
