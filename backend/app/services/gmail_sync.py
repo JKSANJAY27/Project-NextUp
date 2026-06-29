@@ -630,7 +630,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         log_execution_stage(db, job.id, "PARSED", "SUCCESS")
         
         # 5. Run Validation & Normalization
-        validated_info = validate_and_normalize_parsed_data(raw_parsed_info, db)
+        validated_info = validate_and_normalize_parsed_data(raw_parsed_info, db, email_timestamp=email_timestamp)
         
         # Save validated response into DB
         job.validated_output = validated_info
@@ -1033,6 +1033,35 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             update_recruitment_states(db, company, event_type, email_timestamp, body)
             log_execution_stage(db, job.id, "APPLICATIONS_UPDATED", "SUCCESS")
             log_execution_stage(db, job.id, "CALENDAR_CREATED", "SUCCESS")
+
+            # For update-type events (OA, SHORTLIST, INTERVIEW, etc.) that carry a deadline,
+            # update the company's stored deadline and record the label so the frontend
+            # can show "OA Deadline" instead of "Registration Deadline".
+            UPDATE_TYPE_DEADLINE_LABELS = {
+                "OA": "OA Deadline",
+                "SHORTLIST": "Shortlist Deadline",
+                "INTERVIEW": "Interview Deadline",
+                "INTERVIEW_RESULT": "Result Deadline",
+                "OA_RESULT": "OA Result Deadline",
+                "DEADLINE_EXTENSION": "Extended Deadline",
+                "GENERAL_UPDATE": "Updated Deadline",
+            }
+            if not is_announcement and event_type in UPDATE_TYPE_DEADLINE_LABELS:
+                event_deadline_iso = event.parsed_metadata.get("deadline_iso") if event.parsed_metadata else None
+                if event_deadline_iso:
+                    try:
+                        new_deadline_dt = datetime.fromisoformat(event_deadline_iso)
+                        company.registration_deadline_db = new_deadline_dt
+                        # Store a human-readable label for this deadline in event metadata
+                        if event.parsed_metadata is None:
+                            event.parsed_metadata = {}
+                        event.parsed_metadata["deadline_label"] = UPDATE_TYPE_DEADLINE_LABELS[event_type]
+                        db.add(event)
+                        logger.info(
+                            f"Updated company deadline from {event_type} event: {new_deadline_dt} ({event.id})"
+                        )
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Could not parse deadline_iso from event {event.id}: {e}")
 
             # Log audit items in ingestion_audit_logs for low-confidence fields
             if requires_review:

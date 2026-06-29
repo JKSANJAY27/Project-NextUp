@@ -49,6 +49,7 @@ class LatestEventSchema(BaseModel):
     event_type: str
     subject: str
     timestamp: Optional[datetime] = None
+    parsed_metadata: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True
@@ -90,6 +91,9 @@ class CompanyWithEligibilityOut(CompanyOut):
     eligibility_status: str  # 'ELIGIBLE', 'NOT_ELIGIBLE'
     eligibility_reason: Optional[str] = None
     eligibility_explanation: Optional[EligibilityExplanation] = None
+    # Dynamic deadline label derived from the latest update event (e.g., "OA Deadline",
+    # "Registration Deadline"). Sent from the API so the frontend can display it correctly.
+    deadline_label: Optional[str] = None
 
 # Application Schemas
 class ApplicationCreate(BaseModel):

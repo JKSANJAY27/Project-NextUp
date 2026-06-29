@@ -2328,7 +2328,9 @@ function DashboardPageContent() {
                                 <p className="font-bold text-base uppercase tracking-tighter text-foreground group-hover:text-accent transition-colors">{c.name}</p>
                                 {c.latest_event && (
                                   <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-black bg-amber-500/20 text-amber-500 border border-amber-500/30 animate-pulse tracking-wider">
-                                    ⚡ UPDATE: {c.latest_event.event_type.replace(/_/g, ' ')}
+                                    {["REGISTRATION", "NEW_DRIVE"].includes(c.latest_event.event_type)
+                                      ? "✨ NEW"
+                                      : `⚡ ${c.latest_event.event_type.replace(/_/g, ' ')}`}
                                   </span>
                                 )}
                                 {c.jd_required_skills && c.jd_required_skills.length > 0 && (
@@ -2357,6 +2359,7 @@ function DashboardPageContent() {
                             <td className="py-5 px-6">
                               {deadlineDate ? (
                                 <>
+                                  <p className="text-[9px] text-muted-foreground uppercase mb-0.5 tracking-widest">{c.deadline_label || "REG. DEADLINE"}</p>
                                   <p className="text-xs font-bold uppercase">{deadlineDate.toLocaleDateString("en-IN", { day: '2-digit', month: 'short' })}</p>
                                   <p className="text-[10px] text-muted-foreground">{deadlineDate.toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })}</p>
                                 </>

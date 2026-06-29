@@ -142,9 +142,16 @@ def normalize_role_name(role: str) -> str:
     # Capitalize each word if no standard match
     return " ".join(word.capitalize() for word in role.split())
 
-def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session) -> Dict[str, Any]:
+def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session, email_timestamp=None) -> Dict[str, Any]:
     """
     Performs field validations and value normalizations on the raw LLM parser JSON output.
+    
+    Args:
+        parsed_data: Raw JSON output from the LLM parser.
+        db: SQLAlchemy session.
+        email_timestamp: The datetime the email was received. Used to anchor relative date
+            expressions like 'today', 'tomorrow', '5pm today' to the correct calendar date
+            instead of the current server time.
     """
     if not parsed_data or not isinstance(parsed_data, dict):
         parsed_data = {}
@@ -197,7 +204,19 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session)
         deadline_conf = deadline_obj.get("confidence", 0.50)
         formatted_deadline = None
         if deadline_val:
-            parsed_date = dateparser.parse(deadline_val, settings={'TIMEZONE': 'Asia/Kolkata', 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
+            dp_settings = {
+                'TIMEZONE': 'Asia/Kolkata',
+                'TO_TIMEZONE': 'UTC',
+                'RETURN_AS_TIMEZONE_AWARE': True,
+                'DATE_ORDER': 'DMY',           # Indian convention: DD-MM-YYYY
+                'PREFER_DAY_OF_MONTH': 'first',
+            }
+            if email_timestamp:
+                # Anchor relative date expressions ('today', '5pm today', 'tomorrow') to
+                # the email's received timestamp so they resolve correctly regardless of
+                # when the ingestion pipeline processes the email.
+                dp_settings['RELATIVE_BASE'] = email_timestamp.replace(tzinfo=None) if hasattr(email_timestamp, 'tzinfo') else email_timestamp
+            parsed_date = dateparser.parse(deadline_val, settings=dp_settings)
             if parsed_date:
                 formatted_deadline = parsed_date.isoformat()
             else:
@@ -253,7 +272,17 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session)
     
     formatted_deadline = None
     if deadline_val:
-        parsed_date = dateparser.parse(deadline_val, settings={'TIMEZONE': 'Asia/Kolkata', 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
+        dp_settings = {
+            'TIMEZONE': 'Asia/Kolkata',
+            'TO_TIMEZONE': 'UTC',
+            'RETURN_AS_TIMEZONE_AWARE': True,
+            'DATE_ORDER': 'DMY',           # Indian convention: DD-MM-YYYY
+            'PREFER_DAY_OF_MONTH': 'first',
+        }
+        if email_timestamp:
+            # Anchor relative date expressions to the email's received timestamp
+            dp_settings['RELATIVE_BASE'] = email_timestamp.replace(tzinfo=None) if hasattr(email_timestamp, 'tzinfo') else email_timestamp
+        parsed_date = dateparser.parse(deadline_val, settings=dp_settings)
         if parsed_date:
             formatted_deadline = parsed_date.isoformat()
         else:
