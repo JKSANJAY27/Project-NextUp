@@ -135,15 +135,25 @@ class Company(Base):
     def latest_event(self):
         if not self.events:
             return None
-        # Sort events by timestamp descending, using a fallback min datetime for sorting
-        sorted_events = sorted(self.events, key=lambda e: e.timestamp or datetime.min, reverse=True)
+        # Sort events by timestamp descending, stripping tzinfo for safe comparison
+        def _ts(e):
+            t = e.timestamp
+            if t is None:
+                return datetime.min
+            return t.replace(tzinfo=None) if t.tzinfo else t
+        sorted_events = sorted(self.events, key=_ts, reverse=True)
         return sorted_events[0]
 
     @property
     def effective_deadline(self):
         if self.events:
-            # Sort events by timestamp descending
-            sorted_events = sorted(self.events, key=lambda e: e.timestamp or datetime.min, reverse=True)
+            # Sort events by timestamp descending, stripping tzinfo for safe comparison
+            def _ts(e):
+                t = e.timestamp
+                if t is None:
+                    return datetime.min
+                return t.replace(tzinfo=None) if t.tzinfo else t
+            sorted_events = sorted(self.events, key=_ts, reverse=True)
             for e in sorted_events:
                 if e.parsed_metadata and isinstance(e.parsed_metadata, dict):
                     ev_date = e.parsed_metadata.get("deadline_iso")
