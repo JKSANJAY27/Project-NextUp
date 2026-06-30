@@ -27,8 +27,6 @@ import {
   Award,
   AlertTriangle,
   Megaphone,
-  Download,
-  Eye,
   Archive
 } from "lucide-react";
 
@@ -220,7 +218,6 @@ function DashboardPageContent() {
   const [opportunityStates, setOpportunityStates] = useState<Record<string, OpportunityState>>({});
   const [notificationBundles, setNotificationBundles] = useState<NotificationBundle[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [selectedAnnouncement, setSelectedAnnouncement] = useState<Announcement | null>(null);
   
   const [loading, setLoading] = useState(true);
   const [showAddCompany, setShowAddCompany] = useState(false);
@@ -323,15 +320,6 @@ function DashboardPageContent() {
   useEffect(() => {
     if (announcementsData) {
       setAnnouncements(announcementsData);
-      if (announcementsData.length > 0) {
-        setSelectedAnnouncement((prev) => {
-          if (prev) {
-            const found = announcementsData.find((a: Announcement) => a.id === prev.id);
-            if (found) return found;
-          }
-          return announcementsData[0];
-        });
-      }
     }
   }, [announcementsData]);
 
@@ -383,24 +371,7 @@ function DashboardPageContent() {
     });
   };
 
-  // Auto-select announcement if id parameter is in URL
-  useEffect(() => {
-    if (announcements.length > 0) {
-      const idParam = searchParams.get("id");
-      if (idParam) {
-        const found = announcements.find(a => a.id === idParam);
-        if (found) {
-          setSelectedAnnouncement(found);
-          setTimeout(() => {
-            const element = document.getElementById("announcements-archive");
-            if (element) {
-              element.scrollIntoView({ behavior: "smooth" });
-            }
-          }, 100);
-        }
-      }
-    }
-  }, [searchParams, announcements]);
+
 
   // Decrypt notes whenever selectedCompany changes or encryption key is available
   useEffect(() => {
@@ -703,7 +674,7 @@ function DashboardPageContent() {
   };
 
   // Helper: Get Today's schedule events
-  const getTodayEvents = () => {
+  const getTodayEvents = React.useCallback(() => {
     const today = new Date();
     const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
     const endOfDay = startOfDay + 24 * 60 * 60 * 1000;
@@ -743,17 +714,7 @@ function DashboardPageContent() {
     });
 
     return events.sort((a, b) => a.time.getTime() - b.time.getTime());
-  };
-
-  const handleViewAnnouncement = (ann: Announcement) => {
-    setSelectedAnnouncement(ann);
-    setTimeout(() => {
-      const element = document.getElementById("announcements-archive");
-      if (element) {
-        element.scrollIntoView({ behavior: "smooth" });
-      }
-    }, 50);
-  };
+  }, [companies, notificationBundles]);
 
   const getDailyDigest = () => {
     const userName = user?.full_name || "Sanjay";
@@ -799,53 +760,10 @@ function DashboardPageContent() {
     return `Good morning, ${userName}. ${eventText} ${statsText} ${focusText}`;
   };
 
-  const getNextActionMessage = (app: Application, comp: Company) => {
-    const stage = app.recruitment_state || app.status || 'Registration';
-    const stageLower = stage.toLowerCase();
-    
-    if (stageLower.includes('registration') || stageLower.includes('interested')) {
-      if (comp.registration_link) return "Apply on the CDC Portal before the registration window closes.";
-      return "Tailor your resume and submit your application.";
-    }
-    if (stageLower.includes('applied') || stageLower.includes('awaiting shortlist')) {
-      return "Practice core CS fundamentals and review projects while awaiting shortlist results.";
-    }
-    if (stageLower.includes('shortlisted')) {
-      return "Revise data structures, algorithms, and mock assessments in preparation for the OA.";
-    }
-    if (stageLower.includes('oa') || stageLower.includes('awaiting oa result')) {
-      return "Review your OA responses and prepare answers for potential technical interview rounds.";
-    }
-    if (stageLower.includes('interview') || stageLower.includes('awaiting interview result')) {
-      return "Revise core system design, project architectures, and schedule a mock behavioral panel.";
-    }
-    if (stageLower.includes('offer')) {
-      return "Review contract offer terms, compensation CTC split, and complete onboarding steps.";
-    }
-    return "Check details or archive if you do not plan to track this placement drive further.";
-  };
 
-  const getRiskLevel = (app: Application, comp: Company) => {
-    if (!comp.registration_deadline) return 'low';
-    
-    const now = Date.now();
-    const deadline = new Date(comp.registration_deadline).getTime();
-    const diffHours = (deadline - now) / (3600 * 1000);
-    
-    const stage = app.recruitment_state || app.status || 'Registration';
-    const isAppliedOrBeyond = !['Registration', 'Interested', 'unseen'].includes(stage);
-
-    if (diffHours < 4 && !isAppliedOrBeyond) {
-      return 'high';
-    }
-    if (diffHours < 24 && !isAppliedOrBeyond) {
-      return 'medium';
-    }
-    return 'low';
-  };
 
   // Compile timeline events list for the selected company drawer
-  const getTimelineEvents = () => {
+  const getTimelineEvents = React.useCallback(() => {
     if (!selectedCompany) return [];
     
     const events: TimelineEvent[] = [];
@@ -877,7 +795,7 @@ function DashboardPageContent() {
     }
     
     return events.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  };
+  }, [selectedCompany, companyEvents]);
 
   // Calculate Application Health Score checkmarks
   const getHealthScore = (app: Application | undefined) => {
@@ -921,12 +839,14 @@ function DashboardPageContent() {
     const app = applications[c.id];
 
     if (activeTab === "opportunities") {
-      // Hide archived/auto_archived unless user wants to see them
-      if (effectiveState === "archived" || effectiveState === "auto_archived") {
-        return false;
-      }
-      // Hide if it is a confirmed tracking app (belongs in Tracking tab)
+      // Hide archived/auto_archived
+      if (effectiveState === "archived" || effectiveState === "auto_archived") return false;
+      // Hide confirmed tracking workspaces (they live in Tracking tab)
       if (app && app.user_decision === "tracking") return false;
+      // Hide decision_pending — deadline passed, card belongs in Action Center
+      if (effectiveState === "decision_pending") return false;
+      // Hide any company whose deadline has already passed, even before the scheduler runs
+      if (c.registration_deadline && new Date(c.registration_deadline) < new Date()) return false;
     }
 
     if (activeTab === "applications") {
@@ -982,11 +902,33 @@ function DashboardPageContent() {
   };
 
   // Pre-calculate variables for Action Center and My Applications
-  const todayEvents = React.useMemo(() => getTodayEvents(), [companies, notificationBundles]);
-  const untriagedBundles = React.useMemo(() => notificationBundles.filter(b => b.unread_count > 0), [notificationBundles]);
+  const todayEvents = React.useMemo(() => getTodayEvents(), [getTodayEvents]);
   const trackedApps = React.useMemo(() => Object.values(applications)
     .filter(app => app.user_decision === 'tracking' && !isSnoozed(app))
     .sort((a, b) => b.priority_score - a.priority_score), [applications]);
+
+  // Batch selection state for Decision Required cards
+  const [selectedDecisionIds, setSelectedDecisionIds] = useState<string[]>([]);
+
+  const toggleDecisionSelect = (id: string) => {
+    setSelectedDecisionIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  // Relative time helper for expired deadlines
+  const getRelativeExpiry = (deadline: string | null): string => {
+    if (!deadline) return 'Deadline unknown';
+    const diff = Date.now() - new Date(deadline).getTime();
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const days = Math.floor(hours / 24);
+    if (hours < 1) return 'Registration just closed';
+    if (hours < 24) return `Registration closed ${hours}h ago`;
+    if (days === 1) return 'Registration closed yesterday';
+    if (days < 7) return `Registration closed ${days} days ago`;
+    const weeks = Math.floor(days / 7);
+    return `Registration closed ${weeks} week${weeks > 1 ? 's' : ''} ago`;
+  };
 
   // My Applications conversion stats
   const historyApps = React.useMemo(() => Object.values(applications), [applications]);
@@ -998,7 +940,7 @@ function DashboardPageContent() {
 
   // Timeline and Workspace Drawer computed states
   const selectedApp = React.useMemo(() => selectedCompany ? applications[selectedCompany.id] : undefined, [selectedCompany, applications]);
-  const workspaceEvents = React.useMemo(() => getTimelineEvents(), [companyEvents, selectedApp, selectedCompany]);
+  const workspaceEvents = React.useMemo(() => getTimelineEvents(), [getTimelineEvents]);
   const healthVal = React.useMemo(() => getHealthScore(selectedApp), [selectedApp]);
 
   return (
@@ -1158,918 +1100,222 @@ function DashboardPageContent() {
                         </p>
                       </div>
                     </div>
-                    <button 
-                      onClick={() => handleViewAnnouncement(ann)}
+                    <Link 
+                      href="/dashboard?tab=announcements"
                       className="border-2 border-red-500 bg-red-500 text-black text-xs font-bold tracking-widest px-6 py-3 hover:bg-transparent hover:text-red-500 transition-colors uppercase block whitespace-nowrap"
                     >
                       VIEW ANNOUNCEMENT
-                    </button>
+                    </Link>
                   </div>
                 );
               })
             }
 
-            {/* Side-by-Side: Today's Timeline & Notifications Triage */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-              {/* Today timeline */}
-              <div className="lg:col-span-5 border-2 border-border p-6 bg-muted/10 space-y-4">
-                <div className="border-b border-border pb-3 flex justify-between items-center">
-                  <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
-                    📅 TODAY&apos;S SCHEDULE TIMELINE
-                  </h4>
-                  <span className="text-[10px] font-bold bg-muted px-2 py-0.5 border border-border">
-                    {todayEvents.length} EVENT{todayEvents.length !== 1 ? 'S' : ''}
-                  </span>
-                </div>
-                
-                <div className="overflow-y-auto max-h-[350px] space-y-4 pr-1">
-                  {todayEvents.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center text-center py-20 text-muted-foreground gap-1">
-                      <span className="text-xs font-bold uppercase tracking-wider">NO EVENTS TODAY</span>
-                      <span className="text-[10px] uppercase">All clear for the rest of the day.</span>
-                    </div>
-                  ) : (
-                    <div className="relative border-l-2 border-border ml-2 pl-4 space-y-6">
-                      {todayEvents.map((evt, idx) => (
-                        <div key={idx} className="relative">
-                          <div className="absolute -left-[23px] top-1 h-3 w-3 bg-accent border-2 border-black" />
-                          <div className="space-y-1">
-                            <span className="text-[10px] font-bold font-mono text-accent">
-                              {evt.time.toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                            <h5 className="text-xs font-bold uppercase tracking-tight text-foreground">
-                              {evt.title}
-                            </h5>
-                            <p className="text-[11px] text-muted-foreground leading-normal">
-                              {evt.description}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Placements Triage Feed */}
-              <div className="lg:col-span-7 border-2 border-border p-6 bg-muted/10 space-y-4">
-                <div className="border-b border-border pb-3 flex justify-between items-center">
-                  <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
-                    🔔 BUNDLED NOTIFICATIONS TRIAGE FEED
-                  </h4>
-                  <span className="text-[10px] font-bold bg-muted px-2 py-0.5 border border-border">
-                    {untriagedBundles.length} UNTRIAGED BUNDLES
-                  </span>
-                </div>
-
-                <div className="overflow-y-auto max-h-[350px] space-y-4 pr-1">
-                  {untriagedBundles.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center text-center py-20 text-muted-foreground gap-1">
-                      <span className="text-xs font-bold uppercase tracking-wider">NO UNTRIAGED ALERTS</span>
-                      <span className="text-[10px] uppercase">Your placements email inbox is fully processed.</span>
-                    </div>
-                  ) : (
-                    untriagedBundles.map((bundle) => {
-                      const hasConfirmArchive = bundle.notifications.some(n => n.notification_type === 'confirm_archive');
-                      
-                      if (hasConfirmArchive) {
-                        return (
-                          <div key={bundle.company_id} className="border-2 border-red-500 bg-red-500/5 p-4 space-y-4 relative shadow-md shadow-red-500/10">
-                            <div className="flex justify-between items-start">
-                              <div>
-                                <h5 className="font-extrabold text-sm uppercase tracking-tighter text-foreground">
-                                  {bundle.company_name}
-                                </h5>
-                                <p className="text-[10px] text-muted-foreground uppercase">
-                                  {bundle.role} ✦ {bundle.category}
-                                </p>
-                              </div>
-                              <span className="bg-red-500/20 border border-red-500 text-red-400 text-[9px] font-black px-1.5 py-0.5 uppercase flex items-center gap-1">
-                                <AlertTriangle size={10} /> ACTION REQUIRED
-                              </span>
-                            </div>
-
-                            <div className="space-y-1.5 border-t border-border pt-2.5">
-                              {bundle.notifications.slice(0, 3).map((notif) => {
-                                return (
-                                  <div key={notif.id} className="text-[11px] text-foreground leading-normal flex items-start gap-1">
-                                    <span className="shrink-0 mt-0.5">⚠️</span>
-                                    <p className="flex-1 font-semibold">{notif.message}</p>
-                                  </div>
-                                );
-                              })}
-                              {bundle.notifications.length > 3 && (
-                                <p className="text-[9px] text-muted-foreground uppercase font-bold pl-3">
-                                  + {bundle.notifications.length - 3} more updates
-                                </p>
-                              )}
-                            </div>
-
-                            <div className="border-t border-border pt-3 flex items-center justify-end gap-2">
-                              <button
-                                onClick={async () => {
-                                  try {
-                                    await api.post(`/notifications/company/${bundle.company_id}/read`);
-                                    await handleUpdateApplication(bundle.company_id, { status: 'Shortlisted', user_decision: 'tracking' });
-                                  } catch (err) {
-                                    console.error("Failed to mark shortlisted:", err);
-                                  }
-                                }}
-                                className="h-8 px-3 border border-emerald-500/50 bg-emerald-950/30 text-emerald-400 font-bold text-[10px] hover:bg-emerald-500 hover:text-black uppercase tracking-wider transition-all"
-                              >
-                                🎉 I Was Shortlisted
-                              </button>
-                              
-                              <button
-                                onClick={async () => {
-                                  try {
-                                    await api.post(`/notifications/company/${bundle.company_id}/read`);
-                                    await handleOpportunityAction(bundle.company_id, 'archive', 'NOT_SHORTLISTED');
-                                  } catch (err) {
-                                    console.error("Failed to confirm and archive:", err);
-                                  }
-                                }}
-                                className="h-8 px-3 border border-red-500/50 bg-red-950/30 text-red-400 font-bold text-[10px] hover:bg-red-500 hover:text-white uppercase tracking-wider transition-all"
-                              >
-                                ✗ Confirm & Archive
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      }
-
-                      return (
-                        <div key={bundle.company_id} className="border-2 border-border p-4 bg-background space-y-4 relative">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <h5 className="font-extrabold text-sm uppercase tracking-tighter text-foreground">
-                                {bundle.company_name}
-                              </h5>
-                              <p className="text-[10px] text-muted-foreground uppercase">
-                                {bundle.role} ✦ {bundle.category}
-                              </p>
-                            </div>
-                            <span className="bg-accent/20 border border-accent text-accent text-[9px] font-black px-1.5 py-0.5 uppercase">
-                              {bundle.unread_count} NEW
-                            </span>
-                          </div>
-
-                          <div className="space-y-1.5 border-t border-border pt-2.5">
-                            {bundle.notifications.slice(0, 3).map((notif) => {
-                              const severityStars = notif.severity >= 4 ? '🔴' : notif.severity >= 3 ? '🟠' : '🟡';
-                              const isHighVis = (notif.severity || 1) >= 3;
-                              return (
-                                <div key={notif.id} className="text-[11px] text-foreground leading-normal flex items-start gap-1">
-                                  <span className="shrink-0 mt-0.5" title={`Severity ${notif.severity}`}>{severityStars}</span>
-                                  <p className={`flex-1 ${isHighVis ? 'font-semibold' : ''}`}>{notif.message}</p>
-                                </div>
-                              );
-                            })}
-                            {bundle.notifications.length > 3 && (
-                              <p className="text-[9px] text-muted-foreground uppercase font-bold pl-3">
-                                + {bundle.notifications.length - 3} more updates
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="border-t border-border pt-3 flex items-center justify-end gap-2">
-                            <button
-                              onClick={() => handleUpdateApplication(bundle.company_id, { user_decision: 'tracking' })}
-                              className="h-8 px-3 border border-border bg-foreground text-background font-bold text-[10px] hover:bg-accent hover:text-black hover:border-accent uppercase tracking-wider transition-all"
-                            >
-                              🎯 Track
-                            </button>
-                            
-                            <button
-                              onClick={async () => {
-                                try {
-                                  await api.post(`/notifications/company/${bundle.company_id}/read`);
-                                  // Archive via opportunity-state if no real app exists, else update app
-                                  const hasApp = !!applications[bundle.company_id];
-                                  if (hasApp) {
-                                    handleUpdateApplication(bundle.company_id, { user_decision: 'archived' });
-                                  } else {
-                                    handleOpportunityAction(bundle.company_id, 'archive');
-                                  }
-                                } catch (err) {
-                                  console.error("Failed to dismiss bundle:", err);
-                                }
-                              }}
-                              className="h-8 px-3 border border-border bg-transparent text-foreground font-bold text-[10px] hover:bg-muted uppercase tracking-wider transition-all"
-                            >
-                              👁️ Dismiss
-                            </button>
-                            
-                            <div className="relative group">
-                              <button
-                                className="h-8 px-3 border border-border bg-transparent text-muted-foreground font-bold text-[10px] hover:bg-muted hover:text-foreground uppercase tracking-wider transition-all"
-                              >
-                                ⏰ Snooze
-                              </button>
-                              <div className="absolute right-0 bottom-full z-10 mb-1 hidden group-hover:block hover:block bg-background border border-border py-1 shadow-xl min-w-[120px]">
-                                {[1, 3, 7].map((days) => (
-                                  <button
-                                    key={days}
-                                    onClick={() => {
-                                      const snoozeDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
-                                      handleUpdateApplication(bundle.company_id, { 
-                                        user_decision: 'snoozed',
-                                        snoozed_until: snoozeDate
-                                      });
-                                    }}
-                                    className="w-full text-left px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider hover:bg-muted text-foreground"
-                                  >
-                                    {days} Day{days > 1 ? 's' : ''}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Recent Announcements Widget */}
-            <div className="border-2 border-border p-6 bg-muted/10 space-y-6">
+            {/* Today's Schedule Timeline — full width */}
+            <div className="border-2 border-border p-6 bg-muted/10 space-y-4">
               <div className="border-b border-border pb-3 flex justify-between items-center">
                 <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
-                  📢 LATEST GENERAL ANNOUNCEMENTS
+                  📅 TODAY&apos;S SCHEDULE TIMELINE
                 </h4>
-                <button
-                  onClick={() => {
-                    const element = document.getElementById("announcements-archive");
-                    if (element) {
-                      element.scrollIntoView({ behavior: "smooth" });
-                    }
-                  }}
-                  className="text-[10px] font-bold text-accent hover:underline uppercase flex items-center gap-1 bg-transparent border-0 cursor-pointer"
-                >
-                  View All Announcements <ArrowRight size={10} />
-                </button>
+                <span className="text-[10px] font-bold bg-muted px-2 py-0.5 border border-border">
+                  {todayEvents.length} EVENT{todayEvents.length !== 1 ? 'S' : ''}
+                </span>
               </div>
-
-              {announcements.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground uppercase font-bold text-[10px]">
-                  No announcements posted.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {announcements.slice(0, 3).map((ann) => {
-                    const deadline = ann.deadline;
-                    const deadlineDate = deadline ? new Date(deadline) : null;
-                    const formattedDate = new Date(ann.created_at).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                    });
-                    return (
-                      <div
-                        key={ann.id}
-                        onClick={() => handleViewAnnouncement(ann)}
-                        className="border-2 border-border p-4 bg-background hover:border-accent transition-all duration-300 flex flex-col justify-between space-y-3 group cursor-pointer"
-                      >
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-center">
-                            <span className={`text-[8px] font-black uppercase px-2 py-0.5 border ${
-                              ann.announcement_type === 'MANDATORY_REQUIREMENT'
-                                ? 'bg-red-950/40 border-red-500/50 text-red-400'
-                                : ann.announcement_type === 'TRAINING'
-                                ? 'bg-purple-950/40 border-purple-500/50 text-purple-400'
-                                : ann.announcement_type === 'PLACEMENT_REGISTRATION'
-                                ? 'bg-amber-950/40 border-amber-500/50 text-amber-400'
-                                : 'bg-muted border-border text-muted-foreground'
-                            }`}>
-                              {ann.announcement_type.replace('_', ' ')}
-                            </span>
-                            <span className="text-[9px] font-mono text-muted-foreground">{formattedDate}</span>
-                          </div>
-                          <h5 className="font-extrabold text-sm uppercase tracking-tight text-foreground line-clamp-1 group-hover:text-accent transition-colors">
-                            {ann.title}
+              <div className="overflow-y-auto max-h-[220px] space-y-4 pr-1">
+                {todayEvents.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center text-center py-10 text-muted-foreground gap-1">
+                    <span className="text-xs font-bold uppercase tracking-wider">NO EVENTS TODAY</span>
+                    <span className="text-[10px] uppercase">All clear for the rest of the day.</span>
+                  </div>
+                ) : (
+                  <div className="relative border-l-2 border-border ml-2 pl-4 space-y-6">
+                    {todayEvents.map((evt, idx) => (
+                      <div key={idx} className="relative">
+                        <div className="absolute -left-[23px] top-1 h-3 w-3 bg-accent border-2 border-black" />
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold font-mono text-accent">
+                            {evt.time.toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          <h5 className="text-xs font-bold uppercase tracking-tight text-foreground">
+                            {evt.title}
                           </h5>
-                          <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
-                            {ann.body}
+                          <p className="text-[11px] text-muted-foreground leading-normal">
+                            {evt.description}
                           </p>
                         </div>
-                        {deadlineDate && (
-                          <div className="text-[9px] font-bold text-amber-500 flex items-center gap-1 pt-2 border-t border-border/40">
-                            <Clock size={10} />
-                            <span>Deadline: {deadlineDate.toLocaleDateString("en-IN", { month: "short", day: "numeric" })}</span>
-                          </div>
-                        )}
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* Decision Pending Widget — Companies past deadline with no decision */}
+            {/* ─── DECISION REQUIRED — Priority Section ─── */}
             {activeDecisionPendingCompanies.length > 0 && (
-              <div className="border-2 border-amber-500/60 bg-amber-500/5 p-6 space-y-4">
-                <div className="border-b border-amber-500/40 pb-3 flex justify-between items-center">
-                  <h4 className="text-xs font-black tracking-widest uppercase text-amber-400">
-                    ⏰ DECISION REQUIRED — {activeDecisionPendingCompanies.length} EXPIRED DRIVE{activeDecisionPendingCompanies.length !== 1 ? 'S' : ''}
-                  </h4>
-                  <span className="text-[10px] font-bold text-amber-500/70 uppercase">Deadline has passed. Did you apply?</span>
+              <div className="border-2 border-amber-500/70 bg-amber-500/5 p-6 space-y-6">
+                {/* Section header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-500/40 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 bg-amber-500 text-black flex items-center justify-center shrink-0 animate-pulse">
+                      <AlertTriangle size={16} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-black tracking-widest uppercase text-amber-400">
+                        DECISION REQUIRED
+                        <span className="ml-2 bg-amber-500 text-black text-[10px] font-black px-1.5 py-0.5">
+                          {activeDecisionPendingCompanies.length}
+                        </span>
+                      </h4>
+                      <p className="text-[10px] text-amber-500/70 uppercase tracking-wide mt-0.5">
+                        These registration windows have closed. Did you apply?
+                      </p>
+                    </div>
+                  </div>
+                  {/* Batch archive */}
+                  {selectedDecisionIds.length > 0 && (
+                    <button
+                      onClick={async () => {
+                        await Promise.all(selectedDecisionIds.map(id => handleOpportunityAction(id, 'archive', 'NOT_APPLIED')));
+                        setSelectedDecisionIds([]);
+                      }}
+                      className="flex items-center gap-2 h-8 px-4 border border-red-500/50 bg-red-500/10 text-red-400 font-bold text-[10px] uppercase tracking-wider hover:bg-red-500 hover:text-white transition-all shrink-0"
+                    >
+                      <Archive size={12} />
+                      Archive Selected ({selectedDecisionIds.length})
+                    </button>
+                  )}
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {activeDecisionPendingCompanies.slice(0, 6).map((comp) => {
+
+                {/* Cards grid — newest expired first */}
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {[...activeDecisionPendingCompanies]
+                    .sort((a, b) => {
+                      const dA = a.registration_deadline ? new Date(a.registration_deadline).getTime() : 0;
+                      const dB = b.registration_deadline ? new Date(b.registration_deadline).getTime() : 0;
+                      return dB - dA; // Most recently expired first
+                    })
+                    .map((comp) => {
                     const opp = opportunityStates[comp.id];
-                    const deadlineStr = comp.registration_deadline
-                      ? new Date(comp.registration_deadline).toLocaleString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                      : 'N/A';
-                    const pendingSince = opp?.decision_pending_since
-                      ? new Date(opp.decision_pending_since).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })
-                      : null;
+                    const isSelected = selectedDecisionIds.includes(comp.id);
                     return (
-                      <div key={comp.id} className="border-2 border-amber-500/40 bg-background p-4 space-y-3">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <h5 className="font-extrabold text-sm uppercase tracking-tighter text-foreground">{comp.name}</h5>
+                      <div
+                        key={comp.id}
+                        className={`border-2 bg-background p-4 space-y-3 transition-all ${
+                          isSelected ? 'border-amber-500 bg-amber-500/5' : 'border-amber-500/30 hover:border-amber-500/60'
+                        }`}
+                      >
+                        {/* Card header: checkbox + company name */}
+                        <div className="flex items-start gap-2">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleDecisionSelect(comp.id)}
+                            className="mt-0.5 h-3.5 w-3.5 accent-amber-500 cursor-pointer shrink-0"
+                            title="Select for batch archive"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <h5 className="font-extrabold text-sm uppercase tracking-tighter text-foreground truncate">{comp.name}</h5>
                             <p className="text-[10px] text-muted-foreground uppercase">{comp.role} ✦ {comp.category}</p>
                           </div>
                           <span className="text-[8px] font-black bg-amber-950/60 border border-amber-500/50 text-amber-400 px-1.5 py-0.5 uppercase shrink-0">
                             PENDING
                           </span>
                         </div>
-                        <div className="text-[10px] text-amber-500/80 font-bold uppercase">
-                          ⏰ Deadline: {deadlineStr}
-                          {pendingSince && <span className="ml-2 text-muted-foreground">• Pending since {pendingSince}</span>}
+
+                        {/* Relative expiry time */}
+                        <div className="text-[10px] text-amber-400/80 font-bold uppercase flex items-center gap-1.5">
+                          <Clock size={10} />
+                          {getRelativeExpiry(comp.registration_deadline)}
                         </div>
-                        <div className="flex gap-2 pt-1 border-t border-border/40">
+
+                        {/* Context clues: CTC/Stipend + link */}
+                        <div className="grid grid-cols-2 gap-2 py-2 border-t border-b border-border/40">
+                          <div>
+                            <span className="text-[8px] text-muted-foreground uppercase block">Package</span>
+                            <span className="text-[10px] font-bold text-foreground">{comp.ctc || comp.stipend || '—'}</span>
+                          </div>
+                          <div className="text-right">
+                            {comp.registration_link ? (
+                              <a
+                                href={comp.registration_link}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[9px] font-bold text-accent hover:underline flex items-center justify-end gap-1"
+                              >
+                                <ExternalLink size={9} /> Registration Portal
+                              </a>
+                            ) : (
+                              <span className="text-[9px] text-muted-foreground">No link</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="flex gap-2">
                           <button
                             onClick={() => handleOpportunityAction(comp.id, 'track')}
-                            className="flex-1 h-7 bg-accent text-black font-bold text-[9px] uppercase tracking-wider hover:bg-accent/80 transition-all border border-accent"
+                            className="flex-1 h-8 bg-accent text-black font-bold text-[9px] uppercase tracking-wider hover:bg-accent/80 transition-all border border-accent"
                           >
                             ✅ Yes, I Applied
                           </button>
                           <button
-                            onClick={() => handleOpportunityAction(comp.id, 'archive')}
-                            className="flex-1 h-7 bg-transparent text-muted-foreground font-bold text-[9px] uppercase tracking-wider hover:bg-muted border border-border transition-all"
+                            onClick={() => handleOpportunityAction(comp.id, 'archive', 'NOT_APPLIED')}
+                            className="flex-1 h-8 bg-transparent text-muted-foreground font-bold text-[9px] uppercase tracking-wider hover:bg-muted border border-border transition-all"
                           >
                             ✗ No, Archive
                           </button>
                           <button
                             onClick={() => handleOpportunityAction(comp.id, 'snooze')}
-                            className="h-7 px-3 bg-transparent text-muted-foreground font-bold text-[9px] uppercase tracking-wider hover:bg-muted border border-border transition-all"
-                            title="Remind me in 7 days"
+                            className="h-8 px-3 bg-transparent text-muted-foreground font-bold text-[9px] uppercase tracking-wider hover:bg-muted border border-border transition-all"
+                            title="Remind me again in 7 days"
                           >
                             ⏰
                           </button>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
-            {/* Immediate Actions Feed */}
-            <div className="space-y-6">
-              <div className="border-b-2 border-border pb-3">
-                <h4 className="text-sm font-black tracking-widest uppercase text-muted-foreground">
-                  🔥 IMMEDIATE ACTION QUEUE
-                </h4>
-              </div>
-
-              {loading ? (
-                <div className="space-y-4 py-4">
-                  {[1, 2, 3, 4].map(i => (
-                    <div key={i} className="flex items-center space-x-4 p-4 border border-border bg-card">
-                      <div className="w-12 h-12 rounded-full bg-muted animate-pulse"></div>
-                      <div className="flex-1 space-y-2">
-                        <div className="h-4 bg-muted animate-pulse rounded w-3/4"></div>
-                        <div className="h-3 bg-muted animate-pulse rounded w-1/2"></div>
-                      </div>
-                      <div className="w-16 h-8 rounded bg-muted animate-pulse"></div>
-                    </div>
-                  ))}
-                </div>
-              ) : trackedApps.length === 0 ? (
-                <div className="text-center py-12 border-2 border-dashed border-border text-muted-foreground font-bold uppercase tracking-wider text-xs">
-                  You are not tracking any active companies. Visit the Opportunities tab to discover openings.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {trackedApps.slice(0, 6).map((app) => {
-                    const comp = companies.find(c => c.id === app.company_id);
-                    if (!comp) return null;
-                    
-                    const risk = getRiskLevel(app, comp);
-
-                    return (
-                      <div key={app.id} className="border-2 border-border p-6 bg-card relative space-y-4 hover:border-accent transition-all duration-300">
-                        <div className="flex justify-between items-start">
-                          <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 bg-muted border border-border text-foreground">
-                            {comp.category}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            {app.workspace_priority_override === 'pinned' && (
-                              <span className="text-[9px] font-black text-black bg-accent border border-accent px-1.5 py-0.5 animate-pulse">
-                                📌 PINNED
-                              </span>
-                            )}
-                            <span className="text-[9px] font-black text-muted-foreground">
-                              PRIORITY: {app.priority_score}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="cursor-pointer" onClick={() => { setSelectedCompany(comp); setModalTab("overview"); }}>
-                          <h4 className="font-extrabold text-base uppercase tracking-tighter hover:text-accent transition-colors">
-                            {comp.name}
-                          </h4>
-                          <p className="text-xs text-muted-foreground uppercase">
-                            {comp.role}
+                        {/* Pending-since sub-label */}
+                        {opp?.decision_pending_since && (
+                          <p className="text-[9px] text-muted-foreground/60 uppercase">
+                            Pending since {new Date(opp.decision_pending_since).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
                           </p>
-                        </div>
-
-                        <div className="flex items-center justify-between border-t border-border pt-3 text-[10px] font-bold">
-                          <span className="uppercase text-muted-foreground">Stage: {app.recruitment_state}</span>
-                          {app.is_stale ? (
-                            <span className="text-red-500 animate-pulse">⚠️ STALE</span>
-                          ) : (
-                            <span className={`
-                              px-2 py-0.5 text-[8px] font-black uppercase border
-                              ${risk === 'high' ? 'bg-red-950 border-red-500 text-red-400' : 
-                                risk === 'medium' ? 'bg-amber-950 border-amber-500 text-amber-400' : 
-                                'bg-emerald-950 border-emerald-500 text-emerald-400'}
-                            `}>
-                              {risk === 'high' ? '🔴 HIGH RISK' : risk === 'medium' ? '🟡 ATTENTION' : '🟢 ON TRACK'}
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="bg-muted/30 border border-border/50 p-3 text-[11px] font-semibold text-foreground uppercase leading-relaxed">
-                          👉 {getNextActionMessage(app, comp)}
-                        </div>
-
-                        <div className="flex justify-between items-center border-t border-border pt-3">
-                          <button 
-                            onClick={() => { setSelectedCompany(comp); setModalTab("overview"); }}
-                            className="text-xs font-bold text-accent hover:underline uppercase"
-                          >
-                            Open Workspace →
-                          </button>
-                          
-                          <button
-                            onClick={() => {
-                              const isPinned = app.workspace_priority_override === 'pinned';
-                              handleUpdateApplication(comp.id, {
-                                workspace_priority_override: isPinned ? null : 'pinned'
-                              });
-                            }}
-                            className="text-[10px] font-black text-muted-foreground hover:text-foreground uppercase"
-                          >
-                            {app.workspace_priority_override === 'pinned' ? 'Unpin' : 'Pin to Top'}
-                          </button>
-                        </div>
+                        )}
                       </div>
                     );
                   })}
                 </div>
-              )}
-            </div>
 
-            {/* Announcements Archive Section */}
-            <div id="announcements-archive" className="border-t-2 border-border pt-12 mt-12 space-y-6">
-              <div className="border-b-2 border-border pb-6 flex justify-between items-end">
-                <div className="space-y-1">
-                  <h2 className="text-3xl font-extrabold tracking-tighter uppercase leading-none">
-                    ANNOUNCEMENTS
-                  </h2>
-                  <p className="text-xs text-muted-foreground uppercase tracking-widest">
-                    Important notices, training completion deadlines, and policy updates from the CDC
+                {/* Overflow indicator when there are many pending */}
+                {activeDecisionPendingCompanies.length > 6 && (
+                  <p className="text-[10px] text-amber-500/60 font-bold uppercase text-center">
+                    Showing all {activeDecisionPendingCompanies.length} pending decisions — resolve them to keep this section clear.
                   </p>
-                </div>
+                )}
               </div>
+            )}
 
-              {announcements.length === 0 ? (
-                <div className="flex flex-col items-center justify-center text-center py-20 border-2 border-dashed border-border bg-muted/10 gap-3">
-                  <div className="h-12 w-12 bg-muted text-muted-foreground flex items-center justify-center border-2 border-border">
-                    <Megaphone size={24} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-black uppercase tracking-wider text-muted-foreground">NO ANNOUNCEMENTS YET</p>
-                    <p className="text-[10px] text-muted-foreground/80 uppercase">General updates and notices from CDC will appear here.</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                  
-                  {/* Left Column: Announcements List */}
-                  <div className="lg:col-span-5 space-y-4 max-h-[70vh] overflow-y-auto pr-2">
-                    {announcements.map((ann) => {
-                      const isSelected = selectedAnnouncement?.id === ann.id;
-                      const formattedDate = new Date(ann.created_at).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric"
-                      });
-                      const deadline = ann.deadline;
-                      const deadlineDate = deadline ? new Date(deadline) : null;
-                      const isDeadlinePassed = deadlineDate ? deadlineDate.getTime() < Date.now() : false;
-
-                      return (
-                        <div
-                          key={ann.id}
-                          onClick={() => setSelectedAnnouncement(ann)}
-                          className={`border-2 p-4 cursor-pointer transition-all duration-200 relative ${
-                            isSelected
-                              ? "border-accent bg-accent/5"
-                              : "border-border hover:border-muted-foreground/50 bg-card"
-                          }`}
-                        >
-                          <div className="flex justify-between items-start mb-2">
-                            <span className={`text-[8px] font-black uppercase px-2 py-0.5 border ${
-                              ann.announcement_type === 'MANDATORY_REQUIREMENT'
-                                ? 'bg-red-950 border-red-500 text-red-400'
-                                : ann.announcement_type === 'TRAINING'
-                                ? 'bg-purple-950 border-purple-500 text-purple-400'
-                                : ann.announcement_type === 'PLACEMENT_REGISTRATION'
-                                ? 'bg-amber-950 border-amber-500 text-amber-400'
-                                : 'bg-muted border-border text-muted-foreground'
-                            }`}>
-                              {ann.announcement_type.replace('_', ' ')}
-                            </span>
-                            <span className="text-[9px] font-mono text-muted-foreground">
-                              {formattedDate}
-                            </span>
-                          </div>
-                          <h4 className="font-extrabold text-sm uppercase tracking-tight text-foreground line-clamp-1 mb-1">
-                            {ann.title}
-                          </h4>
-                          <p className="text-[11px] text-muted-foreground line-clamp-2 leading-snug mb-3">
-                            {ann.body}
-                          </p>
-                          
-                          {deadlineDate && (
-                            <div className={`flex items-center gap-1.5 text-[9px] font-bold uppercase mt-2 pt-2 border-t border-border/40 ${
-                              isDeadlinePassed ? "text-muted-foreground" : "text-amber-500"
-                            }`}>
-                              <Clock size={10} />
-                              <span>
-                                Deadline: {deadlineDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Right Column: Detailed View */}
-                  <div className="lg:col-span-7 border-2 border-border p-6 bg-card space-y-6">
-                    {selectedAnnouncement ? (
-                      <>
-                        <div className="space-y-4">
-                          <div className="flex flex-wrap gap-2 items-center justify-between border-b border-border pb-4">
-                            <span className={`text-[9px] font-black uppercase px-2 py-0.5 border ${
-                              selectedAnnouncement.announcement_type === 'MANDATORY_REQUIREMENT'
-                                ? 'bg-red-950/40 border-red-500/50 text-red-400'
-                                : selectedAnnouncement.announcement_type === 'TRAINING'
-                                ? 'bg-purple-950/40 border-purple-500/50 text-purple-400'
-                                : selectedAnnouncement.announcement_type === 'PLACEMENT_REGISTRATION'
-                                ? 'bg-amber-950/40 border-amber-500/50 text-amber-400'
-                                : 'bg-muted border-border text-muted-foreground'
-                            }`}>
-                              {selectedAnnouncement.announcement_type.replace('_', ' ')}
-                            </span>
-                            <span className="text-xs font-mono text-muted-foreground">
-                              Received: {new Date(selectedAnnouncement.created_at).toLocaleString("en-US", {
-                                month: "short",
-                                day: "numeric",
-                                year: "numeric",
-                                hour: "2-digit",
-                                minute: "2-digit"
-                              })}
-                            </span>
-                          </div>
-                          
-                          <h2 className="text-xl md:text-2xl font-black uppercase tracking-tight text-foreground leading-snug">
-                            {selectedAnnouncement.title}
-                          </h2>
-
-                          {selectedAnnouncement.deadline && (
-                            <div className="border-2 border-amber-500/30 bg-amber-500/5 p-4 flex items-center gap-3">
-                              <Clock size={18} className="text-amber-500 animate-pulse" />
-                              <div>
-                                <p className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">ACTION DEADLINE</p>
-                                <p className="text-xs font-black uppercase text-foreground">
-                                  {new Date(selectedAnnouncement.deadline).toLocaleString("en-US", {
-                                    weekday: "short",
-                                    month: "short",
-                                    day: "numeric",
-                                    hour: "2-digit",
-                                    minute: "2-digit"
-                                  })}
-                                </p>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="border-t border-border pt-4">
-                          <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">BODY // DETAILS</p>
-                          <div className="text-sm text-foreground/90 whitespace-pre-wrap leading-relaxed border-2 border-border p-4 bg-muted/10 font-medium">
-                            {selectedAnnouncement.body}
-                          </div>
-                        </div>
-
-                        {/* Attachments Section */}
-                        <div className="border-t border-border pt-4">
-                          <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">
-                            📄 ATTACHMENTS ({selectedAnnouncement.attachments.length})
-                          </p>
-                          {selectedAnnouncement.attachments.length === 0 ? (
-                            <p className="text-xs text-muted-foreground uppercase italic pl-2">No attachments available for this announcement.</p>
-                          ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              {selectedAnnouncement.attachments.map((att) => {
-                                const isExcel = att.file_name.toLowerCase().endsWith('.xlsx') || att.file_name.toLowerCase().endsWith('.xls');
-                                const downloadUrl = `${api.defaults.baseURL}/announcements/attachment/${att.id}`;
-                                return (
-                                  <div key={att.id} className="border border-border p-3 flex flex-col justify-between bg-muted/10">
-                                    <div className="flex items-start gap-2.5 mb-3">
-                                      <span className={`text-[9px] font-mono font-black border px-1.5 py-0.5 ${
-                                        isExcel ? "bg-emerald-950 border-emerald-500 text-emerald-400" : "bg-red-950 border-red-500 text-red-400"
-                                      }`}>
-                                        {isExcel ? "XLSX" : "PDF"}
-                                      </span>
-                                      <div className="min-w-0 flex-1">
-                                        <p className="text-xs font-bold text-foreground truncate uppercase" title={att.file_name}>
-                                          {att.file_name}
-                                        </p>
-                                        <p className="text-[10px] text-muted-foreground font-mono">
-                                          {att.file_type.replace('_', ' ')}
-                                        </p>
-                                      </div>
-                                    </div>
-                                    <div className="flex gap-2">
-                                      <a
-                                        href={downloadUrl}
-                                        download
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="flex-1 flex items-center justify-center gap-1.5 h-8 border border-border bg-background hover:bg-muted font-bold text-[10px] uppercase tracking-wider transition-colors"
-                                      >
-                                        <Download size={12} />
-                                        <span>Download</span>
-                                      </a>
-                                      <a
-                                        href={downloadUrl}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="flex items-center justify-center h-8 w-8 border border-border bg-background hover:bg-muted font-bold transition-colors"
-                                        title="Open in new window"
-                                      >
-                                        <Eye size={12} />
-                                      </a>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      </>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center text-center py-40 text-muted-foreground">
-                        <Megaphone size={32} className="mb-2 text-muted-foreground/60" />
-                        <p className="text-xs font-bold uppercase">Select an announcement to view details</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ==================== 1b. ANNOUNCEMENTS CENTER TAB ==================== */}
-        {activeTab === "announcements" && (
-          <div className="space-y-12 animate-fade-in">
-            <div className="border-b-2 border-border pb-6 flex justify-between items-end">
-              <div className="space-y-1">
-                <h1 className="text-[clamp(2rem,6vw,4rem)] font-extrabold tracking-tighter uppercase leading-none">
-                  ANNOUNCEMENTS
-                </h1>
-                <p className="text-xs text-muted-foreground uppercase tracking-widest">
-                  Important notices, training completion deadlines, and policy updates from the CDC
-                </p>
-              </div>
-              <button
-                onClick={handleTriggerSync}
-                disabled={syncing}
-                className="flex items-center justify-center h-14 px-6 border-2 border-border bg-background font-extrabold tracking-wider hover:bg-muted transition-all active:scale-95 uppercase text-sm disabled:opacity-50"
-              >
-                <span>{syncing ? "SYNCING..." : "SYNC PLACEMENTS"}</span>
-              </button>
-            </div>
-
-            {announcements.length === 0 ? (
-              <div className="flex flex-col items-center justify-center text-center py-32 border-2 border-dashed border-border bg-muted/10 gap-3">
-                <div className="h-12 w-12 bg-muted text-muted-foreground flex items-center justify-center border-2 border-border">
-                  <Megaphone size={24} />
-                </div>
-                <div>
-                  <p className="text-sm font-black uppercase tracking-wider text-muted-foreground">NO ANNOUNCEMENTS YET</p>
-                  <p className="text-[10px] text-muted-foreground/80 uppercase">General updates and notices from CDC will appear here.</p>
-                </div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                
-                {/* Left Column: Announcements List */}
-                <div className="lg:col-span-5 space-y-4 max-h-[70vh] overflow-y-auto pr-2">
-                  {announcements.map((ann) => {
-                    const isSelected = selectedAnnouncement?.id === ann.id;
-                    const formattedDate = new Date(ann.created_at).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric"
-                    });
-                    const deadline = ann.deadline;
-                    const deadlineDate = deadline ? new Date(deadline) : null;
-                    const isDeadlinePassed = deadlineDate ? deadlineDate.getTime() < Date.now() : false;
-
-                    return (
-                      <div
-                        key={ann.id}
-                        onClick={() => setSelectedAnnouncement(ann)}
-                        className={`border-2 p-4 cursor-pointer transition-all duration-200 relative ${
-                          isSelected
-                            ? "border-accent bg-accent/5"
-                            : "border-border hover:border-muted-foreground/50 bg-card"
-                        }`}
-                      >
-                        <div className="flex justify-between items-start mb-2">
-                          <span className={`text-[8px] font-black uppercase px-2 py-0.5 border ${
-                            ann.announcement_type === 'MANDATORY_REQUIREMENT'
-                              ? 'bg-red-950 border-red-500 text-red-400'
-                              : ann.announcement_type === 'TRAINING'
-                              ? 'bg-purple-950 border-purple-500 text-purple-400'
-                              : ann.announcement_type === 'PLACEMENT_REGISTRATION'
-                              ? 'bg-amber-950 border-amber-500 text-amber-400'
-                              : 'bg-muted border-border text-muted-foreground'
-                          }`}>
-                            {ann.announcement_type.replace('_', ' ')}
-                          </span>
-                          <span className="text-[9px] font-mono text-muted-foreground">
-                            {formattedDate}
-                          </span>
-                        </div>
-                        <h4 className="font-extrabold text-sm uppercase tracking-tight text-foreground line-clamp-1 mb-1">
-                          {ann.title}
-                        </h4>
-                        <p className="text-[11px] text-muted-foreground line-clamp-2 leading-snug mb-3">
-                          {ann.body}
-                        </p>
-                        
-                        {deadlineDate && (
-                          <div className={`flex items-center gap-1.5 text-[9px] font-bold uppercase mt-2 pt-2 border-t border-border/40 ${
-                            isDeadlinePassed ? "text-muted-foreground" : "text-amber-500"
-                          }`}>
-                            <Clock size={10} />
-                            <span>
-                              Deadline: {deadlineDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Right Column: Detailed View */}
-                <div className="lg:col-span-7 border-2 border-border p-6 bg-card space-y-6">
-                  {selectedAnnouncement ? (
-                    <>
-                      <div className="space-y-4">
-                        <div className="flex flex-wrap gap-2 items-center justify-between border-b border-border pb-4">
-                          <span className={`text-[9px] font-black uppercase px-2 py-0.5 border ${
-                            selectedAnnouncement.announcement_type === 'MANDATORY_REQUIREMENT'
-                              ? 'bg-red-950/40 border-red-500/50 text-red-400'
-                              : selectedAnnouncement.announcement_type === 'TRAINING'
-                              ? 'bg-purple-950/40 border-purple-500/50 text-purple-400'
-                              : selectedAnnouncement.announcement_type === 'PLACEMENT_REGISTRATION'
-                              ? 'bg-amber-950/40 border-amber-500/50 text-amber-400'
-                              : 'bg-muted border-border text-muted-foreground'
-                          }`}>
-                            {selectedAnnouncement.announcement_type.replace('_', ' ')}
-                          </span>
-                          <span className="text-xs font-mono text-muted-foreground">
-                            Received: {new Date(selectedAnnouncement.created_at).toLocaleString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              year: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit"
-                            })}
-                          </span>
-                        </div>
-                        
-                        <h2 className="text-xl md:text-2xl font-black uppercase tracking-tight text-foreground leading-snug">
-                          {selectedAnnouncement.title}
-                        </h2>
-
-                        {selectedAnnouncement.deadline && (
-                          <div className="border-2 border-amber-500/30 bg-amber-500/5 p-4 flex items-center gap-3">
-                            <Clock size={18} className="text-amber-500 animate-pulse" />
-                            <div>
-                              <p className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">ACTION DEADLINE</p>
-                              <p className="text-xs font-black uppercase text-foreground">
-                                {new Date(selectedAnnouncement.deadline).toLocaleString("en-US", {
-                                  weekday: "short",
-                                  month: "short",
-                                  day: "numeric",
-                                  hour: "2-digit",
-                                  minute: "2-digit"
-                                })}
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="border-t border-border pt-4">
-                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">BODY // DETAILS</p>
-                        <div className="text-sm text-foreground/90 whitespace-pre-wrap leading-relaxed border-2 border-border p-4 bg-muted/10 font-medium">
-                          {selectedAnnouncement.body}
-                        </div>
-                      </div>
-
-                      {/* Attachments Section */}
-                      <div className="border-t border-border pt-4">
-                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">
-                          📄 ATTACHMENTS ({selectedAnnouncement.attachments.length})
-                        </p>
-                        {selectedAnnouncement.attachments.length === 0 ? (
-                          <p className="text-xs text-muted-foreground uppercase italic pl-2">No attachments available for this announcement.</p>
-                        ) : (
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {selectedAnnouncement.attachments.map((att) => {
-                              const isExcel = att.file_name.toLowerCase().endsWith('.xlsx') || att.file_name.toLowerCase().endsWith('.xls');
-                              const downloadUrl = `${api.defaults.baseURL}/announcements/attachment/${att.id}`;
-                              return (
-                                <div key={att.id} className="border border-border p-3 flex flex-col justify-between bg-muted/10">
-                                  <div className="flex items-start gap-2.5 mb-3">
-                                    <span className={`text-[9px] font-mono font-black border px-1.5 py-0.5 ${
-                                      isExcel ? "bg-emerald-950 border-emerald-500 text-emerald-400" : "bg-red-950 border-red-500 text-red-400"
-                                    }`}>
-                                      {isExcel ? "XLSX" : "PDF"}
-                                    </span>
-                                    <div className="min-w-0 flex-1">
-                                      <p className="text-xs font-bold text-foreground truncate uppercase" title={att.file_name}>
-                                        {att.file_name}
-                                      </p>
-                                      <p className="text-[10px] text-muted-foreground font-mono">
-                                        {att.file_type.replace('_', ' ')}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="flex gap-2">
-                                    <a
-                                      href={downloadUrl}
-                                      download
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="flex-1 flex items-center justify-center gap-1.5 h-8 border border-border bg-background hover:bg-muted font-bold text-[10px] uppercase tracking-wider transition-colors"
-                                    >
-                                      <Download size={12} />
-                                      <span>Download</span>
-                                    </a>
-                                    <a
-                                      href={downloadUrl}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="flex items-center justify-center h-8 w-8 border border-border bg-background hover:bg-muted font-bold transition-colors"
-                                      title="Open in new window"
-                                    >
-                                      <Eye size={12} />
-                                    </a>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center text-center py-40 text-muted-foreground">
-                      <Megaphone size={32} className="mb-2 text-muted-foreground/60" />
-                      <p className="text-xs font-bold uppercase">Select an announcement to view details</p>
-                    </div>
-                  )}
-                </div>
+            {/* Empty state: no decisions pending and no events */}
+            {activeDecisionPendingCompanies.length === 0 && todayEvents.length === 0 && (
+              <div className="text-center py-12 border-2 border-dashed border-border text-muted-foreground font-bold uppercase tracking-wider text-xs">
+                No pending decisions. You are all caught up.
               </div>
             )}
           </div>
         )}
+
+        {/* ==================== 1b. ANNOUNCEMENTS CENTER TAB (stub kept for URL compat) ==================== */}
+        {activeTab === "announcements" && (
+          <div className="flex flex-col items-center justify-center text-center py-32 border-2 border-dashed border-border bg-muted/10 gap-3">
+            <Megaphone size={32} className="text-muted-foreground/40" />
+            <p className="text-sm font-black uppercase tracking-wider text-muted-foreground">ANNOUNCEMENTS MOVED</p>
+            <p className="text-[10px] text-muted-foreground/80 uppercase max-w-xs">
+              General notices from CDC now appear as urgent banners in the Action Center when they require your attention.
+            </p>
+            <a href="/dashboard" className="mt-4 border-2 border-border bg-foreground text-background text-xs font-bold tracking-widest px-6 py-3 hover:bg-accent hover:text-black hover:border-accent transition-colors uppercase">
+              Go to Action Center
+            </a>
+          </div>
+        )}
+
 
         {/* ==================== 2. OPPORTUNITIES TAB ==================== */}
         {activeTab === "opportunities" && (
