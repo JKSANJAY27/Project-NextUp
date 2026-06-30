@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase";
 import api from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDashboard, CACHE_KEYS } from "@/lib/queries";
+import { SkeletonDashboard } from "@/components/SkeletonLoader";
 import { 
   Plus, 
   Lock, 
@@ -1092,7 +1093,12 @@ function DashboardPageContent() {
         )}
 
         {/* ==================== 1. ACTION CENTER TAB ==================== */}
-        {activeTab === "action-center" && (
+        {activeTab === "action-center" && loading && (
+          <SkeletonDashboard />
+        )}
+
+        {/* ==================== 1. ACTION CENTER TAB ==================== */}
+        {activeTab === "action-center" && !loading && (
           <div className="space-y-12">
             <div className="flex justify-between items-end border-b-2 border-border pb-6">
               <div className="space-y-1">

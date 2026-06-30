@@ -7,9 +7,9 @@ import { useAppStore } from "@/lib/store";
 import { deriveKey, exportKeyToHex, encryptData } from "@/lib/crypto";
 import { supabase } from "@/lib/supabase";
 import api from "@/lib/api";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, ExternalLink } from "lucide-react";
 import CrowdCanvas from "@/components/CrowdCanvas";
-
+import TermsModal from "@/components/TermsModal";
 
 async function getDeterministicSalt(email: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -30,30 +30,52 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  // Terms modal state
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+
+  // Inline validation state
+  const [passwordStrength, setPasswordStrength] = useState<"" | "weak" | "ok" | "strong">("");
+
+  const checkPasswordStrength = (pw: string) => {
+    if (pw.length === 0) { setPasswordStrength(""); return; }
+    if (pw.length < 6) { setPasswordStrength("weak"); return; }
+    const hasUpper = /[A-Z]/.test(pw);
+    const hasNum = /[0-9]/.test(pw);
+    const hasSpecial = /[^A-Za-z0-9]/.test(pw);
+    const strong = hasUpper && hasNum && hasSpecial && pw.length >= 10;
+    setPasswordStrength(strong ? "strong" : "ok");
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setSuccess("");
 
     if (!email || !password || !confirmPassword) {
-      setError("ALL FIELDS ARE REQUIRED.");
+      setError("Please fill in all fields.");
+      return;
+    }
+
+    if (!agreedToTerms) {
+      setShowTermsModal(true);
       return;
     }
 
     if (password !== confirmPassword) {
-      setError("PASSWORDS DO NOT MATCH.");
+      setError("Passwords do not match. Please try again.");
       return;
     }
 
     if (password.length < 6) {
-      setError("PASSWORD MUST BE AT LEAST 6 CHARACTERS.");
+      setError("Password must be at least 6 characters long.");
       return;
     }
 
     setLoading(true);
 
     try {
-      // 1. Client-side derive the AES-256 key using PBKDF2 with deterministic salt
+      // 1. Derive the AES-256 encryption key from the password
       const emailSalt = await getDeterministicSalt(email);
       const key = await deriveKey(password, emailSalt);
       const keyHex = await exportKeyToHex(key);
@@ -70,20 +92,19 @@ export default function RegisterPage() {
 
       const access_token = data.session?.access_token;
       if (!access_token) {
-        // In case Supabase email verification is enabled and no session is returned immediately
-        setSuccess("REGISTRATION SUCCESSFUL! PLEASE CHECK YOUR EMAIL FOR VERIFICATION LINK.");
+        setSuccess("Account created! Please check your email for a verification link.");
         setLoading(false);
         return;
       }
 
-      // Save credentials in state store temporarily (in-memory only)
+      // Save credentials in state store (in-memory only)
       setToken(access_token);
       setEncryptionKey(key, keyHex);
 
-      // 3. Encrypt initial sensitive profile data locally (only Neo ID)
+      // 3. Encrypt initial sensitive profile data locally
       const encryptedNeoId = await encryptData("", key);
 
-      // 4. Initialize user profile with encrypted and default plaintext fields
+      // 4. Initialise user profile
       const profileRes = await api.put(
         "/users/me",
         {
@@ -91,7 +112,7 @@ export default function RegisterPage() {
           branch: "Unknown",
           batch_year: new Date().getFullYear(),
           neo_id_enc: encryptedNeoId,
-          neo_id: "", // plaintext empty to avoid initial hashing crash
+          neo_id: "",
           cgpa: 0.0,
           tenth_marks: 0.0,
           twelfth_marks: 0.0,
@@ -100,7 +121,6 @@ export default function RegisterPage() {
         }
       );
 
-      // Save user to Zustand state
       setUser(profileRes.data);
 
       // Redirect to profile for onboarding
@@ -108,140 +128,236 @@ export default function RegisterPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
       console.error("Registration failed:", err);
-      setError(err.message || "REGISTRATION FAILED. TRY AGAIN.");
+      setError(err.message || "Registration failed. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
+  const strengthColor =
+    passwordStrength === "strong"
+      ? "bg-green-500"
+      : passwordStrength === "ok"
+      ? "bg-accent"
+      : "bg-red-500";
+
+  const strengthWidth =
+    passwordStrength === "strong"
+      ? "w-full"
+      : passwordStrength === "ok"
+      ? "w-2/3"
+      : passwordStrength === "weak"
+      ? "w-1/3"
+      : "w-0";
+
   return (
     <main className="flex min-h-screen flex-col bg-background text-foreground md:flex-row">
+      {/* Terms modal */}
+      <TermsModal
+        open={showTermsModal}
+        agreed={agreedToTerms}
+        onToggle={setAgreedToTerms}
+        onClose={() => setShowTermsModal(false)}
+      />
+
       {/* Visual panel */}
       <section className="relative overflow-hidden flex flex-col justify-between border-b-2 border-border p-8 bg-accent text-black md:w-1/2 md:border-b-0 md:border-r-2 md:p-16">
         <div className="relative z-10">
-          <h1 className="text-3xl font-extrabold tracking-tighter uppercase leading-none">
+          <Link href="/" className="text-3xl font-extrabold tracking-tighter uppercase leading-none">
             NEXTUP.AI
-          </h1>
+          </Link>
         </div>
         <div className="relative z-10 my-16 space-y-4">
           <div className="text-[clamp(2rem,6vw,5rem)] font-extrabold tracking-tighter uppercase leading-[0.8]">
-            ZERO
+            TRACK
             <br />
-            KNOWLEDGE
+            YOUR
             <br />
-            PLACEMENT
-            <br />
-            SYSTEM
+            PLACEMENTS
           </div>
-          <p className="max-w-md text-sm font-medium uppercase tracking-tight leading-snug">
-            Your credentials, marks, and job status are encrypted client-side. We store only ciphertext. Even the developers cannot read your data.
+          <p className="max-w-md text-sm font-medium tracking-tight leading-snug">
+            Create your free account and start tracking shortlists, eligibility, and applications — all in one place.
           </p>
         </div>
         <div className="relative z-10">
           <span className="text-xs font-bold tracking-widest uppercase">
-            🔒 END-TO-END ENCRYPTED
+            🔒 Your data is encrypted in your browser
           </span>
         </div>
-        
+
         {/* Animated Crowd Canvas */}
         <CrowdCanvas src="/images/peeps/all-peeps.png" rows={15} cols={7} />
       </section>
 
-      {/* Register Form side panel */}
+      {/* Register Form */}
       <section className="flex flex-col justify-center p-8 md:w-1/2 md:p-16 lg:p-24">
-        <div className="max-w-md w-full mx-auto space-y-12">
+        <div className="max-w-md w-full mx-auto space-y-10">
           <div className="space-y-4">
-            <h2 className="text-4xl font-extrabold tracking-tighter uppercase leading-none">
-              CREATE ACCOUNT
-            </h2>
+            <h1 className="text-4xl font-extrabold tracking-tighter uppercase leading-none">
+              Create Account
+            </h1>
             <p className="text-sm font-bold text-muted-foreground uppercase tracking-wider">
-              Register using your college email address
+              Register with your VIT college email
             </p>
           </div>
 
           {error && (
-            <div className="border-2 border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-600 uppercase tracking-wider">
-              ERROR: {error}
+            <div
+              role="alert"
+              className="border-2 border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-500 tracking-wider"
+            >
+              {error}
             </div>
           )}
 
           {success && (
-            <div className="border-2 border-accent bg-accent/10 p-4 text-xs font-bold text-accent uppercase tracking-wider">
+            <div
+              role="status"
+              className="border-2 border-accent bg-accent/10 p-4 text-xs font-bold text-accent tracking-wider"
+            >
               {success}
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-8">
+          <form onSubmit={handleSubmit} className="space-y-8" noValidate>
+            {/* Email */}
             <div className="space-y-2">
-              <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
-                COLLEGE EMAIL
+              <label htmlFor="reg-email" className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
+                College Email
               </label>
               <input
+                id="reg-email"
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="STUDENT@VIT.AC.IN"
-                className="w-full h-16 border-b-2 border-border bg-transparent text-xl font-bold uppercase tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors"
+                placeholder="student@vit.ac.in"
+                autoComplete="email"
+                className="w-full h-14 border-b-2 border-border bg-transparent text-lg font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors"
               />
             </div>
 
+            {/* Password */}
             <div className="space-y-2">
-              <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
-                PASSWORD
+              <label htmlFor="reg-password" className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
+                Password
               </label>
               <div className="relative">
                 <input
+                  id="reg-password"
                   type={showPassword ? "text" : "password"}
                   required
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full h-16 border-b-2 border-border bg-transparent text-xl font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors pr-12"
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    checkPasswordStrength(e.target.value);
+                  }}
+                  placeholder="Min. 6 characters"
+                  autoComplete="new-password"
+                  className="w-full h-14 border-b-2 border-border bg-transparent text-lg font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors pr-12"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-muted-foreground hover:text-accent transition-colors"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
                 >
                   {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                 </button>
               </div>
+              {/* Password strength indicator */}
+              {passwordStrength && (
+                <div className="space-y-1">
+                  <div className="h-1 w-full bg-muted rounded-full overflow-hidden">
+                    <div className={`h-full ${strengthColor} ${strengthWidth} transition-all duration-300`} />
+                  </div>
+                  <p className="text-[10px] text-muted-foreground capitalize">
+                    Password strength:{" "}
+                    <span className={passwordStrength === "strong" ? "text-green-500" : passwordStrength === "ok" ? "text-accent" : "text-red-500"}>
+                      {passwordStrength}
+                    </span>
+                  </p>
+                </div>
+              )}
             </div>
 
+            {/* Confirm Password */}
             <div className="space-y-2">
-              <label className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
-                CONFIRM PASSWORD
+              <label htmlFor="reg-confirm-password" className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
+                Confirm Password
               </label>
               <div className="relative">
                 <input
+                  id="reg-confirm-password"
                   type={showPassword ? "text" : "password"}
                   required
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full h-16 border-b-2 border-border bg-transparent text-xl font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors pr-12"
+                  placeholder="Repeat your password"
+                  autoComplete="new-password"
+                  className={`w-full h-14 border-b-2 bg-transparent text-lg font-bold tracking-tight placeholder-zinc-700 focus:outline-none px-2 transition-colors pr-12 ${
+                    confirmPassword && confirmPassword !== password
+                      ? "border-red-500 focus:border-red-500"
+                      : confirmPassword && confirmPassword === password
+                      ? "border-green-500 focus:border-green-500"
+                      : "border-border focus:border-accent"
+                  }`}
                 />
               </div>
+              {confirmPassword && confirmPassword !== password && (
+                <p className="text-[10px] text-red-500 font-bold">Passwords do not match</p>
+              )}
+            </div>
+
+            {/* Terms agreement */}
+            <div className="space-y-2">
+              <label className="flex items-start gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={agreedToTerms}
+                  onChange={(e) => setAgreedToTerms(e.target.checked)}
+                  className="mt-1 h-4 w-4 accent-yellow-400 cursor-pointer shrink-0"
+                  id="terms-checkbox"
+                  required
+                />
+                <span className="text-xs text-muted-foreground leading-relaxed group-hover:text-foreground transition-colors">
+                  I agree to the{" "}
+                  <button
+                    type="button"
+                    onClick={() => setShowTermsModal(true)}
+                    className="text-accent underline hover:no-underline font-bold"
+                  >
+                    Terms of Service
+                  </button>{" "}
+                  and{" "}
+                  <Link
+                    href="/privacy"
+                    target="_blank"
+                    className="text-accent underline hover:no-underline font-bold inline-flex items-center gap-0.5"
+                  >
+                    Privacy Policy <ExternalLink size={10} />
+                  </Link>
+                </span>
+              </label>
             </div>
 
             <button
               type="submit"
-              disabled={loading}
-              className="flex w-full items-center justify-center h-16 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
+              disabled={loading || !agreedToTerms}
+              className="flex w-full items-center justify-center h-14 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all disabled:opacity-40 disabled:pointer-events-none"
             >
-              {loading ? "INITIALIZING SECURE ENV..." : "REGISTER & DECRYPT"}
+              {loading ? "Creating your account..." : "Create Account"}
             </button>
           </form>
 
           <div className="text-center">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
-              ALREADY REGISTERED?{" "}
+              Already have an account?{" "}
               <Link
                 href="/login"
                 className="text-foreground hover:text-accent underline transition-colors"
               >
-                LOGIN HERE
+                Sign in
               </Link>
             </p>
           </div>

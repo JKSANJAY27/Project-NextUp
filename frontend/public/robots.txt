@@ -1,0 +1,76 @@
+# NEXTUP.AI — robots.txt
+# Allow AI crawlers and search engines to index public-facing pages.
+# Block all bots from authenticated/private areas.
+
+User-agent: *
+Allow: /
+Allow: /login
+Allow: /register
+Allow: /terms
+Allow: /privacy
+Disallow: /dashboard
+Disallow: /profile
+Disallow: /tracking
+Disallow: /calendar
+Disallow: /ai-toolkit
+Disallow: /resume
+Disallow: /forgot-password
+Disallow: /reset-password
+Disallow: /api/
+
+# Explicitly allow major AI crawlers on all public pages
+User-agent: GPTBot
+Allow: /
+Allow: /login
+Allow: /register
+Allow: /terms
+Allow: /privacy
+Disallow: /dashboard
+Disallow: /profile
+Disallow: /tracking
+Disallow: /calendar
+Disallow: /ai-toolkit
+Disallow: /resume
+
+User-agent: ClaudeBot
+Allow: /
+Allow: /login
+Allow: /register
+Allow: /terms
+Allow: /privacy
+Disallow: /dashboard
+Disallow: /profile
+Disallow: /tracking
+Disallow: /calendar
+Disallow: /ai-toolkit
+Disallow: /resume
+
+User-agent: anthropic-ai
+Allow: /
+Disallow: /dashboard
+Disallow: /profile
+Disallow: /tracking
+Disallow: /calendar
+Disallow: /ai-toolkit
+Disallow: /resume
+
+User-agent: Google-Extended
+Allow: /
+Disallow: /dashboard
+Disallow: /profile
+Disallow: /tracking
+Disallow: /calendar
+Disallow: /ai-toolkit
+Disallow: /resume
+
+User-agent: PerplexityBot
+Allow: /
+Disallow: /dashboard
+Disallow: /profile
+Disallow: /tracking
+Disallow: /calendar
+Disallow: /ai-toolkit
+Disallow: /resume
+
+# Sitemap
+Sitemap: https://nextup.ai/sitemap.xml

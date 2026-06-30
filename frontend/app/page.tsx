@@ -1,46 +1,157 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { useAppStore } from "@/lib/store";
-import { ShieldCheck, ArrowRight, Zap, RefreshCw, Key } from "lucide-react";
+import {
+  ArrowRight,
+  Bell,
+  CheckCircle,
+  ChevronDown,
+  ClipboardList,
+  Filter,
+  Mail,
+  Shield,
+  Sparkles,
+  Calendar,
+} from "lucide-react";
+import Tooltip from "@/components/Tooltip";
 
+// ─── FAQ Data ─────────────────────────────────────────────────────────────────
+const faqs = [
+  {
+    q: "What exactly does NEXTUP.AI do?",
+    a: "NEXTUP.AI is a smart placement tracker for VIT Vellore students. It automatically reads your CDC emails, detects when you're shortlisted for a company, checks if you're eligible for upcoming drives, and keeps all your applications organised in one place — so you never miss an opportunity.",
+  },
+  {
+    q: "Is NEXTUP.AI free to use?",
+    a: "Yes, completely free. NEXTUP.AI is built and maintained by VIT students for VIT students. There are no subscription fees, hidden charges, or premium tiers.",
+  },
+  {
+    q: "How does the automatic shortlist detection work?",
+    a: "You connect your college Gmail account once. NEXTUP.AI then monitors incoming CDC emails in the background. When a shortlist Excel sheet arrives, the platform checks whether your registration number appears — and notifies you instantly, without you having to open the email or manually scan the spreadsheet.",
+  },
+  {
+    q: "Is my personal data safe?",
+    a: "Your most sensitive data — registration number, CGPA, marks — is encrypted right in your browser before anything is sent to our servers. We physically cannot read it. Even if someone accessed our database, they would only see random encrypted blobs. You hold the only key.",
+  },
+  {
+    q: "What happens if I change my password?",
+    a: "Your encryption key is derived from your password. If you change it, you'll need to re-enter your registration number, CGPA, and marks — because the old encrypted data can't be read with the new key. The app warns you clearly before any password change.",
+  },
+  {
+    q: "What is the AI Toolkit?",
+    a: "The AI Toolkit is a local, in-browser AI feature that analyses job descriptions and compares them with your resume. It identifies keyword gaps, suggests improvements, and helps you tailor your resume for specific drives — all without sending your data to any external AI service.",
+  },
+  {
+    q: "Does it work for all VIT branches and programmes?",
+    a: "Yes. NEXTUP.AI supports all branches (CSE, ECE, EEE, Mechanical, Civil, etc.), all degree types (BTech, MTech, MCA, MBA), and all batch years. Eligibility checks automatically account for your specific branch and academic profile.",
+  },
+  {
+    q: "Can I use NEXTUP.AI on my phone?",
+    a: "Yes, NEXTUP.AI is fully responsive and works on mobile browsers. The dashboard, application tracker, and calendar all work on smaller screens.",
+  },
+  {
+    q: "Is NEXTUP.AI an official VIT or CDC product?",
+    a: "No. NEXTUP.AI is a student-built project and is not affiliated with, endorsed by, or officially connected to VIT Vellore or the Career Development Centre (CDC). Always verify placement information with the official VIT CDC portal.",
+  },
+];
+
+// ─── FAQ Item ────────────────────────────────────────────────────────────────
+function FAQItem({ q, a }: { q: string; a: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-b border-border last:border-0">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-start justify-between gap-4 py-5 text-left hover:text-accent transition-colors group"
+        aria-expanded={open}
+      >
+        <span className="text-sm font-bold tracking-tight">{q}</span>
+        <ChevronDown
+          size={18}
+          className={`shrink-0 mt-0.5 transition-transform duration-200 text-muted-foreground group-hover:text-accent ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+      <div
+        className={`overflow-hidden transition-all duration-200 ${
+          open ? "max-h-96 pb-5" : "max-h-0"
+        }`}
+      >
+        <p className="text-sm text-muted-foreground leading-relaxed">{a}</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Feature Card (unused standalone, features rendered inline) ──────────────
+// kept for reference; see features grid section below
+
+
+// ─── Main Page ───────────────────────────────────────────────────────────────
 export default function LandingPage() {
   const { token } = useAppStore();
 
   return (
     <main className="min-h-screen bg-background text-foreground flex flex-col font-sans">
-      
-      {/* Navigation Top Bar */}
-      <header className="flex h-20 items-center justify-between border-b-2 border-border px-8 md:px-16 w-full bg-background z-10">
-        <span className="text-xl font-extrabold tracking-tighter uppercase text-foreground leading-none">
-          NEXTUP<span className="text-accent">.AI</span>
-        </span>
-        <nav className="flex items-center gap-6">
-          <Link href="/login" className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors">
-            LOGIN
+
+      {/* Navigation */}
+      <header className="flex h-20 items-center justify-between border-b-2 border-border px-8 md:px-16 w-full bg-background z-10 sticky top-0 backdrop-blur-md">
+        <Link href="/" aria-label="NEXTUP.AI home">
+          <span className="text-xl font-extrabold tracking-tighter uppercase text-foreground leading-none">
+            NEXTUP<span className="text-accent">.AI</span>
+          </span>
+        </Link>
+        <nav className="flex items-center gap-6" aria-label="Primary navigation">
+          <Link
+            href="#features"
+            className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors hidden md:block"
+          >
+            Features
           </Link>
-          <Link 
+          <Link
+            href="#how-it-works"
+            className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors hidden md:block"
+          >
+            How It Works
+          </Link>
+          <Link
+            href="#faq"
+            className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors hidden md:block"
+          >
+            FAQ
+          </Link>
+          <Link
+            href="/login"
+            className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors"
+          >
+            Sign In
+          </Link>
+          <Link
             href={token ? "/dashboard" : "/register"}
             className="flex items-center justify-center border-2 border-border bg-foreground text-background px-6 h-10 text-xs font-bold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95"
           >
-            {token ? "DASHBOARD" : "REGISTER"}
+            {token ? "Dashboard" : "Get Started Free"}
           </Link>
         </nav>
       </header>
 
-      {/* Infinite scrolling marquee header */}
-      <div className="border-b-2 border-border bg-accent py-4 overflow-hidden select-none">
+      {/* Marquee — benefit-focused, no jargon */}
+      <div className="border-b-2 border-border bg-accent py-4 overflow-hidden select-none" aria-hidden="true">
         <div className="flex w-max animate-marquee">
           {Array(4).fill(0).map((_, i) => (
             <div key={i} className="flex items-center gap-16 text-black font-extrabold text-2xl tracking-tighter uppercase shrink-0 pr-16">
-              <span>ZERO KNOWLEDGE ARCHITECTURE</span>
+              <span>Never Miss a Shortlist</span>
               <span>✦</span>
-              <span>VIT CDC AUTOMATION</span>
+              <span>Track All Your Applications</span>
               <span>✦</span>
-              <span>LOCAL AES-256 DECRYPTION</span>
+              <span>Smart JD Keyword Matching</span>
               <span>✦</span>
-              <span>INTELLIGENT ELIGIBILITY CHECKER</span>
+              <span>Automatic Email Parsing</span>
+              <span>✦</span>
+              <span>Private &amp; Secure by Design</span>
               <span>✦</span>
             </div>
           ))}
@@ -48,116 +159,333 @@ export default function LandingPage() {
       </div>
 
       {/* Hero Section */}
-      <section className="flex flex-col items-center justify-center text-center py-24 px-8 border-b-2 border-border max-w-[95vw] mx-auto w-full">
+      <section
+        className="flex flex-col items-center justify-center text-center py-24 px-8 border-b-2 border-border max-w-[95vw] mx-auto w-full"
+        aria-labelledby="hero-heading"
+      >
         <div className="space-y-6 max-w-4xl">
           <div className="inline-flex items-center gap-2 border-2 border-border bg-muted/30 px-4 py-2 text-xs font-extrabold tracking-widest text-accent uppercase">
-            <ShieldCheck size={14} />
-            <span>🔒 ZERO-KNOWLEDGE PLACEMENT OS</span>
+            <Bell size={14} />
+            <span>Free Placement Tracker for VIT Vellore Students</span>
           </div>
-          
-          <h1 className="text-[clamp(2.5rem,10vw,8rem)] font-extrabold tracking-tighter uppercase leading-[0.8] text-foreground">
-            AUTOMATE
+
+          <h1
+            id="hero-heading"
+            className="text-[clamp(2.5rem,10vw,8rem)] font-extrabold tracking-tighter uppercase leading-[0.85] text-foreground"
+          >
+            Never Miss
             <br />
-            YOUR PLACEMENTS
+            a Shortlist
           </h1>
-          
-          <p className="text-lg md:text-xl font-medium text-muted-foreground max-w-2xl mx-auto uppercase tracking-wide leading-relaxed">
-            Centralize your CDC emails, track shortlist Excel sheets, analyze JD keywords, and tailor resumes—all with zero-knowledge encryption keys held only by you.
+
+          <p className="text-lg md:text-xl font-medium text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+            NEXTUP.AI automatically reads your CDC emails, detects shortlists, checks eligibility,
+            and keeps all your applications organised — so you can focus on preparing, not tracking.
           </p>
-          
+
           <div className="pt-8 flex flex-col sm:flex-row justify-center gap-4">
             <Link
               href={token ? "/dashboard" : "/register"}
               className="flex items-center justify-center gap-3 h-16 px-10 border-2 border-border bg-foreground text-background text-sm font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all"
+              aria-label={token ? "Go to dashboard" : "Register for free"}
             >
-              <span>{token ? "ENTER SYSTEM" : "SECURE PLACEMENT ACCESS"}</span>
+              <span>{token ? "Go to Dashboard" : "Get Started — It's Free"}</span>
               <ArrowRight size={16} />
             </Link>
             <Link
-              href="#security"
+              href="#how-it-works"
               className="flex items-center justify-center h-16 px-10 border-2 border-border bg-transparent text-foreground text-sm font-extrabold tracking-widest uppercase hover:bg-muted transition-all active:scale-95"
             >
-              PRIVACY DEEP DIVE
+              See How It Works
             </Link>
           </div>
         </div>
       </section>
 
       {/* Features Grid */}
-      <section className="grid grid-cols-1 md:grid-cols-3 border-b-2 border-border max-w-[95vw] mx-auto w-full">
-        <div className="border-b-2 md:border-b-0 md:border-r-2 border-border p-12 space-y-6 hover:bg-muted/10 transition-colors">
-          <div className="h-12 w-12 bg-accent text-black flex items-center justify-center border-2 border-black">
-            <Zap size={20} />
-          </div>
-          <h3 className="text-2xl font-bold uppercase tracking-tighter">ELIGIBILITY FILTER</h3>
-          <p className="text-sm text-muted-foreground uppercase tracking-tight leading-snug">
-            Compare college placement requirements (CGPA, Branch, Arrears) automatically. Calculations run on your device or in-memory, without sharing your raw metrics.
+      <section
+        id="features"
+        className="py-16 px-8 max-w-[95vw] mx-auto w-full border-b-2 border-border"
+        aria-labelledby="features-heading"
+      >
+        <div className="text-center mb-12 space-y-3">
+          <p className="text-xs font-extrabold tracking-widest text-accent uppercase">What you get</p>
+          <h2 id="features-heading" className="text-3xl md:text-4xl font-extrabold tracking-tighter uppercase">
+            Everything You Need for Placements
+          </h2>
+          <p className="text-sm text-muted-foreground max-w-xl mx-auto">
+            One platform to manage your entire campus placement journey — from the first CDC email to the final offer.
           </p>
         </div>
-        <div className="border-b-2 md:border-b-0 md:border-r-2 border-border p-12 space-y-6 hover:bg-muted/10 transition-colors">
-          <div className="h-12 w-12 bg-accent text-black flex items-center justify-center border-2 border-black">
-            <RefreshCw size={20} />
-          </div>
-          <h3 className="text-2xl font-bold uppercase tracking-tighter">GMAIL SYNC ENGINE</h3>
-          <p className="text-sm text-muted-foreground uppercase tracking-tight leading-snug">
-            Poll CDC emails and parse shortlist Excels automatically. When a file arrives, the client compares your Neo ID locally, giving you shortlist notifications instantly.
-          </p>
-        </div>
-        <div className="p-12 space-y-6 hover:bg-muted/10 transition-colors">
-          <div className="h-12 w-12 bg-accent text-black flex items-center justify-center border-2 border-black">
-            <Key size={20} />
-          </div>
-          <h3 className="text-2xl font-bold uppercase tracking-tighter">LOCAL ENCRYPTION</h3>
-          <p className="text-sm text-muted-foreground uppercase tracking-tight leading-snug">
-            PBKDF2 key derivation from your password creates a 256-bit AES key. This key encrypts your Neo ID and CGPA locally, so the server only receives random hex blobs.
-          </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0 border-2 border-border">
+          {[
+            {
+              icon: <Bell size={20} />,
+              title: "Instant Shortlist Alerts",
+              description:
+                "Get notified the moment a CDC shortlist email arrives and your name is found. No more manually checking spreadsheets or refreshing your inbox.",
+              tooltip: "Automatically scans incoming CDC emails and cross-checks your registration number against shortlist Excel sheets in seconds.",
+            },
+            {
+              icon: <Filter size={20} />,
+              title: "Eligibility Checker",
+              description:
+                "See at a glance whether you're eligible for each drive — based on your CGPA, branch, arrears, and other criteria set by the company.",
+              tooltip: "Compares the company's eligibility rules with your profile. Marks drives as Eligible, Ineligible, or Needs Verification.",
+            },
+            {
+              icon: <ClipboardList size={20} />,
+              title: "Application Tracker",
+              description:
+                "Track every application across stages: Applied → Shortlisted → Test → Interview → Offer. See your full placement history at a glance.",
+              tooltip: "A Kanban-style tracker for every company you've applied to, with status updates, notes, and timeline views.",
+            },
+            {
+              icon: <Mail size={20} />,
+              title: "Automatic Email Parsing",
+              description:
+                "Connect your college Gmail once. NEXTUP.AI reads CDC placement emails, extracts company details, deadlines, and test dates automatically.",
+              tooltip: "Uses your Gmail OAuth to read only CDC-tagged emails. No personal emails are accessed or stored.",
+            },
+            {
+              icon: <Calendar size={20} />,
+              title: "Placement Calendar",
+              description:
+                "All your upcoming tests, interviews, and deadlines in one visual calendar. Never double-book or forget a registration cutoff again.",
+              tooltip: "Auto-populated from parsed CDC emails. You can also add manual events and set reminders.",
+            },
+            {
+              icon: <Sparkles size={20} />,
+              title: "AI Resume Toolkit",
+              description:
+                "Paste a job description and the AI analyses your resume for keyword gaps, skill matches, and ATS-optimisation tips — all running locally in your browser.",
+              tooltip: "Downloads a small AI model (~50–200 MB) that runs 100% in your browser. No resume text is ever sent to external servers.",
+            },
+          ].map((feature, i) => (
+            <div
+              key={i}
+              className={`border-border p-8 space-y-4 hover:bg-muted/10 hover:border-accent/30 transition-all group
+                ${i < 3 ? "border-b-2 md:border-b-2 lg:border-b-2" : ""}
+                ${i % 3 !== 2 ? "md:border-r-0 lg:border-r-2" : ""}
+                ${i % 2 !== 1 ? "md:border-r-2" : ""}
+                border-r-0 border-b-2 last:border-b-0
+              `}
+            >
+              <div className="flex items-start justify-between">
+                <div className="h-12 w-12 bg-accent text-black flex items-center justify-center border-2 border-black shrink-0">
+                  {feature.icon}
+                </div>
+                <Tooltip content={feature.tooltip} position="top">
+                  <span
+                    className="text-xs font-bold border border-border rounded-full px-1.5 py-0.5 text-muted-foreground hover:text-accent hover:border-accent cursor-help transition-colors opacity-0 group-hover:opacity-100"
+                    aria-label={`More info about ${feature.title}`}
+                  >
+                    ?
+                  </span>
+                </Tooltip>
+              </div>
+              <h3 className="text-xl font-bold uppercase tracking-tighter">{feature.title}</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">{feature.description}</p>
+            </div>
+          ))}
         </div>
       </section>
 
-      {/* Security Architecture Page */}
-      <section id="security" className="py-24 px-8 max-w-4xl mx-auto space-y-12">
-        <div className="text-center space-y-4">
-          <div className="inline-flex items-center gap-2 border border-border bg-muted/30 px-3 py-1 text-[10px] font-extrabold tracking-widest text-accent uppercase">
-            <span>🛡️ SECURITY SPECIFICATION</span>
-          </div>
-          <h2 className="text-4xl font-extrabold tracking-tighter uppercase">
-            PRIVACY-FIRST ZERO KNOWLEDGE DESIGN
+      {/* How It Works */}
+      <section
+        id="how-it-works"
+        className="py-20 px-8 max-w-[95vw] mx-auto w-full border-b-2 border-border"
+        aria-labelledby="how-it-works-heading"
+      >
+        <div className="text-center mb-16 space-y-3">
+          <p className="text-xs font-extrabold tracking-widest text-accent uppercase">Simple Setup</p>
+          <h2 id="how-it-works-heading" className="text-3xl md:text-4xl font-extrabold tracking-tighter uppercase">
+            Up &amp; Running in 3 Steps
           </h2>
         </div>
 
-        <div className="border-2 border-border p-8 md:p-12 bg-muted/5 space-y-8 uppercase text-xs tracking-wider leading-relaxed">
-          <div className="space-y-2">
-            <h4 className="font-extrabold text-foreground text-sm text-accent">1. PBKDF2 KEY DERIVATION</h4>
-            <p className="text-muted-foreground">
-              When registering, the database stores a secure random salt. On each login, the client inputs their password, which is mixed with this salt in the browser via PBKDF2-HMAC-SHA256 (100,000 iterations) to derive a 256-bit AES key.
-            </p>
-          </div>
-          <div className="space-y-2">
-            <h4 className="font-extrabold text-foreground text-sm text-accent">2. IN-BROWSER ENCRYPTION</h4>
-            <p className="text-muted-foreground">
-              Sensitive details (Neo ID, CGPA, grades, application status, notes, and Gmail access tokens) are encrypted locally using AES-GCM-256 before transit. The server stores only ciphertext.
-            </p>
-          </div>
-          <div className="space-y-2">
-            <h4 className="font-extrabold text-foreground text-sm text-accent">3. IN-MEMORY DECRYPTION ONLY</h4>
-            <p className="text-muted-foreground">
-              When processing tasks like checking shortlist Excels or syncing emails, the client temporarily passes the AES key in the X-Client-Key request header. The server decrypts in-memory for the duration of the request and immediately discards it.
-            </p>
-          </div>
-          <div className="space-y-2">
-            <h4 className="font-extrabold text-foreground text-sm text-accent">4. SECURE MEMORY WIPING</h4>
-            <p className="text-muted-foreground">
-              Logging out deletes the AES key from memory. It is never stored in localStorage, indexDB, or cookies. It exists only for your session.
-            </p>
-          </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-0 border-2 border-border">
+          {[
+            {
+              step: "01",
+              title: "Create Your Account",
+              description:
+                "Register with your college email. Your profile is set up in minutes — no complex configuration required.",
+            },
+            {
+              step: "02",
+              title: "Set Up Your Profile",
+              description:
+                "Enter your CGPA, branch, and registration number. This lets NEXTUP.AI check your eligibility for each drive automatically.",
+            },
+            {
+              step: "03",
+              title: "Connect Gmail & Relax",
+              description:
+                "Connect your college Gmail once. From that point, NEXTUP.AI monitors for shortlists and new drives around the clock.",
+            },
+          ].map((item, i) => (
+            <div
+              key={i}
+              className={`p-10 space-y-4 hover:bg-muted/10 transition-colors ${
+                i < 2 ? "border-b-2 md:border-b-0 md:border-r-2 border-border" : ""
+              }`}
+            >
+              <div className="text-6xl font-extrabold tracking-tighter text-accent/20">{item.step}</div>
+              <h3 className="text-xl font-bold uppercase tracking-tighter">{item.title}</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">{item.description}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="text-center mt-12">
+          <Link
+            href={token ? "/dashboard" : "/register"}
+            className="inline-flex items-center justify-center gap-3 h-14 px-10 border-2 border-border bg-foreground text-background text-sm font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all"
+          >
+            {token ? "Back to Dashboard" : "Start Tracking for Free"}
+            <ArrowRight size={16} />
+          </Link>
         </div>
       </section>
 
-      {/* Symmetrical footer */}
-      <footer className="border-t-2 border-border py-12 px-8 text-center bg-muted/10 mt-auto w-full">
-        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
-          © {new Date().getFullYear()} NEXTUP.AI ✦ DESIGNED FOR VIT VELLORE ✦ END-TO-END ENCRYPTED
-        </p>
+      {/* Privacy Trust Section */}
+      <section
+        id="security"
+        className="py-20 px-8 max-w-[95vw] mx-auto w-full border-b-2 border-border"
+        aria-labelledby="security-heading"
+      >
+        <div className="max-w-3xl mx-auto text-center space-y-6">
+          <div className="inline-flex items-center gap-2 border border-border bg-muted/30 px-3 py-1 text-[10px] font-extrabold tracking-widest text-accent uppercase">
+            <Shield size={12} />
+            <span>Privacy First</span>
+          </div>
+          <h2 id="security-heading" className="text-3xl md:text-4xl font-extrabold tracking-tighter uppercase">
+            Your Data Belongs to You
+          </h2>
+          <p className="text-muted-foreground leading-relaxed">
+            Your registration number, CGPA, and marks are sensitive. That&apos;s why NEXTUP.AI encrypts
+            them in your browser before they ever leave your device. Our servers store only
+            scrambled data — even we can&apos;t read it. You hold the only key.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-left pt-4">
+            {[
+              { icon: <Shield size={16} />, label: "Browser-side encryption", desc: "Data is encrypted before upload using AES-256." },
+              { icon: <CheckCircle size={16} />, label: "No tracking or ads", desc: "We use only essential authentication cookies." },
+              { icon: <Shield size={16} />, label: "Key stays with you", desc: "Your encryption key never leaves your browser session." },
+            ].map(({ icon, label, desc }) => (
+              <div key={label} className="border-2 border-border p-5 space-y-2">
+                <div className="flex items-center gap-2 text-accent">
+                  {icon}
+                  <span className="text-xs font-extrabold uppercase tracking-wider">{label}</span>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">{desc}</p>
+              </div>
+            ))}
+          </div>
+          <Link
+            href="/privacy"
+            className="inline-flex items-center gap-2 text-xs font-bold tracking-widest uppercase text-muted-foreground hover:text-accent transition-colors underline"
+          >
+            Read our full Privacy Policy <ArrowRight size={12} />
+          </Link>
+        </div>
+      </section>
+
+      {/* FAQ Section */}
+      <section
+        id="faq"
+        className="py-20 px-8 max-w-3xl mx-auto w-full border-b-2 border-border"
+        aria-labelledby="faq-heading"
+      >
+        <div className="text-center mb-12 space-y-3">
+          <p className="text-xs font-extrabold tracking-widest text-accent uppercase">Got questions?</p>
+          <h2 id="faq-heading" className="text-3xl md:text-4xl font-extrabold tracking-tighter uppercase">
+            Frequently Asked Questions
+          </h2>
+        </div>
+
+        {/* JSON-LD for FAQ — improves Google featured snippets */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "FAQPage",
+              mainEntity: faqs.map(({ q, a }) => ({
+                "@type": "Question",
+                name: q,
+                acceptedAnswer: { "@type": "Answer", text: a },
+              })),
+            }),
+          }}
+        />
+
+        <div className="border-2 border-border divide-y divide-border px-6">
+          {faqs.map((faq) => (
+            <FAQItem key={faq.q} q={faq.q} a={faq.a} />
+          ))}
+        </div>
+      </section>
+
+      {/* CTA Banner */}
+      <section className="py-20 px-8 border-b-2 border-border bg-accent" aria-labelledby="cta-heading">
+        <div className="max-w-3xl mx-auto text-center space-y-6 text-black">
+          <h2 id="cta-heading" className="text-3xl md:text-5xl font-extrabold tracking-tighter uppercase leading-tight">
+            Ready to Track Your Placements?
+          </h2>
+          <p className="font-medium">
+            Join VIT students who use NEXTUP.AI to stay on top of every placement opportunity.
+            Free forever. No credit card needed.
+          </p>
+          <Link
+            href={token ? "/dashboard" : "/register"}
+            className="inline-flex items-center justify-center gap-3 h-14 px-10 border-2 border-black bg-black text-white text-sm font-extrabold tracking-widest uppercase hover:bg-white hover:text-black transition-all active:scale-95"
+          >
+            {token ? "Go to Dashboard" : "Create Free Account"}
+            <ArrowRight size={16} />
+          </Link>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t-2 border-border py-12 px-8 bg-muted/10 mt-auto w-full">
+        <div className="max-w-[95vw] mx-auto">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+            <Link href="/" className="text-xl font-extrabold tracking-tighter uppercase">
+              NEXTUP<span className="text-accent">.AI</span>
+            </Link>
+            <nav className="flex items-center flex-wrap justify-center gap-6" aria-label="Footer navigation">
+              <Link href="#features" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
+                Features
+              </Link>
+              <Link href="#how-it-works" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
+                How It Works
+              </Link>
+              <Link href="#faq" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
+                FAQ
+              </Link>
+              <Link href="/terms" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
+                Terms
+              </Link>
+              <Link href="/privacy" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
+                Privacy
+              </Link>
+              <Link href="/login" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
+                Sign In
+              </Link>
+              <Link href="/register" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
+                Register
+              </Link>
+            </nav>
+          </div>
+          <div className="border-t border-border mt-8 pt-6 text-center">
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+              © {new Date().getFullYear()} NEXTUP.AI · Designed for VIT Vellore · Not affiliated with VIT or CDC
+            </p>
+          </div>
+        </div>
       </footer>
 
     </main>

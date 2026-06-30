@@ -20,6 +20,7 @@ import {
 import { useAppStore } from "@/lib/store";
 import { useSearchParams } from "next/navigation";
 import { isProfileComplete } from "@/lib/profile-utils";
+import Tooltip from "@/components/Tooltip";
 
 import { supabase } from "@/lib/supabase";
 
@@ -99,12 +100,14 @@ export default function Sidebar() {
 
         {/* Security badge */}
         <div className="flex flex-col gap-2 border-b-2 border-border bg-muted/30 p-6">
-          <div className="flex items-center gap-2 text-xs font-bold tracking-wider text-accent uppercase">
-            <ShieldCheck size={16} className="text-accent" />
-            <span>🔒 ZERO-KNOWLEDGE</span>
-          </div>
-          <p className="text-[10px] text-muted-foreground uppercase tracking-tight leading-snug">
-            All profile and job application details are encrypted locally in your browser.
+          <Tooltip content="Your registration number, CGPA, and marks are encrypted in your browser. The server only stores scrambled data — we cannot read it." position="right">
+            <div className="flex items-center gap-2 text-xs font-bold tracking-wider text-accent uppercase cursor-help">
+              <ShieldCheck size={16} className="text-accent" />
+              <span>🔒 Private &amp; Secure</span>
+            </div>
+          </Tooltip>
+          <p className="text-[10px] text-muted-foreground tracking-tight leading-snug">
+            Your data is encrypted in your browser before it leaves your device.
           </p>
         </div>
 
@@ -126,17 +129,22 @@ export default function Sidebar() {
 
             if (isItemRestricted) {
               return (
-                <div
+                <Tooltip
                   key={item.name}
-                  className="flex items-center justify-between gap-4 px-8 py-4 text-sm font-bold tracking-tighter transition-all uppercase text-zinc-600 cursor-not-allowed select-none opacity-40"
-                  title="Please complete your student profile to unlock."
+                  content="Complete your profile to unlock this section"
+                  position="right"
                 >
-                  <div className="flex items-center gap-4">
-                    <Icon size={18} />
-                    <span>{item.name}</span>
+                  <div
+                    className="flex w-full items-center justify-between gap-4 px-8 py-4 text-sm font-bold tracking-tighter transition-all uppercase text-zinc-600 cursor-not-allowed select-none opacity-40"
+                    aria-label={`${item.name} — locked until profile is complete`}
+                  >
+                    <div className="flex items-center gap-4">
+                      <Icon size={18} />
+                      <span>{item.name}</span>
+                    </div>
+                    <Lock size={14} className="text-zinc-600" />
                   </div>
-                  <Lock size={14} className="text-zinc-600" />
-                </div>
+                </Tooltip>
               );
             }
 

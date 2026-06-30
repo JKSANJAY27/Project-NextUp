@@ -1,0 +1,46 @@
+# NEXTUP.AI
+
+> NEXTUP.AI is a free, privacy-first placement tracking platform built for VIT Vellore students. It helps students manage their campus placement journey — from tracking job opportunities and application deadlines, to receiving automatic shortlist notifications from CDC emails.
+
+## What is NEXTUP.AI?
+
+NEXTUP.AI is a smart placement management system for engineering students at VIT (Vellore Institute of Technology), Vellore, India. Students use it to:
+
+- **Track job applications** across multiple companies in one dashboard
+- **Automatically detect shortlists** from CDC (Career Development Centre) emails — no more manually checking spreadsheets
+- **Check eligibility** for job drives based on CGPA, branch, arrears, and other criteria
+- **Manage placement calendar** with upcoming tests, interviews, and deadlines
+- **Analyse job descriptions** for keyword matching with their resume using a local AI toolkit
+- **Tailor resumes** with AI-powered suggestions based on JD requirements
+
+## Key Features
+
+- **Automatic Email Parsing**: Syncs with Gmail to parse CDC placement emails and extract shortlist Excel sheets automatically
+- **Smart Eligibility Filter**: Checks if you are eligible for a drive based on your academic profile (CGPA, branch, arrears, etc.)
+- **Application Tracker**: Track every application across stages — Applied, Shortlisted, Test, Interview, Offer, Rejected
+- **Placement Calendar**: Visual calendar of all upcoming drives, tests, and deadlines
+- **AI Resume Toolkit**: Local, in-browser AI model for keyword gap analysis between your resume and job descriptions
+- **Privacy by Design**: All sensitive data (registration number, CGPA, marks) is encrypted in your browser — the server never sees raw personal data
+
+## Target Audience
+
+- Engineering students at VIT Vellore (BTech, MTech, MCA, MBA)
+- Students appearing for campus placement drives through VIT CDC
+- Students who want to stay organised across multiple job applications
+
+## Privacy Approach
+
+NEXTUP.AI uses a privacy-first design. Sensitive student information (registration number, CGPA, grades, and Gmail tokens) is encrypted with AES-256 in the browser before being sent to the server. The server stores only encrypted data. Students hold their own encryption keys, derived from their password — even the developers cannot read user data.
+
+## Public URLs
+
+- Homepage: https://nextup.ai/
+- Register: https://nextup.ai/register
+- Terms of Service: https://nextup.ai/terms
+- Privacy Policy: https://nextup.ai/privacy
+
+## About
+
+NEXTUP.AI is designed and maintained by VIT students, for VIT students. It is not an official VIT or CDC product.
+
+Contact: Available through the platform's feedback form.

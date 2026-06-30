@@ -95,3 +95,113 @@ body {
 .animate-marquee-slow {
   animation: marquee 40s linear infinite;
 }
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* ─── Skeleton Loader ──────────────────────────────────────────────────────── */
+@keyframes skeleton-shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--muted) 25%,
+    var(--border) 50%,
+    var(--muted) 75%
+  );
+  background-size: 800px 100%;
+  animation: skeleton-shimmer 1.5s infinite linear;
+  border-radius: 2px;
+}
+
+.dark .skeleton {
+  background: linear-gradient(
+    90deg,
+    #27272A 25%,
+    #3F3F46 50%,
+    #27272A 75%
+  );
+  background-size: 800px 100%;
+  animation: skeleton-shimmer 1.5s infinite linear;
+}
+
+/* ─── Tooltip ──────────────────────────────────────────────────────────────── */
+.tooltip-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tooltip-content {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  white-space: nowrap;
+  max-width: 220px;
+  white-space: normal;
+  text-align: center;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 6px 10px;
+  border: 2px solid var(--border);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+.tooltip-content::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--foreground);
+}
+
+.tooltip-wrapper:hover .tooltip-content,
+.tooltip-wrapper:focus-within .tooltip-content {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Tooltip position variants */
+.tooltip-content.tooltip-bottom {
+  bottom: auto;
+  top: calc(100% + 8px);
+}
+
+.tooltip-content.tooltip-bottom::after {
+  top: auto;
+  bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: var(--foreground);
+}
+
+.tooltip-content.tooltip-right {
+  bottom: auto;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.tooltip-content.tooltip-right::after {
+  top: 50%;
+  left: auto;
+  right: 100%;
+  transform: translateY(-50%);
+  border-right-color: var(--foreground);
+  border-top-color: transparent;
+}
+
