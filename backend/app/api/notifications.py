@@ -92,9 +92,17 @@ def get_notifications(
         )
         bundles[company_id]["notifications"].append(detail)
         
+    def _notif_ts(b):
+        if not b["notifications"]:
+            return datetime.min
+        t = b["notifications"][0].created_at
+        if t is None:
+            return datetime.min
+        return t.replace(tzinfo=None) if t.tzinfo else t
+
     sorted_bundles = sorted(
         bundles.values(),
-        key=lambda b: b["notifications"][0].created_at if b["notifications"] else datetime.min,
+        key=_notif_ts,
         reverse=True
     )
     

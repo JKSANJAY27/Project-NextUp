@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional
+import traceback
 
 from app.core.database import get_db
 from app.api.auth import get_current_user
@@ -23,36 +24,55 @@ def get_dashboard_data(
 ):
     """
     Unified endpoint to fetch all necessary data for the Dashboard in a single request.
-    This significantly reduces the number of API calls made by the frontend on load.
     """
-    # We call the existing functions. Note that we pass the dependencies manually.
-    
+    errors = {}
+
     # 1. Companies
-    companies_data = list_companies(x_client_key=x_client_key, db=db, current_user=current_user)
-    
+    try:
+        companies_data = list_companies(x_client_key=x_client_key, db=db, current_user=current_user)
+    except Exception as e:
+        companies_data = []
+        errors["companies"] = traceback.format_exc()
+
     # 2. Applications
-    applications_data = list_applications(db=db, current_user=current_user)
-    
+    try:
+        applications_data = list_applications(db=db, current_user=current_user)
+    except Exception as e:
+        applications_data = []
+        errors["applications"] = traceback.format_exc()
+
     # 3. Notifications
-    notifications_data = get_notifications(db=db, current_user=current_user)
-    
+    try:
+        notifications_data = get_notifications(db=db, current_user=current_user)
+    except Exception as e:
+        notifications_data = []
+        errors["notifications"] = traceback.format_exc()
+
     # 4. Calendar Events
-    calendar_data = list_calendar_events(db=db, current_user=current_user)
-    
+    try:
+        calendar_data = list_calendar_events(db=db, current_user=current_user)
+    except Exception as e:
+        calendar_data = []
+        errors["calendar"] = traceback.format_exc()
+
     # 5. Announcements
-    announcements_data = get_announcements(db=db, current_user=current_user)
-    
-    # Optional: We could also calculate quick stats server-side
+    try:
+        announcements_data = get_announcements(db=db, current_user=current_user)
+    except Exception as e:
+        announcements_data = []
+        errors["announcements"] = traceback.format_exc()
+
     stats = {
-        "total_tracked": len([a for a in applications_data if a.get("record_type") == "application" and a.get("user_decision") == "tracking"]),
-        "unread_notifications": sum(b.get("unread_count", 0) for b in notifications_data) if isinstance(notifications_data, list) else 0,
+        "total_tracked": len([a for a in applications_data if isinstance(a, dict) and a.get("record_type") == "application" and a.get("user_decision") == "tracking"]),
+        "unread_notifications": sum(b.get("unread_count", 0) for b in notifications_data if isinstance(b, dict)) if isinstance(notifications_data, list) else 0,
     }
-    
+
     return {
         "companies": companies_data,
         "applications": applications_data,
         "notifications": notifications_data,
         "calendar": calendar_data,
         "announcements": announcements_data,
-        "stats": stats
+        "stats": stats,
+        "_errors": errors,  # Will be empty dict {} if all succeeded
     }
