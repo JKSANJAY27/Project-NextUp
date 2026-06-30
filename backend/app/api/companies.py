@@ -219,10 +219,17 @@ def list_companies(
     
     if cached_list is None:
         companies = db.query(Company).all()
-        # Sort by latest event timestamp or created_at (descending)
+        def get_sort_key(c):
+            dt = c.latest_event.timestamp if c.latest_event and c.latest_event.timestamp else c.created_at
+            if dt is None:
+                return 0.0
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            return dt.timestamp()
+
         companies = sorted(
             companies,
-            key=lambda c: c.latest_event.timestamp if c.latest_event and c.latest_event.timestamp else c.created_at,
+            key=get_sort_key,
             reverse=True
         )
         
