@@ -11,7 +11,7 @@ from app.api.companies import list_companies
 from app.api.applications import list_applications
 from app.api.notifications import get_notifications
 from app.api.calendar import list_calendar_events
-from app.api.announcements import list_announcements
+from app.api.announcements import get_announcements
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -40,7 +40,7 @@ def get_dashboard_data(
     calendar_data = list_calendar_events(db=db, current_user=current_user)
     
     # 5. Announcements
-    announcements_data = list_announcements(db=db, current_user=current_user)
+    announcements_data = get_announcements(db=db, current_user=current_user)
     
     # Optional: We could also calculate quick stats server-side
     stats = {
