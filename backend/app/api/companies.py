@@ -38,55 +38,6 @@ def create_company(
     bump_companies_list_version()
     return new_company
 
-@router.post("/import")
-async def import_placement_file(
-    import_type: str = Form(...), # 'email', 'jd', 'shortlist'
-    company_id: Optional[UUID] = Form(None),
-    file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = None,
-    x_client_key: Optional[str] = Header(None, alias="X-Client-Key"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    file_bytes = await file.read()
-    
-    if import_type == "email":
-        # Parse email text
-        try:
-            email_text = file_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            email_text = file_bytes.decode("latin-1")
-            
-        parsed = parse_placement_email(email_text)
-        
-        # Set up eligibility rules JSONB
-        eligibility_rules = {
-            "min_cgpa": parsed.get("min_cgpa"),
-            "min_tenth_marks": None,
-            "min_twelfth_marks": None,
-            "requires_no_arrears": parsed.get("requires_no_arrears", False)
-        }
-        
-        # Create company
-        new_company = Company(
-            name=parsed["company"],
-            role=parsed["role"],
-            category=parsed["category"],
-            ctc=parsed["ctc"],
-            stipend=parsed["stipend"],
-            eligible_branches=parsed.get("eligible_branches"),
-            eligibility_rules=eligibility_rules,
-            job_location=parsed.get("job_location"),
-            registration_deadline=parsed.get("deadline_iso"),
-            registration_link=parsed.get("registration_link"),
-            jd_text=parsed.get("jd_text")
-        )
-        db.add(new_company)
-        db.commit()
-        db.refresh(new_company)
-        bump_companies_list_version()
-        return {"message": "Email imported successfully", "company": new_company}
-
 def process_jd_background(company_id: UUID, file_bytes: bytes):
     from app.core.database import SessionLocal
     db = SessionLocal()
@@ -129,13 +80,6 @@ def process_jd_background(company_id: UUID, file_bytes: bytes):
         logger.error(f"Background JD parsing failed: {str(e)}")
     finally:
         db.close()
-
-    elif import_type == "jd":
-        if not company_id:
-            raise HTTPException(status_code=400, detail="company_id is required for JD imports.")
-        
-        background_tasks.add_task(process_jd_background, company_id, file_bytes)
-        return {"message": "Job description parsing started in background"}
 
 def process_shortlist_background(company_id: UUID, file_bytes: bytes, current_user_id: UUID, x_client_key: Optional[str]):
     from app.core.database import SessionLocal
@@ -187,6 +131,64 @@ def process_shortlist_background(company_id: UUID, file_bytes: bytes, current_us
         logger.error(f"Background Shortlist parsing failed: {str(e)}")
     finally:
         db.close()
+
+@router.post("/import")
+async def import_placement_file(
+    import_type: str = Form(...), # 'email', 'jd', 'shortlist'
+    company_id: Optional[UUID] = Form(None),
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None,
+    x_client_key: Optional[str] = Header(None, alias="X-Client-Key"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    file_bytes = await file.read()
+    
+    if import_type == "email":
+        # Parse email text
+        try:
+            email_text = file_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            email_text = file_bytes.decode("latin-1")
+            
+        parsed = parse_placement_email(email_text)
+        
+        # Set up eligibility rules JSONB
+        eligibility_rules = {
+            "min_cgpa": parsed.get("min_cgpa"),
+            "min_tenth_marks": None,
+            "min_twelfth_marks": None,
+            "requires_no_arrears": parsed.get("requires_no_arrears", False)
+        }
+        
+        # Create company
+        new_company = Company(
+            name=parsed["company"],
+            role=parsed["role"],
+            category=parsed["category"],
+            ctc=parsed["ctc"],
+            stipend=parsed["stipend"],
+            eligible_branches=parsed.get("eligible_branches"),
+            eligibility_rules=eligibility_rules,
+            job_location=parsed.get("job_location"),
+            registration_deadline=parsed.get("deadline_iso"),
+            registration_link=parsed.get("registration_link"),
+            jd_text=parsed.get("jd_text")
+        )
+        db.add(new_company)
+        db.commit()
+        db.refresh(new_company)
+        bump_companies_list_version()
+        return {"message": "Email imported successfully", "company": new_company}
+
+
+    elif import_type == "jd":
+        if not company_id:
+            raise HTTPException(status_code=400, detail="company_id is required for JD imports.")
+        
+        background_tasks.add_task(process_jd_background, company_id, file_bytes)
+        return {"message": "Job description parsing started in background"}
+
 
     elif import_type == "shortlist":
         if not company_id:
