@@ -232,9 +232,12 @@ Guidelines for event_type (choose exactly ONE):
 - REJECTION_RELEASED: Regret / non-selected lists.
 - GENERAL_UPDATE: Venue changes, corrections, general instructions.
 
-Multi-role rules:
-- If the email mentions multiple roles (e.g. Software Engineer AND Data Scientist), include EACH as a separate object in the "roles" array.
-- Never merge multiple roles into one object.
+Multi-role rules — READ CAREFULLY:
+- ONLY create multiple role objects when the email EXPLICITLY lists SEPARATE CTC or stipend values per distinct role name (e.g., a table or indented block like "Role A - 18 LPA / Role B - 12 LPA").
+- If the email has a single "Designation", "Role", "Profile", or "Job Title" field — even if the subject line or category mentions "Dream Internship" or a programme name — output EXACTLY ONE role object using that single designation.
+- The email subject line, category name (e.g., "Dream Internship Registration"), or programme title (e.g., "2027 Batch") are NOT role names. Extract the role only from the "Designation", "Role", "Profile", or "Job Title" field in the email body.
+- If no explicit role field is found, use the job title from the JD or attachment text. Only default to "Software Engineer" as a last resort when no role information exists anywhere.
+- Never merge multiple roles into one object when they genuinely differ.
 - Each role object must have its own ctc, stipend, min_cgpa, eligible_branches, requires_no_arrears, degree_types, specializations, min_tenth_marks, min_twelfth_marks, min_ug_cgpa.
 
 Eligibility Rules — IMPORTANT:

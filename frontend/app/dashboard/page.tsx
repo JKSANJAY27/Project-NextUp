@@ -3232,13 +3232,26 @@ function DashboardPageContent() {
 
                     {/* Specifications Grid */}
                     <div className="border-2 border-border p-5 bg-muted/5 space-y-4">
-                      <h4 className="text-xs font-black tracking-widest text-accent uppercase">
-                        📋 Placement Specifications
-                      </h4>
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <h4 className="text-xs font-black tracking-widest text-accent uppercase">
+                          📋 Placement Specifications
+                        </h4>
+                        {/* AI Parsing Disclaimer */}
+                        {selectedCompany.requires_review ? (
+                          <span className="inline-flex items-center gap-1.5 border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[9px] font-black text-amber-400 uppercase tracking-widest">
+                            ⚠ Needs Review — Low confidence parse. Verify against source email.
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 border border-border/50 bg-muted/20 px-2 py-1 text-[9px] font-bold text-muted-foreground uppercase tracking-widest">
+                            🤖 AI-extracted — verify against the original CDC email
+                          </span>
+                        )}
+                      </div>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
                         <div className="space-y-1">
                           <span className="text-[9px] font-black text-muted-foreground uppercase block">CTC / Package</span>
                           <span className="text-sm font-bold text-foreground block">{selectedCompany.ctc || "Will be announced later"}</span>
+
                         </div>
                         <div className="space-y-1">
                           <span className="text-[9px] font-black text-muted-foreground uppercase block">Stipend</span>
@@ -3428,8 +3441,17 @@ function DashboardPageContent() {
                 {/* 2. JOB DETAILS TAB */}
                 {modalTab === "details" && (
                   <div className="space-y-6">
-                    <div className="border-b border-border pb-4">
+                    <div className="border-b border-border pb-4 flex items-start justify-between gap-3 flex-wrap">
                       <h2 className="text-2xl font-black uppercase tracking-tighter">Placement Specifications</h2>
+                      {selectedCompany.requires_review ? (
+                        <span className="inline-flex items-center gap-1.5 border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[9px] font-black text-amber-400 uppercase tracking-widest">
+                          ⚠ Needs Review — verify all details against the original CDC email
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 border border-border/50 bg-muted/20 px-2 py-1 text-[9px] font-bold text-muted-foreground uppercase tracking-widest">
+                          🤖 AI-extracted — verify against the original CDC email
+                        </span>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

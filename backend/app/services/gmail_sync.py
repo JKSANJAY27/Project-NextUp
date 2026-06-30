@@ -755,6 +755,12 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
 
         # Multi-Role Splitting: Process each role in validated_info["extracted_data"]["roles"]
         roles_list = ext_data.get("roles", [])
+
+        # Same-email deduplication guard:
+        # Tracks Company objects we create from THIS specific email by normalized company name key.
+        # Prevents one email with spurious multi-role LLM output from creating two Company rows
+        # for the same company (e.g. 'Decode Age - Software Engineer' + 'Decode Age - Data Intelligence Intern').
+        companies_created_this_job: dict = {}  # { norm_company_key: Company }
         
         processed_events = []
         for r_item in roles_list:
@@ -862,6 +868,35 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     logger.info(f"Fuzzy matched incoming email to existing company: {company.name} (ID: {company.id}, Match Score: {best_score})")
 
             # -----------------------------------------------------------------
+            # SAME-EMAIL DEDUP GUARD (Fix for multi-role over-splitting):
+            # If we still have no company match AND this is a NEW_DRIVE, check
+            # whether a company with the SAME name was already created by an
+            # EARLIER role object from this very same email (same job.id).
+            # If yes, reuse it — update the role field to the more-specific name
+            # rather than spinning up a second company workspace.
+            # -----------------------------------------------------------------
+            norm_company_key_for_dedup = clean_company_name_key(company_name)
+            if not company and is_announcement and norm_company_key_for_dedup in companies_created_this_job:
+                company = companies_created_this_job[norm_company_key_for_dedup]
+                # Prefer the more specific / longer role name
+                if role and (not company.role or len(role) > len(company.role or "")):
+                    logger.info(
+                        f"Same-email dedup: reusing existing company '{company.name}' (ID: {company.id}), "
+                        f"updating role from '{company.role}' -> '{role}'."
+                    )
+                    company.role = role
+                    db.flush()
+                else:
+                    logger.info(
+                        f"Same-email dedup: reusing existing company '{company.name}' (ID: {company.id}). "
+                        f"Role '{role}' not adopted (existing '{company.role}' is equally or more specific)."
+                    )
+                log_execution_stage(
+                    db, job.id, "COMPANY_MATCHED", "SUCCESS",
+                    f"Same-email dedup reused company workspace: {company.name} (Role: {company.role})"
+                )
+
+            # -----------------------------------------------------------------
             # GUARD: If this is an update mail (not an announcement) and we
             # couldn't find an existing company, park it as a PendingCompanyEvent.
             # We never let update mails create new company workspaces.
@@ -932,6 +967,9 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 db.flush()
                 logger.info(f"Created new company registry: {company_name} - {role}")
                 log_execution_stage(db, job.id, "COMPANY_CREATED", "SUCCESS", f"Created new company workspace: {company_name} (Role: {role})")
+                # Register in same-email dedup map so subsequent role objects from this email
+                # do not create a second workspace for the same company name.
+                companies_created_this_job[norm_company_key_for_dedup] = company
                 # Immediately reconcile any pending update mails that arrived before this announcement
                 reconcile_pending_events_for_company(db, company)
             else:
