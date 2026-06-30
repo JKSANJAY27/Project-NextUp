@@ -10,7 +10,8 @@ from app.schemas.schemas import ApplicationCreate, ApplicationUpdate, Applicatio
 from app.services.priority_scorer import calculate_priority_score
 from app.services.stale_detector import is_application_stale
 from app.services.opportunity_lifecycle import (
-    set_tracking, set_archived, set_snooze, restore_state, _upsert_opportunity_state
+    set_tracking, set_archived, set_snooze, restore_state, _upsert_opportunity_state,
+    update_expired_opportunities
 )
 from app.core.redis import get_cache, set_cache, get_user_version, bump_user_version
 
@@ -106,6 +107,9 @@ def list_applications(
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
+
+    # Ensure expired opportunities are moved to decision_pending state for the user
+    update_expired_opportunities(db, current_user.id)
 
     # Fetch all real applications for this user
     apps = db.query(Application).options(

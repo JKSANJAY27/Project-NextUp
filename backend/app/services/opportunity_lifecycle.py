@@ -85,8 +85,8 @@ def update_expired_opportunities(db: Session, user_id: UUID):
     
     # Find all expired companies
     expired_companies = db.query(Company).filter(
-        Company.registration_deadline != None,
-        Company.registration_deadline < now,
+        Company.registration_deadline_db != None,
+        Company.registration_deadline_db < now,
     ).all()
     
     moved_count = 0
