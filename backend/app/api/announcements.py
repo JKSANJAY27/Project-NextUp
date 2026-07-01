@@ -66,6 +66,11 @@ def download_attachment(
     if not attachment:
         raise HTTPException(status_code=404, detail="Attachment not found")
         
+    if attachment.file_data:
+        from fastapi import Response
+        media_type = "application/pdf" if attachment.file_name.lower().endswith('.pdf') else "application/octet-stream"
+        return Response(content=attachment.file_data, media_type=media_type, headers={"Content-Disposition": f"inline; filename=\"{attachment.file_name}\""})
+
     storage_dir = "storage"
     file_path = os.path.join(storage_dir, attachment.storage_path)
     if not os.path.exists(file_path):

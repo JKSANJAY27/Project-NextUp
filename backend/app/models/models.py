@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, ForeignKey, JSON, UniqueConstraint, Index
+from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, ForeignKey, JSON, UniqueConstraint, Index, LargeBinary
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from app.core.database import Base
@@ -283,6 +283,7 @@ class AttachmentMetadata(Base):
     file_name = Column(String, nullable=False)
     file_type = Column(String, nullable=False)  # 'JD_PDF', 'SHORTLIST_EXCEL', 'ANNOUNCEMENT_ATTACHMENT'
     storage_path = Column(String)
+    file_data = Column(LargeBinary, nullable=True)
     parsed_meta = Column(JSON)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 

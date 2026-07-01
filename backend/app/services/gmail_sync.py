@@ -198,12 +198,14 @@ def process_event_attachments(db: Session, event: CompanyEvent, attachments: lis
                 file_name=filename,
                 file_type="JD_PDF" if filename.lower().endswith(".pdf") else "SHORTLIST_EXCEL",
                 storage_path=f"attachments/{event.id}/{filename}",
-                parsed_meta={}
+                parsed_meta={},
+                file_data=file_bytes
             )
             db.add(att_meta)
             db.flush()
         else:
             logger.info(f"Re-using existing attachment metadata for {filename}.")
+            att_meta.file_data = file_bytes
         
         # Write file to storage
         storage_dir = "storage"
@@ -693,11 +695,14 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                         file_name=filename,
                         file_type="ANNOUNCEMENT_ATTACHMENT",
                         storage_path=f"attachments/announcements/{announcement.id}/{filename}",
-                        parsed_meta={}
+                        parsed_meta={},
+                        file_data=file_bytes
                     )
                     db.add(att_meta)
                     db.flush()
                     logger.info(f"Processed and linked attachment {filename} to announcement {announcement.id}.")
+                else:
+                    att_meta.file_data = file_bytes
                 
                 # Write file to storage
                 storage_dir = "storage"
@@ -1150,12 +1155,14 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                         file_name=filename,
                         file_type="JD_PDF" if filename.lower().endswith(".pdf") else "SHORTLIST_EXCEL",
                         storage_path=f"attachments/{event.id}/{filename}",
-                        parsed_meta={}
+                        parsed_meta={},
+                        file_data=file_bytes
                     )
                     db.add(att_meta)
                     db.flush()
                 else:
                     logger.info(f"Re-using existing attachment metadata for {filename}.")
+                    att_meta.file_data = file_bytes
                 
                 # Write file to storage
                 storage_dir = "storage"
