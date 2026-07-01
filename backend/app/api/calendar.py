@@ -39,7 +39,7 @@ def list_calendar_events(
     # Serialize response list using CalendarEventOut schema to avoid Pydantic serialization issues
     serialized_events = [CalendarEventOut.from_orm(e).dict() for e in events]
     set_cache(cache_key, serialized_events, expire_seconds=30)
-    return events
+    return serialized_events
 
 @router.post("", response_model=CalendarEventOut)
 def create_calendar_event(

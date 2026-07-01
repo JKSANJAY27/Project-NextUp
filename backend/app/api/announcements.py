@@ -32,7 +32,7 @@ def get_announcements(
     # Serialize to dict list using schema helper
     serialized = [AnnouncementOut.from_orm(ann).dict() for ann in announcements]
     set_cache(cache_key, serialized, expire_seconds=1800) # 30 min TTL
-    return announcements
+    return serialized
 
 @router.get("/{announcement_id}", response_model=AnnouncementOut)
 def get_announcement(

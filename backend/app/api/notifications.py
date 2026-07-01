@@ -90,12 +90,12 @@ def get_notifications(
             timestamp=event.timestamp,
             confidence_scores=confidence_map[n.company_event_id]
         )
-        bundles[company_id]["notifications"].append(detail)
+        bundles[company_id]["notifications"].append(detail.dict())
         
     def _notif_ts(b):
         if not b["notifications"]:
             return datetime.min
-        t = b["notifications"][0].created_at
+        t = b["notifications"][0]["created_at"]
         if t is None:
             return datetime.min
         return t.replace(tzinfo=None) if t.tzinfo else t
