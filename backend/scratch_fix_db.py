@@ -12,8 +12,8 @@ if not db_url:
 engine = create_engine(db_url)
 try:
     with engine.connect() as conn:
-        result = conn.execute(text("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'companies';"))
-        for row in result:
-            print(row[0], row[1])
+        conn.execute(text("ALTER TABLE attachments_metadata ALTER COLUMN file_data TYPE bytea USING decode(file_data, 'escape');"))
+        conn.commit()
+        print("Successfully updated attachments_metadata.file_data to bytea!")
 except Exception as e:
     print("Error:", e)

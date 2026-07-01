@@ -5,6 +5,7 @@ import Link from "next/link";
 import api from "@/lib/api";
 
 import { useCalendarEvents, useApplications } from "@/lib/queries";
+import { CompanyWorkspaceModal } from "@/components/CompanyWorkspaceModal";
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -70,6 +71,7 @@ export default function CalendarPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
+  const [selectedWorkspaceCompanyId, setSelectedWorkspaceCompanyId] = useState<string | null>(null);
 
   // Form Fields
   const [formTitle, setFormTitle] = useState('');
@@ -504,7 +506,7 @@ export default function CalendarPage() {
                             title={`${e.title} (${e.event_type.toUpperCase()})`}
                           >
                             <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${clr.dot}`} />
-                            <span className="truncate uppercase">{e.company_name || e.title}</span>
+                            <span className="truncate uppercase">{e.company_name || e.title.replace(/registration deadline:?\s*/i, '').replace(/- registration deadline\s*/i, '')}</span>
                           </div>
                         );
                       })}
@@ -569,7 +571,7 @@ export default function CalendarPage() {
 
                       {/* Title */}
                       <h4 className={`font-extrabold text-sm uppercase tracking-tight text-foreground leading-snug ${e.completed ? "line-through" : ""}`}>
-                        {e.company_name ? `${e.company_name} - ${e.title}` : e.title}
+                        {e.company_name || e.title.replace(/registration deadline:?\s*/i, '').replace(/- registration deadline\s*/i, '')}
                       </h4>
 
                       {/* Display Info (Company & Role) if available */}
@@ -614,9 +616,9 @@ export default function CalendarPage() {
                           )}
                         </div>
                         {e.company_id && (
-                          <Link href={`/tracking?companyId=${e.company_id}`} className="text-[9px] font-black tracking-widest text-accent uppercase hover:underline transition-all">
+                          <button onClick={() => setSelectedWorkspaceCompanyId(e.company_id!)} className="text-[9px] font-black tracking-widest text-accent uppercase hover:underline transition-all">
                             VIEW WORKSPACE &rarr;
-                          </Link>
+                          </button>
                         )}
                       </div>
 
@@ -977,6 +979,14 @@ export default function CalendarPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Global modern Company Workspace Drawer / Modal */}
+      {selectedWorkspaceCompanyId && (
+        <CompanyWorkspaceModal
+          companyId={selectedWorkspaceCompanyId}
+          onClose={() => setSelectedWorkspaceCompanyId(null)}
+        />
       )}
 
     </div>
