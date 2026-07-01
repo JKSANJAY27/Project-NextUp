@@ -295,6 +295,8 @@ def upsert_opportunity_state(
 
         set_tracking(db=db, user_id=current_user.id, company_id=company_id)
         db.commit()
+        from app.services.calendar_sync import sync_user_calendar_events
+        sync_user_calendar_events(db, current_user.id, company_id)
         bump_user_version(current_user.id)
         return {"status": "tracking", "company_id": str(company_id)}
 
@@ -310,12 +312,16 @@ def upsert_opportunity_state(
         archive_reason = reason or "MANUAL_NOT_INTERESTED"
         set_archived(db=db, user_id=current_user.id, company_id=company_id, reason=archive_reason)
         db.commit()
+        from app.services.calendar_sync import sync_user_calendar_events
+        sync_user_calendar_events(db, current_user.id, company_id)
         bump_user_version(current_user.id)
         return {"status": "archived", "company_id": str(company_id), "archive_reason": archive_reason}
 
     elif action == "snooze":
         set_snooze(db=db, user_id=current_user.id, company_id=company_id)
         db.commit()
+        from app.services.calendar_sync import sync_user_calendar_events
+        sync_user_calendar_events(db, current_user.id, company_id)
         bump_user_version(current_user.id)
         return {"status": "snoozed", "company_id": str(company_id)}
 
@@ -343,6 +349,8 @@ def upsert_opportunity_state(
                 )
                 db.add(new_app)
         db.commit()
+        from app.services.calendar_sync import sync_user_calendar_events
+        sync_user_calendar_events(db, current_user.id, company_id)
         bump_user_version(current_user.id)
         return {"status": opp_state.state, "company_id": str(company_id)}
 

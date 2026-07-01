@@ -166,6 +166,7 @@ interface CompanyEvent {
   timestamp: string | null;
   confidence_scores: Record<string, number>;
   user_notification_msg: string | null;
+  attachments?: AttachmentMetadata[];
 }
 
 interface AttachmentMetadata {
@@ -234,6 +235,10 @@ function DashboardPageContent() {
   const [editingRoundNote, setEditingRoundNote] = useState<string | null>(null);
   const [tempNoteText, setTempNoteText] = useState("");
   const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
+  const [expandedEmailHeightId, setExpandedEmailHeightId] = useState<string | null>(null);
+  const [jdTextExpanded, setJdTextExpanded] = useState(false);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const [decryptedNotes, setDecryptedNotes] = useState<Record<string, string>>({});
   const [companyEvents, setCompanyEvents] = useState<CompanyEvent[]>([]);
 
@@ -418,6 +423,51 @@ function DashboardPageContent() {
     };
     fetchCompanyEvents();
   }, [selectedCompany]);
+
+  const jdPdfAttachment = React.useMemo(() => {
+    for (const evt of companyEvents) {
+      if (evt.attachments) {
+        const pdf = evt.attachments.find((att: any) => att.file_type === 'JD_PDF');
+        if (pdf) return pdf;
+      }
+    }
+    return null;
+  }, [companyEvents]);
+
+  useEffect(() => {
+    let active = true;
+    const loadPdf = async () => {
+      if (!jdPdfAttachment) {
+        setPdfUrl(null);
+        return;
+      }
+      setPdfLoading(true);
+      try {
+        const response = await api.get(`/announcements/attachment/${jdPdfAttachment.id}`, {
+          responseType: 'blob',
+        });
+        if (active) {
+          const blob = new Blob([response.data], { type: 'application/pdf' });
+          const url = URL.createObjectURL(blob);
+          setPdfUrl(url);
+        }
+      } catch (err) {
+        console.error("Failed to load JD PDF:", err);
+      } finally {
+        if (active) {
+          setPdfLoading(false);
+        }
+      }
+    };
+    loadPdf();
+
+    return () => {
+      active = false;
+      if (pdfUrl) {
+        URL.revokeObjectURL(pdfUrl);
+      }
+    };
+  }, [jdPdfAttachment]);
 
   // Handle manual company creation
   const handleAddCompany = async (e: React.FormEvent) => {
@@ -2593,12 +2643,29 @@ function DashboardPageContent() {
                                   Sender: {evt.sender}
                                 </span>
                               </div>
-                              <button
-                                onClick={() => setExpandedEmailId(expandedEmailId === evt.id ? null : evt.id)}
-                                className="text-[9px] font-bold text-accent hover:underline uppercase border border-border px-2.5 py-1 bg-background"
-                              >
-                                {expandedEmailId === evt.id ? "Hide Source" : "View Source Email"}
-                              </button>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => {
+                                    if (expandedEmailId === evt.id) {
+                                      setExpandedEmailId(null);
+                                      setExpandedEmailHeightId(null);
+                                    } else {
+                                      setExpandedEmailId(evt.id);
+                                    }
+                                  }}
+                                  className="text-[9px] font-bold text-accent hover:underline uppercase border border-border px-2.5 py-1 bg-background"
+                                >
+                                  {expandedEmailId === evt.id ? "Hide Source" : "View Source Email"}
+                                </button>
+                                {expandedEmailId === evt.id && (
+                                  <button
+                                    onClick={() => setExpandedEmailHeightId(expandedEmailHeightId === evt.id ? null : evt.id)}
+                                    className="text-[9px] font-bold text-accent hover:underline uppercase border border-border px-2.5 py-1 bg-background"
+                                  >
+                                    {expandedEmailHeightId === evt.id ? "Standard Height" : "Expand Height"}
+                                  </button>
+                                )}
+                              </div>
                             </div>
 
                             {/* Confidence indicators */}
@@ -2621,7 +2688,9 @@ function DashboardPageContent() {
 
                             {/* Collapsible Source Email */}
                             {expandedEmailId === evt.id && (
-                              <div className="border border-border/80 p-4 bg-muted/20 font-mono text-[10px] leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto border-dashed">
+                              <div className={`border border-border/80 p-4 bg-muted/20 font-mono leading-relaxed whitespace-pre-wrap overflow-y-auto border-dashed ${
+                                expandedEmailHeightId === evt.id ? 'max-h-[75vh] text-xs' : 'max-h-48 text-[10px]'
+                              }`}>
                                 {evt.body}
                               </div>
                             )}
@@ -2827,12 +2896,46 @@ function DashboardPageContent() {
                       </div>
                     </div>
 
-                    {/* Full JD text */}
+                    {/* Full JD text or PDF */}
                     <div className="space-y-2">
-                      <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">JOB DESCRIPTION</h4>
-                      <div className="border border-border p-4 bg-muted/10 max-h-60 overflow-y-auto rounded-none font-mono text-[10px] leading-relaxed whitespace-pre-wrap text-foreground">
-                        {selectedCompany.jd_text || "No detailed job description text loaded."}
+                      <div className="flex justify-between items-center">
+                        <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">JOB DESCRIPTION</h4>
+                        <div className="flex gap-2">
+                          {jdPdfAttachment && (
+                            <span className="text-[10px] font-bold text-accent uppercase bg-accent/10 border border-accent/30 px-2 py-0.5 animate-pulse">
+                              📄 PDF AVAILABLE
+                            </span>
+                          )}
+                          {!pdfUrl && !pdfLoading && selectedCompany.jd_text && (
+                            <button
+                              onClick={() => setJdTextExpanded(!jdTextExpanded)}
+                              className="text-[9px] font-bold text-accent hover:underline uppercase border border-border px-2 py-0.5 bg-background"
+                            >
+                              {jdTextExpanded ? "Standard View" : "Expand View"}
+                            </button>
+                          )}
+                        </div>
                       </div>
+                      
+                      {pdfUrl ? (
+                        <div className="border-2 border-border bg-muted/5 p-1">
+                          <iframe
+                            src={pdfUrl}
+                            className="w-full h-[60vh] border-0"
+                            title="Job Description PDF"
+                          />
+                        </div>
+                      ) : pdfLoading ? (
+                        <div className="border border-border p-8 bg-muted/10 text-center font-mono text-xs animate-pulse uppercase">
+                          Loading Job Description PDF...
+                        </div>
+                      ) : (
+                        <div className={`border border-border p-4 bg-muted/10 overflow-y-auto rounded-none font-mono leading-relaxed whitespace-pre-wrap text-foreground ${
+                          jdTextExpanded ? 'max-h-[75vh] text-xs' : 'max-h-60 text-[10px]'
+                        }`}>
+                          {selectedCompany.jd_text || "No detailed job description text loaded."}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

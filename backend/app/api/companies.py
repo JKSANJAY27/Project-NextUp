@@ -369,6 +369,17 @@ def get_company_events(
         ).all()
         for n in notifications:
             notif_map[n.company_event_id] = n.message
+
+    attachments_map = defaultdict(list)
+    if event_ids:
+        from app.models.models import AttachmentMetadata
+        attachments = db.query(AttachmentMetadata).filter(AttachmentMetadata.company_event_id.in_(event_ids)).all()
+        for att in attachments:
+            attachments_map[att.company_event_id].append({
+                "id": str(att.id),
+                "file_name": att.file_name,
+                "file_type": att.file_type
+            })
             
     results = []
     for e in events:
@@ -381,7 +392,8 @@ def get_company_events(
             "body": e.body,
             "timestamp": e.timestamp.isoformat() if e.timestamp else None,
             "confidence_scores": audit_map[e.id],
-            "user_notification_msg": notif_map.get(e.id)
+            "user_notification_msg": notif_map.get(e.id),
+            "attachments": attachments_map[e.id]
         })
         
     set_cache(cache_key, results, expire_seconds=600)
