@@ -91,19 +91,22 @@ def normalize_company_name(name: str, db: Session) -> str:
         return "Unknown Company"
         
     company_name = name.strip()
+    company_name = re.sub(r'^[*#_\s\-–—]+', '', company_name).strip()
     
     # Fetch all unique company names in database
     existing_companies = db.query(Company.name).distinct().all()
     existing_names = [c[0] for c in existing_companies]
     
-    clean_incoming = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', company_name, flags=re.I).strip().lower()
+    clean_incoming = re.sub(r'^[*#_\s\-–—]+', '', company_name).strip()
+    clean_incoming = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', clean_incoming, flags=re.I).strip().lower()
     clean_incoming = re.sub(r'\s+', ' ', clean_incoming)
     
     best_match = company_name
     best_score = -1
     
     for ext_name in existing_names:
-        clean_ext = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', ext_name, flags=re.I).strip().lower()
+        clean_ext = re.sub(r'^[*#_\s\-–—]+', '', ext_name).strip()
+        clean_ext = re.sub(r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b', '', clean_ext, flags=re.I).strip().lower()
         clean_ext = re.sub(r'\s+', ' ', clean_ext)
         
         score = 0

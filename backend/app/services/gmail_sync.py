@@ -51,10 +51,12 @@ def log_execution_stage(db: Session, job_id: UUID, stage: str, status: str, mess
 def clean_company_name_key(name: str) -> str:
     if not name:
         return ""
+    # Strip leading asterisks, hashes, hyphens, and other special characters
+    name_stripped = re.sub(r'^[*#_\s\-–—]+', '', name).strip()
     cleaned = re.sub(
         r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b',
         '',
-        name,
+        name_stripped,
         flags=re.I
     ).strip().lower()
     return re.sub(r'\s+', ' ', cleaned)

@@ -459,6 +459,8 @@ def extract_company_from_subject(subject: str) -> str:
     
     # Remove zero-width spaces and clean outer whitespace
     s = subject.replace('\u200b', '').replace('\xa0', ' ').replace('_', ' ').strip()
+    # Strip any leading asterisks, hashes, hyphens, and other special characters early on
+    s = re.sub(r'^[*#_\s\-–—]+', '', s).strip()
     
     # Prefix patterns to completely discard at the start of subject
     # Loop to strip nested prefixes

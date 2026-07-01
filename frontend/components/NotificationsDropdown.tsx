@@ -23,6 +23,8 @@ interface NotificationBundle {
 
 export default function NotificationsDropdown() {
   const [bundles, setBundles] = useState<NotificationBundle[]>([]);
+  const [archivedBundles, setArchivedBundles] = useState<NotificationBundle[]>([]);
+  const [activeTab, setActiveTab] = useState<"notifications" | "archived">("notifications");
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -35,8 +37,20 @@ export default function NotificationsDropdown() {
     }
   };
 
+  const fetchArchivedNotifications = async () => {
+    try {
+      const response = await api.get<NotificationBundle[]>("/notifications?scope=archived");
+      setArchivedBundles(response.data || []);
+    } catch (error) {
+      console.error("Failed to fetch archived notifications:", error);
+    }
+  };
+
   useEffect(() => {
     fetchNotifications();
+    if (activeTab === "archived") {
+      fetchArchivedNotifications();
+    }
 
     // Subscribe to realtime database changes for notifications
     const channel = supabase
@@ -46,6 +60,7 @@ export default function NotificationsDropdown() {
         { event: "*", schema: "public", table: "notifications" },
         () => {
           fetchNotifications();
+          fetchArchivedNotifications();
         }
       )
       .subscribe();
@@ -53,7 +68,7 @@ export default function NotificationsDropdown() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [activeTab]);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -147,91 +162,166 @@ export default function NotificationsDropdown() {
       {/* Dropdown Card */}
       {isOpen && (
         <div className="absolute right-0 mt-3 w-80 sm:w-96 border-2 border-border bg-card shadow-2xl z-50 rounded-none animate-in fade-in slide-in-from-top-2 duration-200 max-h-[80vh] flex flex-col">
-          {/* Header */}
-          <div className="flex items-center justify-between border-b-2 border-border px-4 py-3 bg-muted/50 shrink-0">
-            <span className="text-xs font-bold tracking-wider text-foreground uppercase">
-              NOTIFICATIONS ({unreadCount} UNREAD)
-            </span>
-            {unreadCount > 0 && (
+          {/* Tabs Header */}
+          <div className="flex border-b border-border shrink-0 bg-muted/50">
+            <button
+              onClick={() => setActiveTab("notifications")}
+              className={`flex-1 py-3 text-xs font-bold tracking-wider uppercase text-center border-b-2 transition-all ${
+                activeTab === "notifications"
+                  ? "border-accent text-foreground bg-background/50"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Notifications ({unreadCount})
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab("archived");
+                fetchArchivedNotifications();
+              }}
+              className={`flex-1 py-3 text-xs font-bold tracking-wider uppercase text-center border-b-2 transition-all ${
+                activeTab === "archived"
+                  ? "border-accent text-foreground bg-background/50"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Archived
+            </button>
+          </div>
+
+          {/* Sub-Header Actions */}
+          {activeTab === "notifications" && unreadCount > 0 && (
+            <div className="flex items-center justify-end px-4 py-1.5 bg-muted/30 border-b border-border shrink-0">
               <button
                 onClick={handleMarkAllAsRead}
-                className="flex items-center gap-1 text-[10px] font-bold text-accent hover:underline uppercase"
+                className="flex items-center gap-1 text-[9px] font-bold text-accent hover:underline uppercase"
               >
-                <CheckCheck size={12} />
+                <CheckCheck size={11} />
                 <span>MARK ALL READ</span>
               </button>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* List */}
           <div className="overflow-y-auto divide-y divide-border">
-            {bundles.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 text-muted-foreground gap-2">
-                <AlertCircle size={24} className="stroke-1" />
-                <span className="text-xs font-bold uppercase tracking-wider">ALL CLEAR</span>
-                <span className="text-[10px] uppercase">No new alerts at this time.</span>
-              </div>
-            ) : (
-              bundles.map((bundle) => (
-                <div key={bundle.company_id} className="flex flex-col bg-card">
-                  {/* Bundle Header */}
-                  <div className="flex items-center justify-between px-3 py-2 bg-accent/10 border-b border-border sticky top-0 z-10">
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-xs font-bold text-foreground uppercase flex items-center gap-1.5">
-                        <Building2 size={12} className="text-accent" />
-                        {bundle.company_name}
-                      </span>
-                      <span className="text-[10px] font-mono text-muted-foreground">
-                        {bundle.role}
-                      </span>
-                    </div>
-                    {bundle.unread_count > 0 && (
-                      <button
-                        onClick={() => handleMarkCompanyRead(bundle.company_id)}
-                        className="text-[9px] font-bold text-accent hover:underline uppercase flex items-center gap-1"
-                      >
-                        <Check size={10} />
-                        CLEAR
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Bundle Notifications */}
-                  <div className="flex flex-col divide-y divide-border/50">
-                    {bundle.notifications.map((notif) => (
-                      <div
-                        key={notif.id}
-                        className={`flex flex-col gap-1 p-3 transition-all duration-200 ${
-                          notif.is_read ? "opacity-60 bg-transparent" : "bg-accent/5"
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <p className="text-xs font-medium text-foreground leading-relaxed">
-                            {notif.message}
-                          </p>
-                          {!notif.is_read && (
-                            <button
-                              onClick={() => handleMarkAsRead(notif.id, bundle.company_id)}
-                              className="flex-shrink-0 mt-0.5 border border-border p-1 bg-card hover:bg-accent hover:text-black transition-colors rounded-none"
-                              title="Mark as read"
-                            >
-                              <Check size={10} />
-                            </button>
-                          )}
-                        </div>
-                        <span className="text-[9px] text-muted-foreground font-mono">
-                          {new Date(notif.created_at).toLocaleString("en-IN", {
-                            hour: "numeric",
-                            minute: "numeric",
-                            day: "2-digit",
-                            month: "short",
-                          })}
+            {activeTab === "notifications" ? (
+              bundles.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground gap-2">
+                  <AlertCircle size={24} className="stroke-1" />
+                  <span className="text-xs font-bold uppercase tracking-wider">ALL CLEAR</span>
+                  <span className="text-[10px] uppercase">No new alerts at this time.</span>
+                </div>
+              ) : (
+                bundles.map((bundle) => (
+                  <div key={bundle.company_id} className="flex flex-col bg-card">
+                    {/* Bundle Header */}
+                    <div className="flex items-center justify-between px-3 py-2 bg-accent/10 border-b border-border sticky top-0 z-10">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-xs font-bold text-foreground uppercase flex items-center gap-1.5">
+                          <Building2 size={12} className="text-accent" />
+                          {bundle.company_name}
+                        </span>
+                        <span className="text-[10px] font-mono text-muted-foreground">
+                          {bundle.role}
                         </span>
                       </div>
-                    ))}
+                      {bundle.unread_count > 0 && (
+                        <button
+                          onClick={() => handleMarkCompanyRead(bundle.company_id)}
+                          className="text-[9px] font-bold text-accent hover:underline uppercase flex items-center gap-1"
+                        >
+                          <Check size={10} />
+                          CLEAR
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Bundle Notifications */}
+                    <div className="flex flex-col divide-y divide-border/50">
+                      {bundle.notifications.map((notif) => (
+                        <div
+                          key={notif.id}
+                          className={`flex flex-col gap-1 p-3 transition-all duration-200 ${
+                            notif.is_read ? "opacity-60 bg-transparent" : "bg-accent/5"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="text-xs font-medium text-foreground leading-relaxed">
+                              {notif.message}
+                            </p>
+                            {!notif.is_read && (
+                              <button
+                                onClick={() => handleMarkAsRead(notif.id, bundle.company_id)}
+                                className="flex-shrink-0 mt-0.5 border border-border p-1 bg-card hover:bg-accent hover:text-black transition-colors rounded-none"
+                                title="Mark as read"
+                              >
+                                <Check size={10} />
+                              </button>
+                            )}
+                          </div>
+                          <span className="text-[9px] text-muted-foreground font-mono">
+                            {new Date(notif.created_at).toLocaleString("en-IN", {
+                              hour: "numeric",
+                              minute: "numeric",
+                              day: "2-digit",
+                              month: "short",
+                            })}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
+                ))
+              )
+            ) : (
+              archivedBundles.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground gap-2">
+                  <AlertCircle size={24} className="stroke-1" />
+                  <span className="text-xs font-bold uppercase tracking-wider">NO ARCHIVED</span>
+                  <span className="text-[10px] uppercase">No archived drives found.</span>
                 </div>
-              ))
+              ) : (
+                archivedBundles.map((bundle) => (
+                  <div key={bundle.company_id} className="flex flex-col bg-card opacity-75">
+                    {/* Bundle Header */}
+                    <div className="flex items-center justify-between px-3 py-2 bg-muted border-b border-border sticky top-0 z-10">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1.5">
+                          <Building2 size={12} className="text-muted-foreground" />
+                          {bundle.company_name}
+                        </span>
+                        <span className="text-[10px] font-mono text-muted-foreground/80">
+                          {bundle.role}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Bundle Notifications */}
+                    <div className="flex flex-col divide-y divide-border/50">
+                      {bundle.notifications.map((notif) => (
+                        <div
+                          key={notif.id}
+                          className="flex flex-col gap-1 p-3 bg-transparent opacity-80"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="text-xs text-muted-foreground leading-relaxed">
+                              {notif.message}
+                            </p>
+                          </div>
+                          <span className="text-[9px] text-muted-foreground/60 font-mono">
+                            {new Date(notif.created_at).toLocaleString("en-IN", {
+                              hour: "numeric",
+                              minute: "numeric",
+                              day: "2-digit",
+                              month: "short",
+                            })}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )
             )}
           </div>
         </div>
