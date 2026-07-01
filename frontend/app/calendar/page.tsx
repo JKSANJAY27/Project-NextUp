@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import api from "@/lib/api";
 
 import { useCalendarEvents, useApplications } from "@/lib/queries";
-import { CompanyWorkspaceModal } from "@/components/CompanyWorkspaceModal";
+import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
 import { 
   ChevronLeft, 
   ChevronRight, 
