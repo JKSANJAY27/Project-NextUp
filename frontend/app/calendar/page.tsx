@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import Link from "next/link";
 import api from "@/lib/api";
 
 import { useCalendarEvents, useApplications } from "@/lib/queries";
@@ -506,7 +505,7 @@ export default function CalendarPage() {
                             title={`${e.title} (${e.event_type.toUpperCase()})`}
                           >
                             <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${clr.dot}`} />
-                            <span className="truncate uppercase">{e.company_name || e.title.replace(/registration deadline:?\s*/i, '').replace(/- registration deadline\s*/i, '')}</span>
+                            <span className="truncate uppercase">{e.company_name || e.title.replace(/(registration|update|deadline|oa|interview|assessment)/gi, '').replace(/^[-:\s]+|[-:\s]+$/g, '').trim() || e.title}</span>
                           </div>
                         );
                       })}
@@ -992,3 +991,4 @@ export default function CalendarPage() {
     </div>
   );
 }
+

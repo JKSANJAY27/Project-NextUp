@@ -9,7 +9,7 @@ import api from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDashboard, CACHE_KEYS } from "@/lib/queries";
 import { SkeletonDashboard } from "@/components/SkeletonLoader";
-import { CompanyWorkspaceModal } from "@/components/CompanyWorkspaceModal";
+import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
 import { 
   Plus, 
   Lock, 
@@ -17,13 +17,9 @@ import {
   XCircle, 
   HelpCircle,
   ExternalLink,
-  Globe,
   AlertCircle,
   X,
-  Link2,
   Clock,
-  Calendar,
-  ArrowRight,
   TrendingUp,
   Award,
   AlertTriangle,
@@ -50,16 +46,6 @@ interface TodayEvent {
   companyId: string;
 }
 
-interface TimelineEvent {
-  id: string;
-  type: string;
-  title: string;
-  message: string;
-  body: string;
-  sender: string;
-  timestamp: Date;
-  confidence_scores: Record<string, number>;
-}
 
 interface Company {
   id: string;
@@ -232,16 +218,7 @@ function DashboardPageContent() {
   const [showComparison, setShowComparison] = useState(false);
 
   // Company Workspace Drawer state
-  const [modalTab, setModalTab] = useState<"overview" | "details" | "toolkit">("overview");
-  const [editingRoundNote, setEditingRoundNote] = useState<string | null>(null);
-  const [tempNoteText, setTempNoteText] = useState("");
-  const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
-  const [expandedEmailHeightId, setExpandedEmailHeightId] = useState<string | null>(null);
-  const [jdTextExpanded, setJdTextExpanded] = useState(false);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-  const [pdfLoading, setPdfLoading] = useState(false);
-  const [decryptedNotes, setDecryptedNotes] = useState<Record<string, string>>({});
-  const [companyEvents, setCompanyEvents] = useState<CompanyEvent[]>([]);
+                    const [companyEvents, setCompanyEvents] = useState<CompanyEvent[]>([]);
 
   // Manual Company Form State
   const [compName, setCompName] = useState("");
@@ -657,30 +634,7 @@ function DashboardPageContent() {
   };
 
 
-  // Timeline Notes GCM Encryption & Save
-  const handleSaveRoundNote = async (roundKey: string, noteText: string) => {
-    if (!selectedCompany || !encryptionKey) return;
-    
-    const updatedNotes = {
-      ...decryptedNotes,
-      [roundKey]: noteText
-    };
-    
-    try {
-      const { encryptData } = await import("@/lib/crypto");
-      const plaintext = JSON.stringify(updatedNotes);
-      const encrypted = await encryptData(plaintext, encryptionKey);
-      
-      await handleUpdateApplication(selectedCompany.id, {
-        notes_enc: encrypted
-      });
-      setDecryptedNotes(updatedNotes);
-    } catch (err) {
-      console.error("Failed to save round note:", err);
-      alert("Failed to save note. Please verify encryption key.");
-    }
-  };
-
+  
   // Manual trigger for email sync (calls FastAPI queue processing webhook)
   const handleTriggerSync = async () => {
     setSyncing(true);
@@ -815,72 +769,9 @@ function DashboardPageContent() {
 
 
   // Compile timeline events list for the selected company drawer
-  const getTimelineEvents = React.useCallback(() => {
-    if (!selectedCompany) return [];
-    
-    const events: TimelineEvent[] = [];
-    
-    if (companyEvents && companyEvents.length > 0) {
-      companyEvents.forEach(e => {
-        events.push({
-          id: e.id,
-          type: e.event_type.toLowerCase(),
-          title: e.event_type.toUpperCase(),
-          message: e.user_notification_msg || e.subject || "Company Update",
-          body: e.body || e.subject || "No details available.",
-          sender: e.sender || "CDC Mail",
-          timestamp: e.timestamp ? new Date(e.timestamp) : new Date(),
-          confidence_scores: e.confidence_scores || {}
-        });
-      });
-    } else {
-      events.push({
-        id: "baseline",
-        type: "system",
-        title: "WORKSPACE CREATED",
-        message: `Application workspace for ${selectedCompany.name} is initialized.`,
-        body: `Workspace tracking started for ${selectedCompany.role} position at ${selectedCompany.name}.`,
-        sender: "System Event",
-        timestamp: selectedCompany.registration_deadline ? new Date(selectedCompany.registration_deadline) : new Date(),
-        confidence_scores: {}
-      });
-    }
-    
-    return events.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  }, [selectedCompany, companyEvents]);
-
+  
   // Calculate Application Health Score checkmarks
-  const getHealthScore = (app: Application | undefined) => {
-    if (!app) return 0;
-    
-    let score = 0;
-    const stage = app.recruitment_state || app.status || 'Registration';
-    const stageLower = stage.toLowerCase();
-    
-    if (stageLower.includes('registration') || stageLower.includes('interested')) {
-      score += 15;
-    } else if (stageLower.includes('applied') || stageLower.includes('awaiting shortlist')) {
-      score += 40;
-    } else if (stageLower.includes('shortlisted')) {
-      score += 55;
-    } else if (stageLower.includes('oa') || stageLower.includes('awaiting oa result')) {
-      score += 70;
-    } else if (stageLower.includes('interview') || stageLower.includes('awaiting interview result')) {
-      score += 85;
-    } else if (stageLower.includes('offer') || stageLower.includes('rejected') || stageLower.includes('likely rejected')) {
-      score += 100;
-    }
-    
-    if (app.match_score > 0) {
-      score += 10;
-    }
-    
-    if (app.notes_enc) {
-      score += 5;
-    }
-    
-    return Math.min(100, score);
-  };
+
 
 
 
@@ -991,10 +882,8 @@ function DashboardPageContent() {
   const conversionRate = React.useMemo(() => totalAppsCount > 0 ? ((offersCount / totalAppsCount) * 100).toFixed(1) : "0.0", [totalAppsCount, offersCount]);
 
   // Timeline and Workspace Drawer computed states
-  const selectedApp = React.useMemo(() => selectedCompany ? applications[selectedCompany.id] : undefined, [selectedCompany, applications]);
-  const workspaceEvents = React.useMemo(() => getTimelineEvents(), [getTimelineEvents]);
-  const healthVal = React.useMemo(() => getHealthScore(selectedApp), [selectedApp]);
 
+    
   return (
     <div className="flex-1 bg-background flex flex-col min-h-screen">
       

@@ -3,35 +3,19 @@
 import React, { useState, useEffect } from "react";
 import { useAppStore } from "@/lib/store";
 import api from "@/lib/api";
-import { useQueryClient } from "@tanstack/react-query";
 import { useCompanies, useApplications } from "@/lib/queries";
 import { Company, Application, CompanyEvent } from "./types";
 import TrackingStats from "@/components/TrackingStats";
 import TrackingSection from "@/components/TrackingSection";
 import TrackingCard from "@/components/TrackingCard";
-import { CompanyWorkspaceModal } from "@/components/CompanyWorkspaceModal";
+import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
 import { 
-  X, Calendar, Archive, Award, 
-  CheckCircle, XCircle, HelpCircle, ExternalLink, Globe, 
-  Link2, AlertTriangle, Activity
-} from "lucide-react";
+  Activity, } from "lucide-react";
 
 type FilterMode = "ALL" | "ACTIVE_ROUNDS" | "UPCOMING_7_DAYS" | "INTERVIEWS" | "OFFERS";
 
-interface TimelineEvent {
-  id: string;
-  type: string;
-  title: string;
-  message: string;
-  body: string;
-  sender: string;
-  timestamp: Date;
-  confidence_scores: Record<string, number>;
-}
-
 export default function TrackingPage() {
   const { user, encryptionKey } = useAppStore();
-  const queryClient = useQueryClient();
 
   const [companies, setCompanies] = useState<Company[]>([]);
   const [applications, setApplications] = useState<Record<string, Application>>({});
@@ -43,16 +27,7 @@ export default function TrackingPage() {
   const [companyEvents, setCompanyEvents] = useState<Record<string, CompanyEvent[]>>({});
 
   // Workspace modal states
-  const [modalTab, setModalTab] = useState<"overview" | "details" | "toolkit">("overview");
-  const [editingRoundNote, setEditingRoundNote] = useState<string | null>(null);
-  const [tempNoteText, setTempNoteText] = useState("");
-  const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
-  const [expandedEmailHeightId, setExpandedEmailHeightId] = useState<string | null>(null);
-  const [jdTextExpanded, setJdTextExpanded] = useState(false);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-  const [pdfLoading, setPdfLoading] = useState(false);
-  const [decryptedNotes, setDecryptedNotes] = useState<Record<string, string>>({});
-
+    
   const { data: companiesData, isLoading: companiesLoading } = useCompanies(!!user);
   const { data: applicationsData, isLoading: applicationsLoading } = useApplications(!!user);
 
@@ -79,9 +54,7 @@ export default function TrackingPage() {
     }
   }, [applicationsData]);
 
-  const fetchTrackingData = async () => {
-    queryClient.invalidateQueries();
-  };
+
 
   useEffect(() => {
     if (selectedCompanyId && !companyEvents[selectedCompanyId]) {
@@ -139,35 +112,9 @@ export default function TrackingPage() {
     return events[events.length - 1];
   };
 
-  const handleUpdateApplication = async (companyId: string, updates: Partial<Application>) => {
-    const app = applications[companyId];
-    if (!app) return;
-    try {
-      if (updates.status) {
-        const recruitmentMap: Record<string, string> = {
-          "Applied": "Registration",
-          "Shortlisted": "Shortlisted",
-          "OA": "OA",
-          "Interview": "Interview",
-          "Offer": "Offer",
-          "Rejected": "Rejected"
-        };
-        updates.recruitment_state = recruitmentMap[updates.status] || updates.status;
-      }
-      const res = await api.patch(`/applications/${app.id}`, updates);
-      setApplications(prev => ({
-        ...prev,
-        [companyId]: res.data
-      }));
-      queryClient.invalidateQueries({ queryKey: ["applications"] });
-      fetchTrackingData();
-    } catch (err) {
-      console.error("Failed to update application:", err);
-    }
-  };
+
 
   const selectedCompany = companies.find(c => c.id === selectedCompanyId) || null;
-  const selectedApp = selectedCompanyId ? applications[selectedCompanyId] : null;
 
   // Decrypt notes whenever selectedCompany changes or encryption key is available
   useEffect(() => {
@@ -196,133 +143,6 @@ export default function TrackingPage() {
     };
     decryptNotesObj();
   }, [selectedCompany, applications, encryptionKey]);
-
-  // Timeline Notes GCM Encryption & Save
-  const handleSaveRoundNote = async (roundKey: string, noteText: string) => {
-    if (!selectedCompany || !encryptionKey) return;
-    
-    const updatedNotes = {
-      ...decryptedNotes,
-      [roundKey]: noteText
-    };
-    
-    try {
-      const { encryptData } = await import("@/lib/crypto");
-      const plaintext = JSON.stringify(updatedNotes);
-      const encrypted = await encryptData(plaintext, encryptionKey);
-      
-      await handleUpdateApplication(selectedCompany.id, {
-        notes_enc: encrypted
-      });
-      setDecryptedNotes(updatedNotes);
-    } catch (err) {
-      console.error("Failed to save round note:", err);
-      alert("Failed to save note. Please verify encryption key.");
-    }
-  };
-
-  // Compile timeline events list for the selected company modal
-  const getTimelineEvents = React.useCallback(() => {
-    if (!selectedCompany) return [];
-    
-    const events: TimelineEvent[] = [];
-    const evts = companyEvents[selectedCompany.id] || [];
-    
-    if (evts.length > 0) {
-      evts.forEach(e => {
-        events.push({
-          id: e.id,
-          type: e.event_type.toLowerCase(),
-          title: e.event_type.toUpperCase(),
-          message: e.user_notification_msg || e.subject || "Company Update",
-          body: e.body || e.subject || "No details available.",
-          sender: e.sender || "CDC Mail",
-          timestamp: e.timestamp ? new Date(e.timestamp) : new Date(),
-          confidence_scores: e.confidence_scores || {}
-        });
-      });
-    } else {
-      events.push({
-        id: "baseline",
-        type: "system",
-        title: "WORKSPACE CREATED",
-        message: `Application workspace for ${selectedCompany.name} is initialized.`,
-        body: `Workspace tracking started for ${selectedCompany.role} position at ${selectedCompany.name}.`,
-        sender: "System Event",
-        timestamp: selectedCompany.registration_deadline ? new Date(selectedCompany.registration_deadline) : new Date(),
-        confidence_scores: {}
-      });
-    }
-    
-    return events.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  }, [selectedCompany, companyEvents]);
-
-  const workspaceEvents = React.useMemo(() => getTimelineEvents(), [getTimelineEvents]);
-
-  // Calculate Health Score
-  const getHealthScore = (app: Application | null) => {
-    if (!app) return 0;
-    
-    let score = 0;
-    const stage = app.recruitment_state || app.status || 'Registration';
-    const stageLower = stage.toLowerCase();
-    
-    if (stageLower.includes('registration') || stageLower.includes('interested')) {
-      score += 15;
-    } else if (stageLower.includes('applied') || stageLower.includes('awaiting shortlist')) {
-      score += 40;
-    } else if (stageLower.includes('shortlisted')) {
-      score += 55;
-    } else if (stageLower.includes('oa') || stageLower.includes('awaiting oa result')) {
-      score += 70;
-    } else if (stageLower.includes('interview') || stageLower.includes('awaiting interview result')) {
-      score += 85;
-    } else if (stageLower.includes('offer') || stageLower.includes('rejected') || stageLower.includes('likely rejected')) {
-      score += 100;
-    }
-    
-    if (app.match_score > 0) {
-      score += 10;
-    }
-    
-    if (app.notes_enc) {
-      score += 5;
-    }
-    
-    return Math.min(100, score);
-  };
-
-  const healthVal = React.useMemo(() => getHealthScore(selectedApp), [selectedApp]);
-
-  // Calculate Prep Score
-  const getPrepScore = (comp: Company) => {
-    let score = 0;
-    score += 70; // Tracked is implicitly eligible
-    
-    if (user && user.neo_id_enc) {
-      score += 20;
-    }
-    
-    const userSkills = user?.skills || [];
-    const compSkills = comp.jd_required_skills || [];
-    const overlap = userSkills.filter((s: string) => compSkills.map((cs: string) => cs.toLowerCase()).includes(s.toLowerCase()));
-    if (overlap.length > 0) {
-      score += 10;
-    }
-    
-    return Math.min(100, score);
-  };
-
-  const getEligibilityIcon = (status: string) => {
-    switch (status) {
-      case "ELIGIBLE": 
-        return <span className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-500 border border-emerald-500 px-2 py-0.5"><CheckCircle size={10} /> ELIGIBLE</span>;
-      case "NOT_ELIGIBLE": 
-        return <span className="flex items-center gap-1.5 text-[10px] font-bold text-red-500 border border-red-500 px-2 py-0.5"><XCircle size={10} /> INELIGIBLE</span>;
-      default: 
-        return <span className="flex items-center gap-1.5 text-[10px] font-bold text-amber-500 border border-amber-500 px-2 py-0.5"><HelpCircle size={10} /> CHECK</span>;
-    }
-  };
 
   // PDF Rendering Hook
   const jdPdfAttachment = React.useMemo(() => {
