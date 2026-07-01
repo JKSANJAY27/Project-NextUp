@@ -64,5 +64,5 @@ export interface CompanyEvent {
   timestamp: string | null;
   confidence_scores: Record<string, number>;
   user_notification_msg: string | null;
-  attachments?: any[];
+  attachments?: Array<{ id: string; file_type: string; file_name: string }>;
 }

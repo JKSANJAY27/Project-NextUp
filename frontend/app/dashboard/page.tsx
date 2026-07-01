@@ -427,7 +427,7 @@ function DashboardPageContent() {
   const jdPdfAttachment = React.useMemo(() => {
     for (const evt of companyEvents) {
       if (evt.attachments) {
-        const pdf = evt.attachments.find((att: any) => att.file_type === 'JD_PDF');
+        const pdf = evt.attachments.find((att) => att.file_type === 'JD_PDF');
         if (pdf) return pdf;
       }
     }
@@ -436,6 +436,7 @@ function DashboardPageContent() {
 
   useEffect(() => {
     let active = true;
+    let localPdfUrl: string | null = null;
     const loadPdf = async () => {
       if (!jdPdfAttachment) {
         setPdfUrl(null);
@@ -448,8 +449,8 @@ function DashboardPageContent() {
         });
         if (active) {
           const blob = new Blob([response.data], { type: 'application/pdf' });
-          const url = URL.createObjectURL(blob);
-          setPdfUrl(url);
+          localPdfUrl = URL.createObjectURL(blob);
+          setPdfUrl(localPdfUrl);
         }
       } catch (err) {
         console.error("Failed to load JD PDF:", err);
@@ -463,8 +464,8 @@ function DashboardPageContent() {
 
     return () => {
       active = false;
-      if (pdfUrl) {
-        URL.revokeObjectURL(pdfUrl);
+      if (localPdfUrl) {
+        URL.revokeObjectURL(localPdfUrl);
       }
     };
   }, [jdPdfAttachment]);

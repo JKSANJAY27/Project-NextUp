@@ -10,8 +10,8 @@ import TrackingStats from "@/components/TrackingStats";
 import TrackingSection from "@/components/TrackingSection";
 import TrackingCard from "@/components/TrackingCard";
 import { 
-  X, Calendar, Edit2, Archive, StickyNote, FileText, MapPin, Award, 
-  CheckCircle, XCircle, HelpCircle, ArrowRight, ExternalLink, Globe, 
+  X, Calendar, Archive, Award, 
+  CheckCircle, XCircle, HelpCircle, ExternalLink, Globe, 
   Link2, AlertTriangle, Activity
 } from "lucide-react";
 
@@ -138,7 +138,7 @@ export default function TrackingPage() {
     return events[events.length - 1];
   };
 
-  const handleUpdateApplication = async (companyId: string, updates: any) => {
+  const handleUpdateApplication = async (companyId: string, updates: Partial<Application>) => {
     const app = applications[companyId];
     if (!app) return;
     try {
@@ -294,7 +294,7 @@ export default function TrackingPage() {
   const healthVal = React.useMemo(() => getHealthScore(selectedApp), [selectedApp]);
 
   // Calculate Prep Score
-  const getPrepScore = (comp: any) => {
+  const getPrepScore = (comp: Company) => {
     let score = 0;
     score += 70; // Tracked is implicitly eligible
     
@@ -329,8 +329,7 @@ export default function TrackingPage() {
     const evts = companyEvents[selectedCompanyId] || [];
     for (const evt of evts) {
       if (evt.attachments) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const pdf = (evt as any).attachments.find((att: any) => att.file_type === 'JD_PDF');
+        const pdf = evt.attachments.find((att) => att.file_type === 'JD_PDF');
         if (pdf) return pdf;
       }
     }
@@ -339,6 +338,7 @@ export default function TrackingPage() {
 
   useEffect(() => {
     let active = true;
+    let localPdfUrl: string | null = null;
     const loadPdf = async () => {
       if (!jdPdfAttachment) {
         setPdfUrl(null);
@@ -351,8 +351,8 @@ export default function TrackingPage() {
         });
         if (active) {
           const blob = new Blob([response.data], { type: 'application/pdf' });
-          const url = URL.createObjectURL(blob);
-          setPdfUrl(url);
+          localPdfUrl = URL.createObjectURL(blob);
+          setPdfUrl(localPdfUrl);
         }
       } catch (err) {
         console.error("Failed to load JD PDF:", err);
@@ -366,8 +366,8 @@ export default function TrackingPage() {
 
     return () => {
       active = false;
-      if (pdfUrl) {
-        URL.revokeObjectURL(pdfUrl);
+      if (localPdfUrl) {
+        URL.revokeObjectURL(localPdfUrl);
       }
     };
   }, [jdPdfAttachment]);
