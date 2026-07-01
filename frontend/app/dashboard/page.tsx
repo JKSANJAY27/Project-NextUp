@@ -1324,12 +1324,19 @@ function DashboardPageContent() {
                           </button>
                         </div>
 
-                        {/* Pending-since sub-label */}
-                        {opp?.decision_pending_since && (
-                          <p className="text-[9px] text-muted-foreground/60 uppercase">
-                            Pending since {new Date(opp.decision_pending_since).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
-                          </p>
-                        )}
+                        {/* Footer: Pending-since & Workspace Link */}
+                        <div className="flex items-center justify-between mt-1 border-t border-border/40 pt-2">
+                          <div>
+                            {opp?.decision_pending_since ? (
+                              <p className="text-[9px] text-muted-foreground/60 uppercase">
+                                Pending since {new Date(opp.decision_pending_since).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
+                              </p>
+                            ) : <span />}
+                          </div>
+                          <Link href={`/tracking?companyId=${comp.id}`} className="text-[9px] font-black tracking-widest text-accent uppercase hover:underline transition-all">
+                            VIEW WORKSPACE &rarr;
+                          </Link>
+                        </div>
                       </div>
                     );
                   })}

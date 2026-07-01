@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import api from "@/lib/api";
 
 import { useCalendarEvents, useApplications } from "@/lib/queries";
@@ -503,7 +504,7 @@ export default function CalendarPage() {
                             title={`${e.title} (${e.event_type.toUpperCase()})`}
                           >
                             <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${clr.dot}`} />
-                            <span className="truncate uppercase">{e.title}</span>
+                            <span className="truncate uppercase">{e.company_name || e.title}</span>
                           </div>
                         );
                       })}
@@ -568,7 +569,7 @@ export default function CalendarPage() {
 
                       {/* Title */}
                       <h4 className={`font-extrabold text-sm uppercase tracking-tight text-foreground leading-snug ${e.completed ? "line-through" : ""}`}>
-                        {e.title}
+                        {e.company_name ? `${e.company_name} - ${e.title}` : e.title}
                       </h4>
 
                       {/* Display Info (Company & Role) if available */}
@@ -598,17 +599,24 @@ export default function CalendarPage() {
                         </div>
                       )}
 
-                      {/* Source Info */}
-                      <div className="text-[10px] font-bold text-muted-foreground uppercase flex items-center gap-1.5 border-t border-border/20 pt-2">
-                        <span>SOURCE:</span>
-                        {e.source === 'application_timeline' ? (
-                          <span className="text-emerald-500 font-extrabold flex items-center gap-1">
-                            ✓ AUTO (CDC MAIL)
-                          </span>
-                        ) : (
-                          <span className="text-amber-500 font-extrabold flex items-center gap-1">
-                            ✏ MANUAL
-                          </span>
+                      {/* Source Info and Workspace Link */}
+                      <div className="flex items-center justify-between border-t border-border/20 pt-2 mt-1">
+                        <div className="text-[10px] font-bold text-muted-foreground uppercase flex items-center gap-1.5">
+                          <span>SOURCE:</span>
+                          {e.source === 'application_timeline' ? (
+                            <span className="text-emerald-500 font-extrabold flex items-center gap-1">
+                              ✓ AUTO (CDC MAIL)
+                            </span>
+                          ) : (
+                            <span className="text-amber-500 font-extrabold flex items-center gap-1">
+                              ✏ MANUAL
+                            </span>
+                          )}
+                        </div>
+                        {e.company_id && (
+                          <Link href={`/tracking?companyId=${e.company_id}`} className="text-[9px] font-black tracking-widest text-accent uppercase hover:underline transition-all">
+                            VIEW WORKSPACE &rarr;
+                          </Link>
                         )}
                       </div>
 
