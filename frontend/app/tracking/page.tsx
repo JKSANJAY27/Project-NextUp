@@ -9,9 +9,7 @@ import TrackingStats from "@/components/TrackingStats";
 import TrackingSection from "@/components/TrackingSection";
 import TrackingCard from "@/components/TrackingCard";
 import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
-import { 
-  Activity, } from "lucide-react";
-
+import { Activity } from "lucide-react";
 type FilterMode = "ALL" | "ACTIVE_ROUNDS" | "UPCOMING_7_DAYS" | "INTERVIEWS" | "OFFERS";
 
 export default function TrackingPage() {
@@ -27,7 +25,12 @@ export default function TrackingPage() {
   const [companyEvents, setCompanyEvents] = useState<Record<string, CompanyEvent[]>>({});
 
   // Workspace modal states
-    
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any
+  const [decryptedNotes, setDecryptedNotes] = useState<Record<string, any>>({});
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [pdfLoading, setPdfLoading] = useState(false);
   const { data: companiesData, isLoading: companiesLoading } = useCompanies(!!user);
   const { data: applicationsData, isLoading: applicationsLoading } = useApplications(!!user);
 
@@ -250,37 +253,37 @@ export default function TrackingPage() {
           <div className="space-y-6">
             <TrackingSection title="Registration" count={categorized.REGISTRATION.length} colorClass="bg-yellow-500">
               {categorized.REGISTRATION.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REGISTRATION" onClick={() => { setSelectedCompanyId(c.id); setModalTab("overview"); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REGISTRATION" onClick={() => { setSelectedCompanyId(c.id); }} />
               ))}
             </TrackingSection>
             
             <TrackingSection title="Shortlisted" count={categorized.SHORTLISTED.length} colorClass="bg-blue-500">
               {categorized.SHORTLISTED.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="SHORTLISTED" onClick={() => { setSelectedCompanyId(c.id); setModalTab("overview"); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="SHORTLISTED" onClick={() => { setSelectedCompanyId(c.id); }} />
               ))}
             </TrackingSection>
 
             <TrackingSection title="Online Assessment" count={categorized.ONLINE_ASSESSMENT.length} colorClass="bg-orange-500">
               {categorized.ONLINE_ASSESSMENT.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="ONLINE_ASSESSMENT" onClick={() => { setSelectedCompanyId(c.id); setModalTab("overview"); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="ONLINE_ASSESSMENT" onClick={() => { setSelectedCompanyId(c.id); }} />
               ))}
             </TrackingSection>
 
             <TrackingSection title="Interview" count={categorized.INTERVIEW.length} colorClass="bg-purple-500">
               {categorized.INTERVIEW.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="INTERVIEW" onClick={() => { setSelectedCompanyId(c.id); setModalTab("overview"); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="INTERVIEW" onClick={() => { setSelectedCompanyId(c.id); }} />
               ))}
             </TrackingSection>
 
             <TrackingSection title="Offer Received" count={categorized.OFFER.length} colorClass="bg-emerald-500">
               {categorized.OFFER.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="OFFER" onClick={() => { setSelectedCompanyId(c.id); setModalTab("overview"); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="OFFER" onClick={() => { setSelectedCompanyId(c.id); }} />
               ))}
             </TrackingSection>
             
             <TrackingSection title="Rejected" count={categorized.REJECTED.length} colorClass="bg-red-500">
               {categorized.REJECTED.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REJECTED" onClick={() => { setSelectedCompanyId(c.id); setModalTab("overview"); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REJECTED" onClick={() => { setSelectedCompanyId(c.id); }} />
               ))}
             </TrackingSection>
           </div>

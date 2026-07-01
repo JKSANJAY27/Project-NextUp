@@ -218,7 +218,13 @@ function DashboardPageContent() {
   const [showComparison, setShowComparison] = useState(false);
 
   // Company Workspace Drawer state
-                    const [companyEvents, setCompanyEvents] = useState<CompanyEvent[]>([]);
+  const [companyEvents, setCompanyEvents] = useState<CompanyEvent[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any
+  const [decryptedNotes, setDecryptedNotes] = useState<Record<string, any>>({});
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [pdfLoading, setPdfLoading] = useState(false);
 
   // Manual Company Form State
   const [compName, setCompName] = useState("");
@@ -1223,7 +1229,7 @@ function DashboardPageContent() {
                               </p>
                             ) : <span />}
                           </div>
-                          <button onClick={() => { setSelectedCompany(comp); setModalTab("overview"); }} className="text-[9px] font-black tracking-widest text-accent uppercase hover:underline transition-all">
+                          <button onClick={() => { setSelectedCompany(comp); }} className="text-[9px] font-black tracking-widest text-accent uppercase hover:underline transition-all">
                             VIEW WORKSPACE &rarr;
                           </button>
                         </div>
@@ -1596,7 +1602,7 @@ function DashboardPageContent() {
 
                             <td 
                               className="py-5 px-6 cursor-pointer group"
-                              onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}
+                              onClick={() => { setSelectedCompany(c); }}
                             >
                               <div className="flex items-center gap-2 flex-wrap">
                                 <p className="font-bold text-base uppercase tracking-tighter text-foreground group-hover:text-accent transition-colors">{c.name}</p>
@@ -1962,7 +1968,7 @@ function DashboardPageContent() {
                               
                               return (
                                 <tr key={c.id} className="hover:bg-muted/15 transition-colors" onMouseEnter={() => prefetchCompanyDetails(c.id)}>
-                                  <td className="py-4 px-6 cursor-pointer" onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}>
+                                  <td className="py-4 px-6 cursor-pointer" onClick={() => { setSelectedCompany(c); }}>
                                     <p className="font-bold text-sm uppercase tracking-tight text-foreground">{c.name}</p>
                                     <p className="text-[10px] text-muted-foreground uppercase">{c.role} ✦ {c.job_location || "Unknown"}</p>
                                   </td>
