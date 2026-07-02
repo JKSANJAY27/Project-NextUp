@@ -10,6 +10,7 @@ import TrackingStats from "@/components/TrackingStats";
 import TrackingSection from "@/components/TrackingSection";
 import TrackingCard from "@/components/TrackingCard";
 import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
+import ConfirmArchiveModal from "@/components/ConfirmArchiveModal";
 import { Activity } from "lucide-react";
 type FilterMode = "ALL" | "ACTIVE_ROUNDS" | "UPCOMING_7_DAYS" | "INTERVIEWS" | "OFFERS";
 
@@ -36,39 +37,58 @@ export default function TrackingPage() {
   const { data: companiesData, isLoading: companiesLoading } = useCompanies(!!user);
   const { data: applicationsData, isLoading: applicationsLoading } = useApplications(!!user);
 
-  const handleArchive = async (companyId: string) => {
+  const [archiveConfirm, setArchiveConfirm] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: () => {}
+  });
+
+  const handleArchive = (companyId: string) => {
     const compName = companies.find(c => c.id === companyId)?.name || "this company";
-    if (window.confirm(`Are you sure you want to archive ${compName}? This will remove it from active tracking.`)) {
-      try {
-        const app = applications[companyId];
-        if (app) {
-          // Optimistic UI update
-          setApplications(prev => {
-            const next = { ...prev };
-            delete next[companyId];
-            return next;
-          });
+    setArchiveConfirm({
+      isOpen: true,
+      title: "Archive Workspace",
+      message: `Are you sure you want to archive ${compName}? This will remove it from active tracking.`,
+      onConfirm: async () => {
+        try {
+          const app = applications[companyId];
+          if (app) {
+            // Optimistic UI update
+            setApplications(prev => {
+              const next = { ...prev };
+              delete next[companyId];
+              return next;
+            });
+            
+            await api.patch(`/applications/${app.id}`, {
+              user_decision: "archived",
+              status: "Archived"
+            });
+          }
           
-          await api.patch(`/applications/${app.id}`, {
-            user_decision: "archived",
-            status: "Archived"
-          });
+          // Also call the opportunity state archive endpoint to sync state
+          await api.post(`/applications/opportunity-state?company_id=${companyId}&action=archive&reason=MANUAL_NOT_INTERESTED`);
+          
+          // Invalidate queries
+          queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+          queryClient.invalidateQueries({ queryKey: ["applications"] });
+          queryClient.invalidateQueries({ queryKey: ["calendar"] });
+        } catch (err) {
+          console.error("Failed to archive application", err);
+          alert("Failed to archive application.");
+          // Refetch to restore state
+          queryClient.invalidateQueries({ queryKey: ["applications"] });
+        } finally {
+          setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
         }
-        
-        // Also call the opportunity state archive endpoint to sync state
-        await api.post(`/applications/opportunity-state?company_id=${companyId}&action=archive&reason=MANUAL_NOT_INTERESTED`);
-        
-        // Invalidate queries
-        queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-        queryClient.invalidateQueries({ queryKey: ["applications"] });
-        queryClient.invalidateQueries({ queryKey: ["calendar"] });
-      } catch (err) {
-        console.error("Failed to archive application", err);
-        alert("Failed to archive application.");
-        // Refetch to restore state
-        queryClient.invalidateQueries({ queryKey: ["applications"] });
       }
-    }
+    });
   };
 
   useEffect(() => {
@@ -335,6 +355,14 @@ export default function TrackingPage() {
           onClose={() => setSelectedCompanyId(null)}
         />
       )}
+
+      <ConfirmArchiveModal
+        isOpen={archiveConfirm.isOpen}
+        title={archiveConfirm.title}
+        message={archiveConfirm.message}
+        onConfirm={archiveConfirm.onConfirm}
+        onCancel={() => setArchiveConfirm(prev => ({ ...prev, isOpen: false }))}
+      />
     </>
   );
 }

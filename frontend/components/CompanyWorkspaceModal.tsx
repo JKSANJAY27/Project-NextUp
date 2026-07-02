@@ -8,6 +8,7 @@ import Link from "next/link";
 import api from "@/lib/api";
 import { useDashboard } from "@/lib/queries";
 import { useAppStore } from "@/lib/store";
+import ConfirmArchiveModal from "./ConfirmArchiveModal";
 
 export default function CompanyWorkspaceModal({
   companyId,
@@ -32,6 +33,18 @@ export default function CompanyWorkspaceModal({
   const [decryptedNotes, setDecryptedNotes] = useState<Record<string, string>>({});
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [companyEvents, setCompanyEvents] = useState<any[]>([]);
+
+  const [archiveConfirm, setArchiveConfirm] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: () => {}
+  });
 
   const companies = dashboardData?.companies || [];
   const applications = dashboardData?.applications || {};
@@ -339,20 +352,25 @@ export default function CompanyWorkspaceModal({
                           </select>
                         </div>
                         <button
-                          onClick={async () => {
-                            if (window.confirm(`Are you sure you want to archive ${selectedCompany.name}? This will remove it from active tracking.`)) {
-                              await handleUpdateApplication(selectedCompany.id, {
-                                user_decision: "archived",
-                                status: "Archived"
-                              });
-                              // Also call the opportunity state archive endpoint to sync state with the dashboard page
-                              try {
-                                await api.post(`/applications/opportunity-state?company_id=${selectedCompany.id}&action=archive&reason=MANUAL_NOT_INTERESTED`);
-                              } catch (e) {
-                                console.error(e);
+                          onClick={() => {
+                            setArchiveConfirm({
+                              isOpen: true,
+                              title: "Archive Workspace",
+                              message: `Are you sure you want to archive ${selectedCompany.name}? This will remove it from active tracking.`,
+                              onConfirm: async () => {
+                                await handleUpdateApplication(selectedCompany.id, {
+                                  user_decision: "archived",
+                                  status: "Archived"
+                                });
+                                try {
+                                  await api.post(`/applications/opportunity-state?company_id=${selectedCompany.id}&action=archive&reason=MANUAL_NOT_INTERESTED`);
+                                } catch (e) {
+                                  console.error(e);
+                                }
+                                setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                                onClose();
                               }
-                              onClose();
-                            }
+                            });
                           }}
                           className="h-8 px-3 border-2 border-red-500/50 bg-red-500/10 text-red-400 font-bold text-[10px] uppercase tracking-wider hover:bg-red-500 hover:text-white transition-all"
                           title="Archive application"
@@ -894,6 +912,13 @@ export default function CompanyWorkspaceModal({
           </div>
         </div>
       </div>
+      <ConfirmArchiveModal
+        isOpen={archiveConfirm.isOpen}
+        title={archiveConfirm.title}
+        message={archiveConfirm.message}
+        onConfirm={archiveConfirm.onConfirm}
+        onCancel={() => setArchiveConfirm(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }

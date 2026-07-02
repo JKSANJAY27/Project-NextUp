@@ -10,6 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useDashboard, CACHE_KEYS } from "@/lib/queries";
 import { SkeletonDashboard } from "@/components/SkeletonLoader";
 import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
+import ConfirmArchiveModal from "@/components/ConfirmArchiveModal";
 import { 
   Plus, 
   Lock, 
@@ -216,6 +217,17 @@ function DashboardPageContent() {
   // Bulk Selection and Comparison states
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([]);
   const [showComparison, setShowComparison] = useState(false);
+  const [archiveConfirm, setArchiveConfirm] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: () => {}
+  });
 
   // Company Workspace Drawer state
   const [companyEvents, setCompanyEvents] = useState<CompanyEvent[]>([]);
@@ -1251,11 +1263,17 @@ function DashboardPageContent() {
                   {/* Batch archive */}
                   {selectedDecisionIds.length > 0 && (
                     <button
-                      onClick={async () => {
-                        if (window.confirm(`Are you sure you want to archive the ${selectedDecisionIds.length} selected opportunities?`)) {
-                          await Promise.all(selectedDecisionIds.map(id => handleOpportunityAction(id, 'archive', 'NOT_APPLIED')));
-                          setSelectedDecisionIds([]);
-                        }
+                      onClick={() => {
+                        setArchiveConfirm({
+                          isOpen: true,
+                          title: "Archive Selected",
+                          message: `Are you sure you want to archive the ${selectedDecisionIds.length} selected opportunities?`,
+                          onConfirm: async () => {
+                            await Promise.all(selectedDecisionIds.map(id => handleOpportunityAction(id, 'archive', 'NOT_APPLIED')));
+                            setSelectedDecisionIds([]);
+                            setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                          }
+                        });
                       }}
                       className="flex items-center gap-2 h-8 px-4 border border-red-500/50 bg-red-500/10 text-red-400 font-bold text-[10px] uppercase tracking-wider hover:bg-red-500 hover:text-white transition-all shrink-0"
                     >
@@ -1339,9 +1357,15 @@ function DashboardPageContent() {
                           </button>
                           <button
                             onClick={() => {
-                              if (window.confirm(`Are you sure you want to archive ${comp.name}?`)) {
-                                handleOpportunityAction(comp.id, 'archive', 'NOT_APPLIED');
-                              }
+                              setArchiveConfirm({
+                                isOpen: true,
+                                title: "Archive Opportunity",
+                                message: `Are you sure you want to archive ${comp.name}?`,
+                                onConfirm: async () => {
+                                  await handleOpportunityAction(comp.id, 'archive', 'NOT_APPLIED');
+                                  setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                                }
+                              });
                             }}
                             className="flex-1 h-8 bg-transparent text-muted-foreground font-bold text-[9px] uppercase tracking-wider hover:bg-muted border border-border transition-all"
                           >
@@ -1862,9 +1886,15 @@ function DashboardPageContent() {
                                     </button>
                                     <button
                                       onClick={() => {
-                                        if (window.confirm(`Are you sure you want to archive ${c.name}?`)) {
-                                          handleOpportunityAction(c.id, 'archive', 'MANUAL_NOT_INTERESTED');
-                                        }
+                                        setArchiveConfirm({
+                                          isOpen: true,
+                                          title: "Archive Opportunity",
+                                          message: `Are you sure you want to archive ${c.name}?`,
+                                          onConfirm: async () => {
+                                            await handleOpportunityAction(c.id, 'archive', 'MANUAL_NOT_INTERESTED');
+                                            setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                                          }
+                                        });
                                       }}
                                       className="h-10 px-3 border-2 border-border bg-background text-xs font-bold tracking-wider uppercase hover:bg-muted transition-all"
                                     >
@@ -2236,9 +2266,15 @@ function DashboardPageContent() {
             </button>
             <button
               onClick={() => {
-                if (window.confirm(`Are you sure you want to archive the ${selectedCompanyIds.length} selected opportunities?`)) {
-                  handleBulkAction("archived");
-                }
+                setArchiveConfirm({
+                  isOpen: true,
+                  title: "Archive Selected",
+                  message: `Are you sure you want to archive the ${selectedCompanyIds.length} selected opportunities?`,
+                  onConfirm: async () => {
+                    await handleBulkAction("archived");
+                    setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                  }
+                });
               }}
               className="h-9 px-4 border border-border bg-transparent text-muted-foreground font-bold text-xs hover:bg-red-950 hover:text-red-400 hover:border-red-500 uppercase tracking-wider transition-all"
             >
@@ -2470,6 +2506,14 @@ function DashboardPageContent() {
           onClose={() => setSelectedCompany(null)}
         />
       )}
+
+      <ConfirmArchiveModal
+        isOpen={archiveConfirm.isOpen}
+        title={archiveConfirm.title}
+        message={archiveConfirm.message}
+        onConfirm={archiveConfirm.onConfirm}
+        onCancel={() => setArchiveConfirm(prev => ({ ...prev, isOpen: false }))}
+      />
 
     </div>
   );
