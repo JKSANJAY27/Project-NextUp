@@ -76,7 +76,7 @@ class CompanyCreate(BaseModel):
 
 class CompanyOut(CompanyCreate):
     id: UUID
-    created_at: datetime
+    created_at: Optional[datetime] = None
     latest_event: Optional[LatestEventSchema] = None
 
     class Config:
@@ -123,13 +123,13 @@ class ApplicationOut(BaseModel):
     company_id: UUID
     status: Optional[str]
     current_round: Optional[str]
-    applied_at: datetime
+    applied_at: Optional[datetime] = None
     notes_enc: Optional[str]
     tailored_resume_enc: Optional[str] = None
     match_score: int
     user_decision: Optional[str]
     recruitment_state: Optional[str]
-    last_user_activity_at: datetime
+    last_user_activity_at: Optional[datetime] = None
     workspace_priority_override: Optional[str]
     snoozed_until: Optional[datetime]
     priority_score: int = 0
@@ -148,7 +148,7 @@ class OpportunityStateOut(BaseModel):
     decision_pending_since: Optional[datetime] = None
     snoozed_until: Optional[datetime] = None
     previous_state: Optional[str] = None
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
     # Minimal company info for display
     company: Optional[CompanyOut] = None
 
@@ -166,7 +166,7 @@ class NotificationOut(BaseModel):
     severity: int = 1  # 1=low, 3=medium, 4=high, 5=critical
     notification_scope: str = "ACTIVE"
     expires_at: Optional[datetime] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -177,7 +177,7 @@ class NotificationDetail(BaseModel):
     is_read: bool
     notification_type: str
     severity: int = 1
-    created_at: datetime
+    created_at: Optional[datetime] = None
     company_event_id: Optional[UUID] = None
     notification_scope: str = "ACTIVE"
     expires_at: Optional[datetime] = None
