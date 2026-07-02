@@ -10,24 +10,117 @@ import requests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# spaCy is optional — only loaded if available
-try:
-    import spacy
-    try:
-        nlp = spacy.load("en_core_web_sm")
-    except OSError:
-        logger.info("spaCy model 'en_core_web_sm' not found. Downloading...")
-        import subprocess
-        import sys
+_nlp = None
+
+def get_nlp():
+    """Lazy-load the spaCy model only when needed to save startup memory."""
+    global _nlp
+    if _nlp is None:
         try:
-            subprocess.run([sys.executable, "-m", "spacy", "download", "en_core_web_sm"], check=True)
-            nlp = spacy.load("en_core_web_sm")
-        except Exception as e:
-            logger.error(f"Failed to download spaCy model: {str(e)}")
-            nlp = None
-except ImportError:
-    logger.warning("spaCy not installed. NER fallback disabled.")
-    nlp = None
+            import spacy
+            try:
+                _nlp = spacy.load("en_core_web_sm")
+            except OSError:
+                logger.info("spaCy model 'en_core_web_sm' not found. Downloading...")
+                import subprocess
+                import sys
+                try:
+                    subprocess.run([sys.executable, "-m", "spacy", "download", "en_core_web_sm"], check=True)
+                    _nlp = spacy.load("en_core_web_sm")
+                except Exception as e:
+                    logger.error(f"Failed to download spaCy model: {str(e)}")
+                    _nlp = None
+        except ImportError:
+            logger.warning("spaCy not installed. NER fallback disabled.")
+            _nlp = None
+    return _nlp
+
+
+# ---------------------------------------------------------------------------
+# Generic name guard
+# These strings are known bad company names that arise from email headers,
+# placement category headings, or congratulatory messages.
+# ---------------------------------------------------------------------------
+GENERIC_COMPANY_NAMES = frozenset({
+    "unknown company", "unknown", "",
+    # Placement category/drive headings
+    "super dream", "dream", "regular", "mass recruiter", "internship",
+    "super dream internship", "dream internship", "dream placement",
+    "regular internship", "summer intern", "summer internship",
+    "super dream placement", "dream offer",
+    # Common email intros
+    "congratulations", "congrats", "dear students", "dear student",
+    "kind attention", "kind attn", "hi", "hello",
+    # Generic drive terminology
+    "placement", "hiring", "recruitment drive", "campus recruitment",
+    "campus drive", "selection process", "next round", "next round of selection process",
+    # CDC headings
+    "vit", "vellore", "vit vellore", "cdc", "training and placement",
+    "vit placement", "vit bhopal", "vit ap", "vit chennai",
+    # Registration headings
+    "registration open", "registration", "apply now", "apply",
+    # Year-like tokens
+    "2025 batch", "2026 batch", "2027 batch", "2028 batch",
+    # Blank-ish
+    "n/a", "na", "nil", "-",
+})
+
+def is_generic_company_name(name: str) -> bool:
+    """Returns True if name is a known bad/generic company name."""
+    if not name:
+        return True
+    cleaned = re.sub(r'[*#_\-–—\s\t\n\r]+', ' ', name).strip().lower()
+    
+    # Heuristics to reject long sentences/subject-lines
+    if len(cleaned) > 40:
+        return True
+    if len(cleaned.split()) > 5:
+        return True
+        
+    if cleaned in GENERIC_COMPANY_NAMES:
+        return True
+        
+    # Reject common non-company phrases in subjects
+    generic_patterns = [
+        r'\bcongratulations\b',
+        r'\bcongrats\b',
+        r'\bkind\s+attention\b',
+        r'\battention\b',
+        r'\bselection\s+process\b',
+        r'\bonline\s+test\b',
+        r'\bonline\s+assessment\b',
+        r'\boa\b',
+        r'\bscheduled\b',
+        r'\btest\s+link\b',
+        r'\bshortlist\b',
+        r'\bshortlisted\b',
+        r'\bselect\s+list\b',
+        r'\bselected\b',
+        r'\bplacement\s+officer\b',
+        r'\bcdc\b',
+        r'\bpat\b',
+        r'\bvit\b',
+        r'\bstudent\b',
+        r'\bstudents\b',
+        r'\bbatch\b',
+        r'\bregistration\b',
+        r'\bapply\b',
+        r'\bplacements\b',
+    ]
+    for pattern in generic_patterns:
+        if re.search(pattern, cleaned):
+            return True
+            
+    # Reject if the name is entirely numeric or a year
+    if re.match(r'^\d+$', cleaned):
+        return True
+    # Reject if it starts with placement drive category language
+    if re.match(r'^(?:super\s+dream|dream|regular|mass\s+recruiter|internship)', cleaned):
+        return True
+    # Reject single-character names
+    if len(cleaned) < 2:
+        return True
+    return False
 
 
 DEGREE_ONTOLOGY = {
@@ -147,23 +240,48 @@ def clean_json_string(s: str) -> str:
         return s[start:end + 1]
     return s
 
+def repair_and_parse_json(raw_str: str) -> Dict[str, Any]:
+    """
+    Attempts to parse JSON defensively. If standard json.loads fails,
+    uses the json_repair library to resolve trailing commas, unclosed quotes,
+    or truncated brackets.
+    """
+    cleaned = clean_json_string(raw_str)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        try:
+            import json_repair
+            repaired = json_repair.repair_json(cleaned)
+            return json.loads(repaired)
+        except Exception as e:
+            logger.warning(f"JSON repair failed: {e}")
+            raise
+
 
 def get_parser_prompt(context_text: str) -> str:
-    return f"""You are a structured data extractor and classifier for university placement emails.
+    """You are a structured data extractor and classifier for university placement emails.
 Analyze the following email (subject, body, and any attachment text) and extract the required fields.
 Output ONLY a valid raw JSON object — no markdown, no explanation, no code fences.
+
+CRITICAL — Company Name Rules (READ FIRST):
+- The company name must be the ACTUAL, CANONICAL BRAND NAME (e.g. "Groww", "Google", "JPMorgan Chase", "Ericsson", "Schneider Electric").
+- NEVER use placement categories, drive types, or subject headings as the company name. 
+  BANNED values include: "Super Dream Placement", "Dream Internship", "Super Dream Internship / Placement", "Dream", "Super Dream", "Regular", "Congratulations", "Next Round of Selection", "Registration Open", "CDC Drive", "Campus Recruitment", "Unknown Company".
+- Locate the company name from labels like "Name of the Company:", "Company Name:", "Organisation:", or the email's signature/branding.
+- If the company name is missing, set company.value = null and company.confidence = 0.0. DO NOT guess.
 
 Required JSON Output Format:
 {{
   "parser_metadata": {{
-    "parser_version": "v5",
+    "parser_version": "v6",
     "model_used": "llm-extracted"
   }},
   "overall_confidence": 0.90,
   "extracted_data": {{
     "email_category": "NEW_DRIVE",
     "company": {{
-      "value": "Google",
+      "value": "Groww",
       "confidence": 0.99
     }},
     "event_type": {{
@@ -175,7 +293,7 @@ Required JSON Output Format:
       "confidence": 0.90
     }},
     "deadline_iso": {{
-      "value": "2026-06-25T19:00:00",
+      "value": "2026-07-04T09:00:00",
       "confidence": 0.92
     }},
     "registration_link": {{
@@ -187,21 +305,63 @@ Required JSON Output Format:
       "confidence": 0.85
     }},
     "eligibility_raw_text": {{
-      "value": "Eligible Branches: B.Tech CSE (all specializations), M.Tech CSE/DS. CGPA >= 8.0, 10th/12th >= 60%, No standing arrears.",
+      "value": "Eligible Branches: B.Tech CSE (all specializations), M.Tech CSE/DS. CGPA >= 8.0, 10th/12th >= 80%, No standing arrears.",
       "confidence": 0.95
     }},
+    "events": [
+      {{
+        "stage": "REGISTRATION",
+        "label": "Last Date for Registration",
+        "date_iso": "2026-07-04T09:00:00",
+        "venue": null,
+        "mandatory": true,
+        "round_number": null,
+        "sequence": 1,
+        "confidence": 0.95
+      }},
+      {{
+        "stage": "ONLINE_ASSESSMENT",
+        "label": "Online Test",
+        "date_iso": "2026-07-08T00:00:00",
+        "venue": "CDC Labs (Respective)",
+        "mandatory": true,
+        "round_number": null,
+        "sequence": 2,
+        "confidence": 0.92
+      }},
+      {{
+        "stage": "PRE_PLACEMENT_TALK",
+        "label": "Pre-Placement Talk",
+        "date_iso": "2026-07-09T18:00:00",
+        "venue": "Physical - Vellore Campus",
+        "mandatory": false,
+        "round_number": null,
+        "sequence": 3,
+        "confidence": 0.90
+      }},
+      {{
+        "stage": "TECHNICAL_INTERVIEW",
+        "label": "Technical Interview",
+        "date_iso": "2026-07-10T00:00:00",
+        "venue": "Physical - VIT Vellore Campus",
+        "mandatory": true,
+        "round_number": 1,
+        "sequence": 4,
+        "confidence": 0.88
+      }}
+    ],
     "roles": [
       {{
-        "role": {{ "value": "Software Engineer", "confidence": 0.98 }},
-        "ctc": {{ "value": "18 LPA", "confidence": 0.95 }},
-        "stipend": {{ "value": null, "confidence": 0.99 }},
+        "role": {{ "value": "Software Development Engineer", "confidence": 0.98 }},
+        "ctc": {{ "value": "26 LPA", "confidence": 0.95 }},
+        "stipend": {{ "value": "1,00,000 per month", "confidence": 0.95 }},
         "min_cgpa": {{ "value": 8.0, "confidence": 0.97 }},
         "requires_no_arrears": {{ "value": true, "confidence": 0.96 }},
-        "eligible_branches": {{ "value": ["CSE", "M.Tech CSE", "MCA"], "confidence": 0.94 }},
-        "degree_types": {{ "value": ["BTECH", "MTECH"], "confidence": 0.95 }},
-        "specializations": {{ "value": ["CSE_CORE", "CSE_AI_ML", "CSE_DATA_SCIENCE"], "confidence": 0.95 }},
-        "min_tenth_marks": {{ "value": 60.0, "confidence": 0.95 }},
-        "min_twelfth_marks": {{ "value": 60.0, "confidence": 0.95 }},
+        "eligible_branches": {{ "value": ["CSE", "IT"], "confidence": 0.94 }},
+        "degree_types": {{ "value": ["BTECH"], "confidence": 0.95 }},
+        "specializations": {{ "value": ["CSE_CORE"], "confidence": 0.95 }},
+        "min_tenth_marks": {{ "value": 80.0, "confidence": 0.95 }},
+        "min_twelfth_marks": {{ "value": 80.0, "confidence": 0.95 }},
         "min_ug_cgpa": {{ "value": null, "confidence": 0.95 }}
       }}
     ],
@@ -217,7 +377,7 @@ Required JSON Output Format:
 Guidelines for email_category (choose exactly ONE):
 - NEW_DRIVE: Mails announcing a new company hiring drive, job opening, or internship registration (creates a new workspace/opportunity). Set "announcement" fields to null.
 - DRIVE_UPDATE: Mails containing updates for an existing company drive (OA links, interview schedules, shortlist announcements, offer letters, rejection lists). Set "announcement" to null.
-- GENERAL_ANNOUNCEMENT: Non-company specific placement announcements. This includes general university notices, Litcoder modules completion warnings, TCS NQT/CoCubes general preparation instructions (not specific company drives), mandatory placement registrations, CDC seminars, resume reviews, webinars, or training workshops. Set "company", "event_type", "roles" to null.
+- GENERAL_ANNOUNCEMENT: Non-company specific placement announcements. This includes general university notices, Litcoder modules completion warnings, TCS NQT/CoCubes general preparation instructions (not specific company drives), mandatory placement registrations, CDC seminars, resume reviews, webinars, or training workshops. Set "company", "event_type", "roles", "events" to null.
 - UNKNOWN: Mails that are irrelevant to placement, spam, personal, or cannot be categorized.
 
 Guidelines for event_type (choose exactly ONE):
@@ -231,6 +391,15 @@ Guidelines for event_type (choose exactly ONE):
 - OFFER_RELEASED: Final offer/selection announcements.
 - REJECTION_RELEASED: Regret / non-selected lists.
 - GENERAL_UPDATE: Venue changes, corrections, general instructions.
+
+Guidelines for events[] array:
+- Extract ALL recruitment milestones mentioned in the email — registration deadline, online test, PPT, interview rounds, etc.
+- "stage" must be one of: REGISTRATION, ONLINE_ASSESSMENT, PRE_PLACEMENT_TALK, TECHNICAL_INTERVIEW, HR_INTERVIEW, OFFER, REJECTION, GENERAL_UPDATE
+- "date_iso": ISO 8601 date-time string. If only a date is given (no time), use T00:00:00. If time is given, use it.
+- "round_number": Integer for multi-round interviews (Round 1, Round 2). null for single or non-interview stages.
+- "sequence": Order of events in the recruitment workflow (1 = first, 2 = second, etc.).
+- "mandatory": true if this is a compulsory stage, false if optional (e.g. PPT).
+- If no explicit timeline exists, return events: [] (empty array).
 
 Multi-role rules — READ CAREFULLY:
 - ONLY create multiple role objects when the email EXPLICITLY lists SEPARATE CTC or stipend values per distinct role name (e.g., a table or indented block like "Role A - 18 LPA / Role B - 12 LPA").
@@ -323,18 +492,15 @@ def parse_with_ollama(context_text: str) -> Dict[str, Any]:
         if response.status_code == 200:
             result = response.json()
             response_text = result.get("response", "{}").strip()
-            clean_str = clean_json_string(response_text)
-            parsed = json.loads(clean_str)
+            parsed = repair_and_parse_json(response_text)
             if "parser_metadata" in parsed:
                 parsed["parser_metadata"]["model_used"] = f"ollama-{ollama_model}"
             logger.info(f"Ollama ({ollama_model}) parse succeeded.")
             return parsed
         else:
             logger.warning(f"Ollama returned HTTP {response.status_code}: {response.text[:200]}")
-    except json.JSONDecodeError as e:
-        logger.warning(f"Ollama response JSON decode failed: {str(e)}")
     except Exception as e:
-        logger.warning(f"Ollama ({ollama_model}) parsing failed: {str(e)}")
+        logger.warning(f"Ollama ({ollama_model}) parsing/repair failed: {str(e)}")
     return {}
 
 
@@ -381,7 +547,6 @@ def parse_with_huggingface(context_text: str) -> Dict[str, Any]:
         )
         if response.status_code == 200:
             res_json = response.json()
-            # OpenAI-compatible response format
             generated_text = (
                 res_json.get("choices", [{}])[0]
                 .get("message", {})
@@ -392,18 +557,15 @@ def parse_with_huggingface(context_text: str) -> Dict[str, Any]:
                 logger.warning("HuggingFace returned empty content.")
                 return {}
 
-            clean_str = clean_json_string(generated_text)
-            parsed = json.loads(clean_str)
+            parsed = repair_and_parse_json(generated_text)
             if "parser_metadata" in parsed:
                 parsed["parser_metadata"]["model_used"] = f"huggingface-{model_id}"
             logger.info(f"HuggingFace ({model_id}) parse succeeded.")
             return parsed
         else:
             logger.warning(f"HuggingFace API returned error ({response.status_code}): {response.text[:300]}")
-    except json.JSONDecodeError as e:
-        logger.warning(f"HuggingFace response JSON decode failed: {str(e)}")
     except Exception as e:
-        logger.warning(f"HuggingFace escalation parsing failed: {str(e)}")
+        logger.warning(f"HuggingFace escalation parsing/repair failed: {str(e)}")
     return {}
 
 
@@ -459,6 +621,8 @@ def extract_company_from_subject(subject: str) -> str:
     
     # Remove zero-width spaces and clean outer whitespace
     s = subject.replace('\u200b', '').replace('\xa0', ' ').replace('_', ' ').strip()
+    # Strip any leading asterisks, hashes, hyphens, and other special characters early on
+    s = re.sub(r'^[*#_\s\-–—]+', '', s).strip()
     
     # Prefix patterns to completely discard at the start of subject
     # Loop to strip nested prefixes
@@ -682,29 +846,49 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     """
     data = {}
 
-    # 1. Company Name
+    # 1. Company Name — use a strict extraction hierarchy:
+    #    1a. Structured body label (Name of the Company: ...)
+    #    1b. spaCy NER on body text (filtered to non-generic ORG entities)
+    #    1c. Subject line extraction (last resort, very cleaned)
+    #    1d. Unknown Company (never guess)
     comp_match = re.search(
         r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Name of the Company|Company Name|Name of the Organisation|Organisation|\bCompany\b(?!\s*(?:website|profile|url|link|domain|page|site|info|description|overview|logo|details)))\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
         email_body,
         re.IGNORECASE
     )
+    company_from_label = None
     if comp_match:
-        data["company"] = clean_val(comp_match.group(1))
+        candidate = clean_val(comp_match.group(1))
+        if candidate and not is_generic_company_name(candidate):
+            company_from_label = candidate
+
+    if company_from_label:
+        data["company"] = company_from_label
     else:
-        # Fallback to subject line parsing
-        sub_company = extract_company_from_subject(subject)
-        if sub_company and sub_company != "Unknown Company":
-            data["company"] = sub_company
+        # 1b. spaCy NER — only if available, filter out academic/CDC-related org names
+        ner_company = None
+        nlp_obj = get_nlp()
+        if nlp_obj:
+            doc = nlp_obj(email_body[:2000])  # Only scan first 2000 chars for speed
+            for ent in doc.ents:
+                if ent.label_ == "ORG":
+                    ner_name = ent.text.strip()
+                    if not any(k in ner_name.lower() for k in [
+                        "vit", "vellore", "institute", "university", "college",
+                        "cdc", "neopat", "government", "helpdesk", "placement cell"
+                    ]) and not is_generic_company_name(ner_name) and len(ner_name) >= 3:
+                        ner_company = ner_name
+                        break
+
+        if ner_company:
+            data["company"] = ner_company
         else:
-            lines = [line.strip() for line in email_body.split("\n") if line.strip()]
-            # Filter out salutations/valedictions or generic subjects
-            cleaned_lines = [
-                l for l in lines 
-                if not any(w in l.lower() for w in ["dear", "regards", "warm", "hi", "hello", "respected", "attention", "attn", "reminder", "congratulations", "webinar", "instructions", "timings"])
-            ]
-            if cleaned_lines and len(clean_val(cleaned_lines[0])) >= 2:
-                data["company"] = clean_val(cleaned_lines[0])
+            # 1c. Subject line extraction (last resort for structured regex)
+            sub_company = extract_company_from_subject(subject)
+            if sub_company and sub_company != "Unknown Company" and not is_generic_company_name(sub_company):
+                data["company"] = sub_company
             else:
+                # 1d. Give up — return Unknown Company. Never guess.
                 data["company"] = "Unknown Company"
 
     # 2. Category — check internship FIRST before dream/regular
@@ -994,16 +1178,141 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     return data
 
 
-def build_regex_fallback_response(email_body: str, subject: str = "", force_announcement: bool = False) -> Dict[str, Any]:
+# ---------------------------------------------------------------------------
+# Timeline event extraction (regex-based)
+# ---------------------------------------------------------------------------
+
+# Stage keyword → canonical stage name mapping
+_STAGE_KEYWORDS: List[tuple] = [
+    # (regex pattern, canonical stage, sequence)
+    (r"\b(?:last\s+date\s+(?:for\s+)?registration|registration\s+deadline|last\s+date\s+to\s+apply|apply\s+(?:on|before))\b", "REGISTRATION", 1),
+    (r"\b(?:online\s+test|online\s+assessment|coding\s+test|written\s+test|oa|assessment)\b", "ONLINE_ASSESSMENT", 2),
+    (r"\b(?:pre[-\s]?placement\s+talk|ppt|pre[-\s]?placement|company\s+talk|company\s+presentation)\b", "PRE_PLACEMENT_TALK", 3),
+    (r"\b(?:technical\s+interview|tech\s+interview|coding\s+interview|technical\s+round)\b", "TECHNICAL_INTERVIEW", 4),
+    (r"\b(?:hr\s+interview|hr\s+round|managerial\s+interview|managerial\s+round|final\s+interview)\b", "HR_INTERVIEW", 5),
+    (r"\b(?:interview)\b", "TECHNICAL_INTERVIEW", 4),
+    (r"\b(?:offer|selection|placed|final\s+result)\b", "OFFER", 6),
+]
+
+# Date fragments to search near stage keywords
+_DATE_PATTERN = (
+    r"(?:"
+    # "8th July 2026", "8 July 2026", "July 8", etc.
+    r"\d{1,2}\s*(?:st|nd|rd|th)?\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s*(?:\d{2,4})?"
+    r"|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:\s*,?\s*\d{4})?"
+    # ISO-like: 2026-07-08, 08-07-2026
+    r"|\d{4}[-/]\d{2}[-/]\d{2}"
+    r"|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"
+    r")"
+    # Optional time: "6 pm", "18:00", "(9.00 am)"
+    r"(?:\s*[\(]?\s*\d{1,2}[:.\s]\d{2}\s*(?:am|pm)?[\)]?|\s*\d{1,2}\s*(?:am|pm))?"
+)
+
+
+def extract_timeline_events(email_body: str, subject: str = "", email_timestamp=None) -> List[Dict[str, Any]]:
+    """Extract recruitment milestone events from a placement email body.
+    
+    Returns a list of event dicts:
+      {
+        stage: str (canonical),
+        label: str (human-readable from email),
+        date_iso: str | None,
+        venue: str | None,
+        mandatory: bool,
+        round_number: int | None,
+        sequence: int,
+        confidence: float
+      }
+    """
+    events: List[Dict[str, Any]] = []
+    seen_stages: set = set()
+
+    dp_settings = {
+        'TIMEZONE': 'Asia/Kolkata',
+        'TO_TIMEZONE': 'UTC',
+        'RETURN_AS_TIMEZONE_AWARE': True,
+        'DATE_ORDER': 'DMY',
+        'PREFER_DAY_OF_MONTH': 'first',
+    }
+    if email_timestamp:
+        dp_settings['RELATIVE_BASE'] = (
+            email_timestamp.replace(tzinfo=None)
+            if hasattr(email_timestamp, 'tzinfo') else email_timestamp
+        )
+
+    # Filter out empty lines to ensure the 3-line window captures dates separated by whitespace/newlines
+    lines = [line.strip() for line in email_body.split("\n") if line.strip()]
+
+    for stage_pattern, canonical_stage, sequence in _STAGE_KEYWORDS:
+        for i, line in enumerate(lines):
+            if not re.search(stage_pattern, line, re.IGNORECASE):
+                continue
+
+            # Search this line and the next 2 lines for a date
+            search_window = " ".join(lines[i:i+3])
+            date_match = re.search(_DATE_PATTERN, search_window, re.IGNORECASE)
+            date_iso = None
+            if date_match:
+                raw_date = date_match.group(0).strip()
+                parsed_dt = dateparser.parse(raw_date, settings=dp_settings)
+                if parsed_dt:
+                    date_iso = parsed_dt.isoformat()
+
+            # Determine round_number from text like "Round 1", "Round 2"
+            round_number = None
+            round_m = re.search(r"round\s*(\d+)", line, re.IGNORECASE)
+            if round_m:
+                round_number = int(round_m.group(1))
+
+            # Deduplicate: if same stage+round already added, skip
+            dedup_key = (canonical_stage, round_number)
+            if dedup_key in seen_stages:
+                continue
+            seen_stages.add(dedup_key)
+
+            # Venue detection: look for city names or physical/online keywords near stage
+            venue = None
+            venue_m = re.search(
+                r"(?:at|venue\s*[:–—]?|location\s*[:–—]?|held\s+at|conducted\s+at)\s+([A-Za-z][A-Za-z ,]{3,50})",
+                search_window, re.IGNORECASE
+            )
+            if venue_m:
+                venue = venue_m.group(1).strip()
+            elif re.search(r"\b(?:online|virtual|remote)\b", search_window, re.IGNORECASE):
+                venue = "Online"
+            elif re.search(r"\b(?:physical|in-person|campus|vellore|chennai|vit)\b", search_window, re.IGNORECASE):
+                venue = "Physical"
+
+            mandatory = canonical_stage not in ("PRE_PLACEMENT_TALK",)
+
+            events.append({
+                "stage": canonical_stage,
+                "label": line.strip()[:120],
+                "date_iso": date_iso,
+                "venue": venue,
+                "mandatory": mandatory,
+                "round_number": round_number,
+                "sequence": sequence,
+                "confidence": 0.70 if date_iso else 0.50
+            })
+
+    # Sort by sequence, then date
+    events.sort(key=lambda e: (e["sequence"], e["date_iso"] or ""))
+    return events
+
+
+def build_regex_fallback_response(email_body: str, subject: str = "", force_announcement: bool = False, email_timestamp=None) -> Dict[str, Any]:
     """
     Builds a mock LLM-structure response from regex+spaCy extraction.
     Used as last resort when both Ollama and HuggingFace fail.
     """
     parsed = extract_placements_regex(email_body, subject)
 
-    # spaCy NER as fallback for missing fields
-    if nlp and ("deadline_iso" not in parsed or "job_location" not in parsed or "company" not in parsed):
-        doc = nlp(email_body)
+    # spaCy NER as fallback for missing/generic fields
+    nlp_obj = get_nlp()
+    if nlp_obj and ("deadline_iso" not in parsed or "job_location" not in parsed
+                or parsed.get("company") in (None, "Unknown Company")):
+        doc = nlp_obj(email_body)
         orgs, dates, gpes = [], [], []
         for ent in doc.ents:
             if ent.label_ == "ORG":
@@ -1013,9 +1322,11 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
             elif ent.label_ == "GPE":
                 gpes.append(ent.text)
 
-        if "company" not in parsed and orgs:
+        # Only use spaCy ORG if still unknown after label-based extraction
+        if parsed.get("company") in (None, "Unknown Company") and orgs:
             for org in orgs:
-                if not any(k in org.lower() for k in ["vit", "vellore", "institute", "university", "cdc"]):
+                if not any(k in org.lower() for k in ["vit", "vellore", "institute", "university", "cdc"])\
+                        and not is_generic_company_name(org):
                     parsed["company"] = org.strip()
                     break
 
@@ -1167,6 +1478,9 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
             event_type = "REJECTION_RELEASED"
             email_category = "DRIVE_UPDATE"
 
+    # Extract timeline events from body for regex path
+    extracted_events = extract_timeline_events(email_body, subject, email_timestamp=email_timestamp)
+
     # Build the shared eligibility data applicable to all roles
     shared_role_data = {
         "eligible_branches": {"value": eligible_branches, "confidence": 0.45},
@@ -1202,7 +1516,7 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
 
     return {
         "parser_metadata": {
-            "parser_version": "v5-regex-fallback",
+            "parser_version": "v6-regex-fallback",
             "model_used": "regex-rules"
         },
         "overall_confidence": 0.45,
@@ -1215,6 +1529,7 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
             "registration_link": {"value": registration_link, "confidence": 0.45},
             "date_of_visit": {"value": date_of_visit, "confidence": 0.45},
             "eligibility_raw_text": {"value": parsed.get("eligibility_raw_text"), "confidence": 0.45},
+            "events": extracted_events,
             "roles": roles_list,
             "announcement": None
         }
@@ -1224,7 +1539,8 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
 def parse_placement_email(
     email_body: str,
     subject: str = "",
-    attachment_text: str = ""
+    attachment_text: str = "",
+    email_timestamp=None
 ) -> Dict[str, Any]:
     """
     Main entry point. Escalating LLM chain:
@@ -1255,4 +1571,4 @@ def parse_placement_email(
         return parsed_hf
 
     logger.warning("Both LLM attempts failed. Falling back to Regex parser.")
-    return build_regex_fallback_response(email_body, subject)
+    return build_regex_fallback_response(email_body, subject, email_timestamp=email_timestamp)

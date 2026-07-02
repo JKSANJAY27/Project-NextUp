@@ -9,6 +9,8 @@ import api from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDashboard, CACHE_KEYS } from "@/lib/queries";
 import { SkeletonDashboard } from "@/components/SkeletonLoader";
+import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
+import ConfirmArchiveModal from "@/components/ConfirmArchiveModal";
 import { 
   Plus, 
   Lock, 
@@ -16,13 +18,9 @@ import {
   XCircle, 
   HelpCircle,
   ExternalLink,
-  Globe,
   AlertCircle,
   X,
-  Link2,
   Clock,
-  Calendar,
-  ArrowRight,
   TrendingUp,
   Award,
   AlertTriangle,
@@ -49,16 +47,6 @@ interface TodayEvent {
   companyId: string;
 }
 
-interface TimelineEvent {
-  id: string;
-  type: string;
-  title: string;
-  message: string;
-  body: string;
-  sender: string;
-  timestamp: Date;
-  confidence_scores: Record<string, number>;
-}
 
 interface Company {
   id: string;
@@ -166,6 +154,7 @@ interface CompanyEvent {
   timestamp: string | null;
   confidence_scores: Record<string, number>;
   user_notification_msg: string | null;
+  attachments?: AttachmentMetadata[];
 }
 
 interface AttachmentMetadata {
@@ -228,14 +217,26 @@ function DashboardPageContent() {
   // Bulk Selection and Comparison states
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([]);
   const [showComparison, setShowComparison] = useState(false);
+  const [archiveConfirm, setArchiveConfirm] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: () => {}
+  });
 
   // Company Workspace Drawer state
-  const [modalTab, setModalTab] = useState<"overview" | "details" | "toolkit">("overview");
-  const [editingRoundNote, setEditingRoundNote] = useState<string | null>(null);
-  const [tempNoteText, setTempNoteText] = useState("");
-  const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
-  const [decryptedNotes, setDecryptedNotes] = useState<Record<string, string>>({});
   const [companyEvents, setCompanyEvents] = useState<CompanyEvent[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any
+  const [decryptedNotes, setDecryptedNotes] = useState<Record<string, any>>({});
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [pdfLoading, setPdfLoading] = useState(false);
 
   // Manual Company Form State
   const [compName, setCompName] = useState("");
@@ -325,7 +326,9 @@ function DashboardPageContent() {
 
   // Mock function for backwards compatibility with any remaining manual triggers
   const fetchDashboardData = async () => {
-    queryClient.invalidateQueries();
+    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    await queryClient.invalidateQueries({ queryKey: ["calendar"] });
+    await queryClient.invalidateQueries({ queryKey: ["applications"] });
   };
 
   useEffect(() => {
@@ -418,6 +421,52 @@ function DashboardPageContent() {
     };
     fetchCompanyEvents();
   }, [selectedCompany]);
+
+  const jdPdfAttachment = React.useMemo(() => {
+    for (const evt of companyEvents) {
+      if (evt.attachments) {
+        const pdf = evt.attachments.find((att) => att.file_type === 'JD_PDF');
+        if (pdf) return pdf;
+      }
+    }
+    return null;
+  }, [companyEvents]);
+
+  useEffect(() => {
+    let active = true;
+    let localPdfUrl: string | null = null;
+    const loadPdf = async () => {
+      if (!jdPdfAttachment) {
+        setPdfUrl(null);
+        return;
+      }
+      setPdfLoading(true);
+      try {
+        const response = await api.get(`/announcements/attachment/${jdPdfAttachment.id}`, {
+          responseType: 'blob',
+        });
+        if (active) {
+          const blob = new Blob([response.data], { type: 'application/pdf' });
+          localPdfUrl = URL.createObjectURL(blob);
+          setPdfUrl(localPdfUrl);
+        }
+      } catch (err) {
+        console.error("Failed to load JD PDF:", err);
+      } finally {
+        if (active) {
+          setPdfLoading(false);
+        }
+      }
+    };
+    loadPdf();
+
+    return () => {
+      active = false;
+      if (localPdfUrl) {
+        URL.revokeObjectURL(localPdfUrl);
+      }
+    };
+  }, [jdPdfAttachment]);
 
   // Handle manual company creation
   const handleAddCompany = async (e: React.FormEvent) => {
@@ -591,7 +640,133 @@ function DashboardPageContent() {
   };
 
   const handleOpportunityAction = async (companyId: string, action: "track" | "archive" | "snooze" | "restore", reason?: string) => {
+    const prevOppStates = { ...opportunityStates };
+    const prevApps = { ...applications };
+
     try {
+      // Optimistic UI updates
+      if (action === "track") {
+        setOpportunityStates(prev => {
+          const next = { ...prev };
+          const existing = next[companyId] || {
+            record_type: "opportunity_state",
+            company_id: companyId,
+            state: "unseen",
+            archive_reason: null,
+            archived_at: null,
+            decision_pending_since: null,
+            snoozed_until: null,
+            previous_state: null,
+            updated_at: new Date().toISOString(),
+            company: null
+          };
+          next[companyId] = { ...existing, state: "tracking", previous_state: existing.state };
+          return next;
+        });
+        setApplications(prev => {
+          const next = { ...prev };
+          const existing = next[companyId];
+          next[companyId] = existing ? {
+            ...existing,
+            user_decision: "tracking"
+          } : {
+            id: "temp-id",
+            record_type: "application",
+            company_id: companyId,
+            status: "Applied",
+            current_round: "Applied",
+            notes_enc: null,
+            user_decision: "tracking",
+            recruitment_state: "Registration",
+            last_user_activity_at: new Date().toISOString(),
+            workspace_priority_override: null,
+            snoozed_until: null,
+            priority_score: 0,
+            is_stale: false,
+            match_score: 0
+          };
+          return next;
+        });
+      } else if (action === "archive") {
+        setOpportunityStates(prev => {
+          const next = { ...prev };
+          const existing = next[companyId] || {
+            record_type: "opportunity_state",
+            company_id: companyId,
+            state: "unseen",
+            archive_reason: null,
+            archived_at: null,
+            decision_pending_since: null,
+            snoozed_until: null,
+            previous_state: null,
+            updated_at: new Date().toISOString(),
+            company: null
+          };
+          next[companyId] = {
+            ...existing,
+            state: "archived",
+            archive_reason: reason || "MANUAL_NOT_INTERESTED",
+            archived_at: new Date().toISOString(),
+            previous_state: existing.state
+          };
+          return next;
+        });
+        if (applications[companyId]) {
+          setApplications(prev => {
+            const next = { ...prev };
+            next[companyId] = { ...next[companyId], user_decision: "archived" };
+            return next;
+          });
+        }
+      } else if (action === "snooze") {
+        setOpportunityStates(prev => {
+          const next = { ...prev };
+          const existing = next[companyId] || {
+            record_type: "opportunity_state",
+            company_id: companyId,
+            state: "unseen",
+            archive_reason: null,
+            archived_at: null,
+            decision_pending_since: null,
+            snoozed_until: null,
+            previous_state: null,
+            updated_at: new Date().toISOString(),
+            company: null
+          };
+          const snoozeDate = new Date();
+          snoozeDate.setDate(snoozeDate.getDate() + 7);
+          next[companyId] = {
+            ...existing,
+            state: "decision_pending",
+            snoozed_until: snoozeDate.toISOString(),
+            previous_state: existing.state
+          };
+          return next;
+        });
+      } else if (action === "restore") {
+        setOpportunityStates(prev => {
+          const next = { ...prev };
+          if (next[companyId]) {
+            const restoreTarget = next[companyId].previous_state || "decision_pending";
+            next[companyId] = {
+              ...next[companyId],
+              state: restoreTarget,
+              archive_reason: null,
+              archived_at: null,
+              previous_state: null
+            };
+          }
+          return next;
+        });
+        if (applications[companyId]) {
+          setApplications(prev => {
+            const next = { ...prev };
+            next[companyId] = { ...next[companyId], user_decision: "tracking" };
+            return next;
+          });
+        }
+      }
+
       let url = `/applications/opportunity-state?company_id=${companyId}&action=${action}`;
       if (reason) {
         url += `&reason=${reason}`;
@@ -599,36 +774,15 @@ function DashboardPageContent() {
       await api.post(url);
       await fetchDashboardData();
     } catch (err) {
-      console.error(`Opportunity action '${action}' failed:`, err);
+      console.error(`Opportunity action '${action}' failed, rolling back:`, err);
+      setOpportunityStates(prevOppStates);
+      setApplications(prevApps);
       alert(`Failed to ${action} opportunity.`);
     }
   };
 
 
-  // Timeline Notes GCM Encryption & Save
-  const handleSaveRoundNote = async (roundKey: string, noteText: string) => {
-    if (!selectedCompany || !encryptionKey) return;
-    
-    const updatedNotes = {
-      ...decryptedNotes,
-      [roundKey]: noteText
-    };
-    
-    try {
-      const { encryptData } = await import("@/lib/crypto");
-      const plaintext = JSON.stringify(updatedNotes);
-      const encrypted = await encryptData(plaintext, encryptionKey);
-      
-      await handleUpdateApplication(selectedCompany.id, {
-        notes_enc: encrypted
-      });
-      setDecryptedNotes(updatedNotes);
-    } catch (err) {
-      console.error("Failed to save round note:", err);
-      alert("Failed to save note. Please verify encryption key.");
-    }
-  };
-
+  
   // Manual trigger for email sync (calls FastAPI queue processing webhook)
   const handleTriggerSync = async () => {
     setSyncing(true);
@@ -763,72 +917,9 @@ function DashboardPageContent() {
 
 
   // Compile timeline events list for the selected company drawer
-  const getTimelineEvents = React.useCallback(() => {
-    if (!selectedCompany) return [];
-    
-    const events: TimelineEvent[] = [];
-    
-    if (companyEvents && companyEvents.length > 0) {
-      companyEvents.forEach(e => {
-        events.push({
-          id: e.id,
-          type: e.event_type.toLowerCase(),
-          title: e.event_type.toUpperCase(),
-          message: e.user_notification_msg || e.subject || "Company Update",
-          body: e.body || e.subject || "No details available.",
-          sender: e.sender || "CDC Mail",
-          timestamp: e.timestamp ? new Date(e.timestamp) : new Date(),
-          confidence_scores: e.confidence_scores || {}
-        });
-      });
-    } else {
-      events.push({
-        id: "baseline",
-        type: "system",
-        title: "WORKSPACE CREATED",
-        message: `Application workspace for ${selectedCompany.name} is initialized.`,
-        body: `Workspace tracking started for ${selectedCompany.role} position at ${selectedCompany.name}.`,
-        sender: "System Event",
-        timestamp: selectedCompany.registration_deadline ? new Date(selectedCompany.registration_deadline) : new Date(),
-        confidence_scores: {}
-      });
-    }
-    
-    return events.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  }, [selectedCompany, companyEvents]);
-
+  
   // Calculate Application Health Score checkmarks
-  const getHealthScore = (app: Application | undefined) => {
-    if (!app) return 0;
-    
-    let score = 0;
-    const stage = app.recruitment_state || app.status || 'Registration';
-    const stageLower = stage.toLowerCase();
-    
-    if (stageLower.includes('registration') || stageLower.includes('interested')) {
-      score += 15;
-    } else if (stageLower.includes('applied') || stageLower.includes('awaiting shortlist')) {
-      score += 40;
-    } else if (stageLower.includes('shortlisted')) {
-      score += 55;
-    } else if (stageLower.includes('oa') || stageLower.includes('awaiting oa result')) {
-      score += 70;
-    } else if (stageLower.includes('interview') || stageLower.includes('awaiting interview result')) {
-      score += 85;
-    } else if (stageLower.includes('offer') || stageLower.includes('rejected') || stageLower.includes('likely rejected')) {
-      score += 100;
-    }
-    
-    if (app.match_score > 0) {
-      score += 10;
-    }
-    
-    if (app.notes_enc) {
-      score += 5;
-    }
-    
-    return Math.min(100, score);
-  };
+
 
 
 
@@ -939,10 +1030,8 @@ function DashboardPageContent() {
   const conversionRate = React.useMemo(() => totalAppsCount > 0 ? ((offersCount / totalAppsCount) * 100).toFixed(1) : "0.0", [totalAppsCount, offersCount]);
 
   // Timeline and Workspace Drawer computed states
-  const selectedApp = React.useMemo(() => selectedCompany ? applications[selectedCompany.id] : undefined, [selectedCompany, applications]);
-  const workspaceEvents = React.useMemo(() => getTimelineEvents(), [getTimelineEvents]);
-  const healthVal = React.useMemo(() => getHealthScore(selectedApp), [selectedApp]);
 
+    
   return (
     <div className="flex-1 bg-background flex flex-col min-h-screen">
       
@@ -1174,9 +1263,17 @@ function DashboardPageContent() {
                   {/* Batch archive */}
                   {selectedDecisionIds.length > 0 && (
                     <button
-                      onClick={async () => {
-                        await Promise.all(selectedDecisionIds.map(id => handleOpportunityAction(id, 'archive', 'NOT_APPLIED')));
-                        setSelectedDecisionIds([]);
+                      onClick={() => {
+                        setArchiveConfirm({
+                          isOpen: true,
+                          title: "Archive Selected",
+                          message: `Are you sure you want to archive the ${selectedDecisionIds.length} selected opportunities?`,
+                          onConfirm: async () => {
+                            await Promise.all(selectedDecisionIds.map(id => handleOpportunityAction(id, 'archive', 'NOT_APPLIED')));
+                            setSelectedDecisionIds([]);
+                            setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                          }
+                        });
                       }}
                       className="flex items-center gap-2 h-8 px-4 border border-red-500/50 bg-red-500/10 text-red-400 font-bold text-[10px] uppercase tracking-wider hover:bg-red-500 hover:text-white transition-all shrink-0"
                     >
@@ -1259,7 +1356,17 @@ function DashboardPageContent() {
                             ✅ Yes, I Applied
                           </button>
                           <button
-                            onClick={() => handleOpportunityAction(comp.id, 'archive', 'NOT_APPLIED')}
+                            onClick={() => {
+                              setArchiveConfirm({
+                                isOpen: true,
+                                title: "Archive Opportunity",
+                                message: `Are you sure you want to archive ${comp.name}?`,
+                                onConfirm: async () => {
+                                  await handleOpportunityAction(comp.id, 'archive', 'NOT_APPLIED');
+                                  setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                                }
+                              });
+                            }}
                             className="flex-1 h-8 bg-transparent text-muted-foreground font-bold text-[9px] uppercase tracking-wider hover:bg-muted border border-border transition-all"
                           >
                             ✗ No, Archive
@@ -1273,12 +1380,19 @@ function DashboardPageContent() {
                           </button>
                         </div>
 
-                        {/* Pending-since sub-label */}
-                        {opp?.decision_pending_since && (
-                          <p className="text-[9px] text-muted-foreground/60 uppercase">
-                            Pending since {new Date(opp.decision_pending_since).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
-                          </p>
-                        )}
+                        {/* Footer: Pending-since & Workspace Link */}
+                        <div className="flex items-center justify-between mt-1 border-t border-border/40 pt-2">
+                          <div>
+                            {opp?.decision_pending_since ? (
+                              <p className="text-[9px] text-muted-foreground/60 uppercase">
+                                Pending since {new Date(opp.decision_pending_since).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
+                              </p>
+                            ) : <span />}
+                          </div>
+                          <button onClick={() => { setSelectedCompany(comp); }} className="text-[9px] font-black tracking-widest text-accent uppercase hover:underline transition-all">
+                            VIEW WORKSPACE &rarr;
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -1648,7 +1762,7 @@ function DashboardPageContent() {
 
                             <td 
                               className="py-5 px-6 cursor-pointer group"
-                              onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}
+                              onClick={() => { setSelectedCompany(c); }}
                             >
                               <div className="flex items-center gap-2 flex-wrap">
                                 <p className="font-bold text-base uppercase tracking-tighter text-foreground group-hover:text-accent transition-colors">{c.name}</p>
@@ -1771,7 +1885,17 @@ function DashboardPageContent() {
                                       ✅ Apply
                                     </button>
                                     <button
-                                      onClick={() => handleOpportunityAction(c.id, 'archive', 'MANUAL_NOT_INTERESTED')}
+                                      onClick={() => {
+                                        setArchiveConfirm({
+                                          isOpen: true,
+                                          title: "Archive Opportunity",
+                                          message: `Are you sure you want to archive ${c.name}?`,
+                                          onConfirm: async () => {
+                                            await handleOpportunityAction(c.id, 'archive', 'MANUAL_NOT_INTERESTED');
+                                            setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                                          }
+                                        });
+                                      }}
                                       className="h-10 px-3 border-2 border-border bg-background text-xs font-bold tracking-wider uppercase hover:bg-muted transition-all"
                                     >
                                       ✗ Archive
@@ -2014,7 +2138,7 @@ function DashboardPageContent() {
                               
                               return (
                                 <tr key={c.id} className="hover:bg-muted/15 transition-colors" onMouseEnter={() => prefetchCompanyDetails(c.id)}>
-                                  <td className="py-4 px-6 cursor-pointer" onClick={() => { setSelectedCompany(c); setModalTab("overview"); }}>
+                                  <td className="py-4 px-6 cursor-pointer" onClick={() => { setSelectedCompany(c); }}>
                                     <p className="font-bold text-sm uppercase tracking-tight text-foreground">{c.name}</p>
                                     <p className="text-[10px] text-muted-foreground uppercase">{c.role} ✦ {c.job_location || "Unknown"}</p>
                                   </td>
@@ -2141,7 +2265,17 @@ function DashboardPageContent() {
               ✅ Apply
             </button>
             <button
-              onClick={() => handleBulkAction("archived")}
+              onClick={() => {
+                setArchiveConfirm({
+                  isOpen: true,
+                  title: "Archive Selected",
+                  message: `Are you sure you want to archive the ${selectedCompanyIds.length} selected opportunities?`,
+                  onConfirm: async () => {
+                    await handleBulkAction("archived");
+                    setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                  }
+                });
+              }}
               className="h-9 px-4 border border-border bg-transparent text-muted-foreground font-bold text-xs hover:bg-red-950 hover:text-red-400 hover:border-red-500 uppercase tracking-wider transition-all"
             >
               👁️ Archive
@@ -2367,533 +2501,19 @@ function DashboardPageContent() {
 
       {/* Global modern Company Workspace Drawer / Modal */}
       {selectedCompany && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200">
-          <div className="relative w-full max-w-5xl border-2 border-border bg-background flex flex-col md:flex-row h-[85vh] animate-in slide-in-from-bottom-4 duration-300 rounded-none overflow-hidden">
-            
-            {/* Left Nav Pane */}
-            <div className="w-full md:w-56 border-r border-border bg-muted/15 flex flex-row md:flex-col shrink-0">
-              <div className="hidden md:flex h-20 items-center justify-between border-b border-border px-6">
-                <span className="text-xs font-black tracking-widest text-foreground uppercase truncate">
-                  {selectedCompany.name}
-                </span>
-              </div>
-
-              <div className="flex flex-row md:flex-col flex-1 py-2 overflow-x-auto md:overflow-x-visible">
-                <button
-                  onClick={() => setModalTab("overview")}
-                  className={`flex-1 md:flex-none flex items-center gap-3 px-6 py-3.5 text-xs font-bold uppercase tracking-wider transition-all text-left ${
-                    modalTab === "overview" ? "bg-accent text-black font-black" : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  }`}
-                >
-                  <Calendar size={14} />
-                  <span>OVERVIEW</span>
-                </button>
-                <button
-                  onClick={() => setModalTab("details")}
-                  className={`flex-1 md:flex-none flex items-center gap-3 px-6 py-3.5 text-xs font-bold uppercase tracking-wider transition-all text-left ${
-                    modalTab === "details" ? "bg-accent text-black font-black" : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  }`}
-                >
-                  <Link2 size={14} />
-                  <span>JOB DETAILS</span>
-                </button>
-                <button
-                  onClick={() => setModalTab("toolkit")}
-                  className={`flex-1 md:flex-none flex items-center gap-3 px-6 py-3.5 text-xs font-bold uppercase tracking-wider transition-all text-left ${
-                    modalTab === "toolkit" ? "bg-accent text-black font-black" : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  }`}
-                >
-                  <Award size={14} />
-                  <span>AI TOOLKIT</span>
-                </button>
-              </div>
-
-
-            </div>
-
-            {/* Right Content Pane */}
-            <div className="flex-1 flex flex-col min-h-0 bg-background relative">
-              <button
-                onClick={() => setSelectedCompany(null)}
-                className="absolute top-4 right-4 z-10 border border-border p-2 bg-card hover:bg-red-500/10 hover:text-red-500 hover:border-red-500 transition-all active:scale-95"
-                aria-label="Close modal"
-              >
-                <X size={16} />
-              </button>
-
-              <div className="flex-1 p-6 md:p-8 overflow-y-auto space-y-8 select-text">
-                
-                {/* 1. OVERVIEW & TIMELINE TAB */}
-                {modalTab === "overview" && (
-                  <div className="space-y-8">
-                    {/* Warning notice if low confidence */}
-                    {selectedCompany.requires_review && (
-                      <div className="border-2 border-dashed border-amber-500 bg-amber-500/10 p-4 flex items-start gap-3">
-                        <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
-                        <div>
-                          <p className="text-xs font-bold uppercase tracking-wider text-amber-500">
-                            ⚠️ PARSER VERIFICATION NOTICE
-                          </p>
-                          <p className="text-[10px] text-muted-foreground uppercase leading-relaxed mt-0.5">
-                            Some fields in this workspace were automatically parsed with low confidence. Please verify the timeline dates, CTC, and location parameters using the <strong className="text-accent">[View Source Email]</strong> button on the milestone items.
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                    {/* Header Summary */}
-                    <div className="border-b border-border pb-4 pr-12 flex flex-col md:flex-row md:items-start justify-between gap-4">
-                      <div>
-                        <h2 className="text-2xl font-black uppercase tracking-tighter leading-none">{selectedCompany.name} Workspace</h2>
-                        <div className="flex items-center flex-wrap gap-3 mt-2">
-                          <span className="bg-accent px-2 py-0.5 border border-accent text-[9px] font-black text-black uppercase w-max">
-                            {selectedCompany.category}
-                          </span>
-                          <p className="text-xs text-muted-foreground uppercase">{selectedCompany.role} ✦ {selectedCompany.job_location || "Unknown location"}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {selectedApp && selectedApp.user_decision === 'tracking' && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-black text-muted-foreground uppercase">STAGE:</span>
-                            <select
-                              value={selectedApp.status}
-                              onChange={async (e) => {
-                                await handleUpdateApplication(selectedCompany.id, {
-                                  status: e.target.value,
-                                  current_round: e.target.value
-                                });
-                              }}
-                              className="bg-zinc-950 border-2 border-black px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-accent focus:outline-none cursor-pointer hover:bg-zinc-900 transition-colors"
-                            >
-                              {["Applied", "Shortlisted", "OA", "Technical", "HR", "Offer", "Rejected"].map((s) => (
-                                <option key={s} value={s}>
-                                  {s.toUpperCase()}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Specifications Grid */}
-                    <div className="border-2 border-border p-5 bg-muted/5 space-y-4">
-                      <div className="flex items-center justify-between flex-wrap gap-2">
-                        <h4 className="text-xs font-black tracking-widest text-accent uppercase">
-                          📋 Placement Specifications
-                        </h4>
-                        {/* AI Parsing Disclaimer */}
-                        {selectedCompany.requires_review ? (
-                          <span className="inline-flex items-center gap-1.5 border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[9px] font-black text-amber-400 uppercase tracking-widest">
-                            ⚠ Needs Review — Low confidence parse. Verify against source email.
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 border border-border/50 bg-muted/20 px-2 py-1 text-[9px] font-bold text-muted-foreground uppercase tracking-widest">
-                            🤖 AI-extracted — verify against the original CDC email
-                          </span>
-                        )}
-                      </div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                        <div className="space-y-1">
-                          <span className="text-[9px] font-black text-muted-foreground uppercase block">CTC / Package</span>
-                          <span className="text-sm font-bold text-foreground block">{selectedCompany.ctc || "Will be announced later"}</span>
-
-                        </div>
-                        <div className="space-y-1">
-                          <span className="text-[9px] font-black text-muted-foreground uppercase block">Stipend</span>
-                          <span className="text-sm font-bold text-foreground block">{selectedCompany.stipend || "Will be announced later"}</span>
-                        </div>
-                        <div className="space-y-1">
-                          <span className="text-[9px] font-black text-muted-foreground uppercase block">Registration Deadline</span>
-                          <span className="text-sm font-bold text-foreground block">
-                            {selectedCompany.registration_deadline 
-                              ? new Date(selectedCompany.registration_deadline).toLocaleString("en-IN", { 
-                                  day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true 
-                                }) 
-                              : "Will be announced later"}
-                          </span>
-                        </div>
-                        <div className="space-y-1">
-                          <span className="text-[9px] font-black text-muted-foreground uppercase block">Date of Visit</span>
-                          <span className="text-sm font-bold text-foreground block">
-                            {selectedCompany.eligibility_rules?.date_of_visit || "Will be announced later"}
-                          </span>
-                        </div>
-                        <div className="space-y-1 md:col-span-2">
-                          <span className="text-[9px] font-black text-muted-foreground uppercase block">Eligible Branches</span>
-                          <span className="text-sm font-bold text-foreground block">
-                            {selectedCompany.eligible_branches && selectedCompany.eligible_branches.length > 0 
-                              ? selectedCompany.eligible_branches.join(", ") 
-                              : "All Branches"}
-                          </span>
-                        </div>
-                        <div className="space-y-1">
-                          <span className="text-[9px] font-black text-muted-foreground uppercase block">Min CGPA</span>
-                          <span className="text-sm font-bold text-foreground block">
-                            {selectedCompany.eligibility_rules?.min_cgpa ? `>= ${selectedCompany.eligibility_rules.min_cgpa}` : "N/A"}
-                          </span>
-                        </div>
-                        <div className="space-y-1">
-                          <span className="text-[9px] font-black text-muted-foreground uppercase block">History of Arrears</span>
-                          <span className="text-sm font-bold text-foreground block">
-                            {selectedCompany.eligibility_rules?.requires_no_arrears ? "No Active Backlogs" : "Backlogs Allowed"}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Website and Application Links */}
-                      <div className="flex flex-wrap gap-3 pt-3 border-t border-border/50">
-                        {selectedCompany.registration_link && (
-                          <a
-                            href={selectedCompany.registration_link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-2 h-9 px-4 border-2 border-accent bg-accent text-black font-black text-[10px] uppercase tracking-wider hover:bg-accent/80 transition-all"
-                          >
-                            <ExternalLink size={12} />
-                            Apply via CDC Portal
-                          </a>
-                        )}
-                        {selectedCompany.website && (
-                          <a
-                            href={selectedCompany.website}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-2 h-9 px-4 border border-border bg-transparent text-foreground font-black text-[10px] uppercase tracking-wider hover:bg-muted transition-all"
-                          >
-                            <Globe size={12} />
-                            Visit Company Website
-                          </a>
-                        )}
-                      </div>
-                    </div>
-
-
-
-                    {/* Timeline & Notes list */}
-                    <div className="space-y-4">
-                      <h3 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
-                        📅 WORKSPACE TIMELINE MILESTONES
-                      </h3>
-
-                      <div className="relative border-l-2 border-border ml-3 pl-6 space-y-8">
-                        {workspaceEvents.map((evt: TimelineEvent) => (
-                          <div key={evt.id} className="relative space-y-3">
-                            <div className="absolute -left-[31px] top-1.5 h-4 w-4 bg-accent border-2 border-black" />
-                            
-                            <div className="flex justify-between items-start">
-                              <div>
-                                <span className="text-[10px] font-mono font-bold text-accent block">
-                                  {evt.timestamp.toLocaleString("en-IN")}
-                                </span>
-                                <h5 className="text-sm font-black uppercase tracking-tight text-foreground mt-0.5">
-                                  {evt.title}
-                                </h5>
-                                <span className="text-[9px] text-muted-foreground uppercase">
-                                  Sender: {evt.sender}
-                                </span>
-                              </div>
-                              <button
-                                onClick={() => setExpandedEmailId(expandedEmailId === evt.id ? null : evt.id)}
-                                className="text-[9px] font-bold text-accent hover:underline uppercase border border-border px-2.5 py-1 bg-background"
-                              >
-                                {expandedEmailId === evt.id ? "Hide Source" : "View Source Email"}
-                              </button>
-                            </div>
-
-                            {/* Confidence indicators */}
-                            {evt.confidence_scores && Object.keys(evt.confidence_scores).length > 0 && (
-                              <div className="flex flex-wrap gap-1.5">
-                                {Object.entries(evt.confidence_scores).map(([field, score]) => (
-                                  <span 
-                                    key={field} 
-                                    className={`text-[8px] font-mono font-bold px-1.5 py-0.5 border ${
-                                      score >= 0.85 ? 'bg-emerald-950/25 border-emerald-500/50 text-emerald-400' :
-                                      score >= 0.70 ? 'bg-amber-950/25 border-amber-500/50 text-amber-400' :
-                                      'bg-red-950/25 border-red-500/50 text-red-400'
-                                    }`}
-                                  >
-                                    {field.toUpperCase()}: {Math.round(score * 100)}% CONFIDENCE
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* Collapsible Source Email */}
-                            {expandedEmailId === evt.id && (
-                              <div className="border border-border/80 p-4 bg-muted/20 font-mono text-[10px] leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto border-dashed">
-                                {evt.body}
-                              </div>
-                            )}
-
-                            {/* Timeline Notes Integration */}
-                            {encryptionKey && selectedApp ? (
-                              editingRoundNote === evt.id ? (
-                                <div className="space-y-2 max-w-xl">
-                                  <textarea
-                                    value={tempNoteText}
-                                    onChange={(e) => setTempNoteText(e.target.value)}
-                                    className="w-full border-2 border-border bg-background p-2 text-xs font-bold focus:border-accent focus:outline-none"
-                                    rows={3}
-                                    placeholder="Type preparation notes, dates, or questions here..."
-                                  />
-                                  <div className="flex gap-2">
-                                    <button
-                                      onClick={() => {
-                                        handleSaveRoundNote(evt.id, tempNoteText);
-                                        setEditingRoundNote(null);
-                                      }}
-                                      className="h-8 px-3 border border-border bg-foreground text-background font-bold text-[10px] hover:bg-accent hover:text-black hover:border-accent uppercase tracking-wider transition-all"
-                                    >
-                                      Save Note
-                                    </button>
-                                    <button
-                                      onClick={() => setEditingRoundNote(null)}
-                                      className="h-8 px-3 border border-border bg-transparent text-foreground font-bold text-[10px] hover:bg-muted uppercase tracking-wider transition-all"
-                                    >
-                                      Cancel
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="max-w-xl">
-                                  <div className="flex justify-between items-center bg-muted/15 border border-border px-3 py-1.5">
-                                    <span className="text-[9px] text-muted-foreground uppercase font-bold">📝 Notes for this round</span>
-                                    <button
-                                      onClick={() => {
-                                        setEditingRoundNote(evt.id);
-                                        setTempNoteText(decryptedNotes[evt.id] || "");
-                                      }}
-                                      className="text-[9px] font-black text-accent hover:underline uppercase"
-                                    >
-                                      {decryptedNotes[evt.id] ? "Edit Note" : "+ Add Note"}
-                                    </button>
-                                  </div>
-                                  {decryptedNotes[evt.id] && (
-                                    <p className="text-[11px] text-foreground bg-muted/5 px-3 py-2.5 font-mono border-x border-b border-border leading-normal">
-                                      {decryptedNotes[evt.id]}
-                                    </p>
-                                  )}
-                                </div>
-                              )
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* 2. JOB DETAILS TAB */}
-                {modalTab === "details" && (
-                  <div className="space-y-6">
-                    <div className="border-b border-border pb-4 flex items-start justify-between gap-3 flex-wrap">
-                      <h2 className="text-2xl font-black uppercase tracking-tighter">Placement Specifications</h2>
-                      {selectedCompany.requires_review ? (
-                        <span className="inline-flex items-center gap-1.5 border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[9px] font-black text-amber-400 uppercase tracking-widest">
-                          ⚠ Needs Review — verify all details against the original CDC email
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 border border-border/50 bg-muted/20 px-2 py-1 text-[9px] font-bold text-muted-foreground uppercase tracking-widest">
-                          🤖 AI-extracted — verify against the original CDC email
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="space-y-4">
-                        <div className="border border-border p-4 bg-muted/5 relative">
-                          {selectedCompany.requires_review && (
-                            <span className="absolute top-2 right-2 text-[8px] font-black text-amber-500 uppercase flex items-center gap-1">
-                              <AlertTriangle size={10} /> VERIFY FROM SOURCE
-                            </span>
-                          )}
-                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">CTC / SALARY</span>
-                          <span className="text-lg font-black uppercase text-foreground">{selectedCompany.ctc || "—"}</span>
-                        </div>
-                        <div className="border border-border p-4 bg-muted/5 relative">
-                          {selectedCompany.requires_review && (
-                            <span className="absolute top-2 right-2 text-[8px] font-black text-amber-500 uppercase flex items-center gap-1">
-                              <AlertTriangle size={10} /> VERIFY FROM SOURCE
-                            </span>
-                          )}
-                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">STIPEND</span>
-                          <span className="text-lg font-black uppercase text-foreground">{selectedCompany.stipend || "—"}</span>
-                        </div>
-                        <div className="border border-border p-4 bg-muted/5 relative">
-                          {selectedCompany.requires_review && (
-                            <span className="absolute top-2 right-2 text-[8px] font-black text-amber-500 uppercase flex items-center gap-1">
-                              <AlertTriangle size={10} /> VERIFY FROM SOURCE
-                            </span>
-                          )}
-                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">REGISTRATION DEADLINE</span>
-                          <span className="text-xs font-mono font-bold text-foreground">
-                            {selectedCompany.registration_deadline 
-                              ? new Date(selectedCompany.registration_deadline).toLocaleString("en-IN")
-                              : "—"}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="border border-border p-4 bg-muted/5 space-y-3">
-                        <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ELIGIBILITY DETAILS</h4>
-                        <div className="flex items-center gap-2">
-                          {getEligibilityIcon(selectedCompany.eligibility_status)}
-                          <span className="text-xs font-bold uppercase">{selectedCompany.eligibility_status}</span>
-                        </div>
-                        {selectedCompany.eligibility_reason && (
-                          <p className="text-[10px] text-muted-foreground uppercase leading-snug font-bold">
-                            {selectedCompany.eligibility_reason}
-                          </p>
-                        )}
-
-                        {selectedCompany.eligibility_explanation && (
-                          <div className="space-y-3.5 pt-2 border-t border-border/60">
-                            {selectedCompany.eligibility_explanation.failed && selectedCompany.eligibility_explanation.failed.length > 0 && (
-                              <div className="space-y-1">
-                                <span className="text-[9px] font-black text-red-500 tracking-widest uppercase block">⚠️ FAILED CRITERIA</span>
-                                <ul className="list-disc list-inside text-[10px] text-red-400 font-mono space-y-1 pl-1">
-                                  {selectedCompany.eligibility_explanation.failed.map((rule, idx) => (
-                                    <li key={idx} className="leading-tight normal-case">{rule}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-
-                            {selectedCompany.eligibility_explanation.matched && selectedCompany.eligibility_explanation.matched.length > 0 && (
-                              <div className="space-y-1">
-                                <span className="text-[9px] font-black text-emerald-500 tracking-widest uppercase block">✓ MATCHED CRITERIA</span>
-                                <ul className="list-disc list-inside text-[10px] text-emerald-400 font-mono space-y-1 pl-1">
-                                  {selectedCompany.eligibility_explanation.matched.map((rule, idx) => (
-                                    <li key={idx} className="leading-tight normal-case">{rule}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {selectedCompany.eligibility_raw_text && (
-                          <div className="space-y-1 pt-2 border-t border-border/60">
-                            <span className="text-[9px] font-black text-muted-foreground tracking-widest uppercase block">RAW ELIGIBILITY TEXT (SOURCE)</span>
-                            <pre className="text-[10px] font-mono text-zinc-350 bg-zinc-950 p-2.5 border border-border/80 whitespace-pre-wrap max-h-32 overflow-y-auto leading-normal normal-case font-normal">
-                              {selectedCompany.eligibility_raw_text}
-                            </pre>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* ATS Keywords */}
-                    {selectedCompany.jd_ats_keywords && selectedCompany.jd_ats_keywords.length > 0 && (
-                      <div className="space-y-2">
-                        <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">ATS KEYWORDS</h4>
-                        <div className="flex flex-wrap gap-1.5">
-                          {selectedCompany.jd_ats_keywords.map((kw: string, i: number) => (
-                            <span key={i} className="text-[9px] font-bold bg-muted border border-border px-2 py-0.5 text-foreground uppercase">
-                              {kw}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Important links */}
-                    <div className="space-y-3">
-                      <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">IMPORTANT LINKS</h4>
-                      <div className="space-y-2">
-                        {selectedCompany.registration_link && (
-                          <a
-                            href={selectedCompany.registration_link}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="flex items-center gap-2 text-xs font-bold text-accent hover:underline uppercase"
-                          >
-                            <Link2 size={14} />
-                            <span>Apply via CDC Portal</span>
-                          </a>
-                        )}
-                        {selectedCompany.website && (
-                          <a
-                            href={selectedCompany.website}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="flex items-center gap-2 text-xs font-bold text-muted-foreground hover:underline uppercase"
-                          >
-                            <Link2 size={14} />
-                            <span>Corporate Website</span>
-                          </a>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Full JD text */}
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-black tracking-wider uppercase text-muted-foreground">JOB DESCRIPTION</h4>
-                      <div className="border border-border p-4 bg-muted/10 max-h-60 overflow-y-auto rounded-none font-mono text-[10px] leading-relaxed whitespace-pre-wrap text-foreground">
-                        {selectedCompany.jd_text || "No detailed job description text loaded."}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* 3. AI TOOLKIT TAB */}
-                {modalTab === "toolkit" && (
-                  <div className="space-y-6">
-                    <div className="border-b border-border pb-4">
-                      <h2 className="text-2xl font-black uppercase tracking-tighter">AI Placement Toolkit</h2>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                      <div className="border border-border p-5 bg-card flex flex-col justify-between h-36">
-                        <div>
-                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">MATCH SCORE</span>
-                          <span className="text-[9px] text-muted-foreground uppercase block mt-0.5">Resume vs JD overlap</span>
-                        </div>
-                        <span className="text-3xl font-extrabold tracking-tighter text-foreground">
-                          {selectedApp?.match_score || 0}%
-                        </span>
-                      </div>
-                      <div className="border border-border p-5 bg-card flex flex-col justify-between h-36">
-                        <div>
-                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">PREPARATION SCORE</span>
-                          <span className="text-[9px] text-muted-foreground uppercase block mt-0.5">Pre-application readiness</span>
-                        </div>
-                        <span className="text-3xl font-extrabold tracking-tighter text-foreground">
-                          {selectedCompany.eligibility_status === 'ELIGIBLE' ? '100%' : '50%'}
-                        </span>
-                      </div>
-                      <div className="border border-border p-5 bg-card flex flex-col justify-between h-36">
-                        <div>
-                          <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">APPLICATION HEALTH</span>
-                          <span className="text-[9px] text-muted-foreground uppercase block mt-0.5">Completion checklists</span>
-                        </div>
-                        <span className="text-3xl font-extrabold tracking-tighter text-accent">
-                          {healthVal}%
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="pt-6 space-y-4">
-                      <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">LAUNCH TOOLKIT ACTIONS</h4>
-                      
-                      <div>
-                        <Link
-                          href={`/ai-toolkit?companyId=${selectedCompany.id}&tab=ats`}
-                          className="flex items-center justify-between border border-border p-4 bg-muted/15 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase w-full"
-                        >
-                          <span className="text-xs font-black tracking-wider">Tailor & Optimize Resume</span>
-                          <ArrowRight size={14} />
-                        </Link>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
+        <CompanyWorkspaceModal
+          companyId={selectedCompany.id}
+          onClose={() => setSelectedCompany(null)}
+        />
       )}
+
+      <ConfirmArchiveModal
+        isOpen={archiveConfirm.isOpen}
+        title={archiveConfirm.title}
+        message={archiveConfirm.message}
+        onConfirm={archiveConfirm.onConfirm}
+        onCancel={() => setArchiveConfirm(prev => ({ ...prev, isOpen: false }))}
+      />
 
     </div>
   );
@@ -2906,3 +2526,4 @@ export default function DashboardPage() {
     </Suspense>
   );
 }
+

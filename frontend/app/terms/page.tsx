@@ -21,6 +21,12 @@ export default function TermsPage() {
         </Link>
         <nav className="flex items-center gap-6">
           <Link
+            href="/"
+            className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors"
+          >
+            Back to Home
+          </Link>
+          <Link
             href="/privacy"
             className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors"
           >

@@ -71,6 +71,35 @@ serve(async (req) => {
     // This makes sure data is stored and visible on the dashboard even if local python worker is offline.
     
     // Exact same extraction logic as Python Regex
+
+    // Generic company name guard — must match Python is_generic_company_name()
+    const GENERIC_COMPANY_NAMES = new Set([
+      "unknown company", "unknown", "",
+      "super dream", "dream", "regular", "mass recruiter", "internship",
+      "super dream internship", "dream internship", "dream placement",
+      "regular internship", "summer intern", "summer internship",
+      "super dream placement", "dream offer",
+      "congratulations", "congrats", "dear students", "dear student",
+      "kind attention", "kind attn", "hi", "hello",
+      "placement", "hiring", "recruitment drive", "campus recruitment",
+      "campus drive", "selection process", "next round", "next round of selection process",
+      "vit", "vellore", "vit vellore", "cdc", "training and placement",
+      "vit placement", "vit bhopal", "vit ap", "vit chennai",
+      "registration open", "registration", "apply now", "apply",
+      "2025 batch", "2026 batch", "2027 batch", "2028 batch",
+      "n/a", "na", "nil", "-",
+    ]);
+
+    function isGenericCompanyName(name: string): boolean {
+      if (!name) return true;
+      const cleaned = name.replace(/[*#_\-–—\s]+/g, " ").trim().toLowerCase();
+      if (GENERIC_COMPANY_NAMES.has(cleaned)) return true;
+      if (/^\d+$/.test(cleaned)) return true;
+      if (/^(?:super\s+dream|dream|regular|mass\s+recruiter|internship)/.test(cleaned)) return true;
+      if (cleaned.length < 2) return true;
+      return false;
+    }
+
     let companyName = "Unknown Company";
     const compMatch = emailBody.match(/(?:Name of the Company|Company Name|Company|Name of the Organisation|Organisation):\s*([^\n\r]+)/i);
     if (compMatch) {
@@ -82,6 +111,7 @@ serve(async (req) => {
       }
     }
     companyName = companyName.substring(0, 255);
+
 
     let role = "Software Engineer";
     const roleMatch = emailBody.match(/(?:Designation|Role|Job Title|Profile):\s*([^\n\r]+)/i);
@@ -191,154 +221,171 @@ serve(async (req) => {
       recruitmentCycle = cycleMatch[1];
     }
 
-    // Calculate Fingerprint
-    const fingerprintInput = `${companyName.toUpperCase()}|${role.toUpperCase()}|${category.toUpperCase()}|${batchYear}|${recruitmentCycle.toUpperCase()}`;
-    const fingerprint = await sha256(fingerprintInput);
+    // Only create/update company workspace if we have a valid company name
+    let company: { id: string } | null = null;
+    let event: { id: string } | null = null;
 
-    // Create or find Company
-    let { data: company, error: companyQueryError } = await supabaseClient
-      .from("companies")
-      .select("id")
-      .eq("fingerprint", fingerprint)
-      .maybeSingle();
+    if (!isGenericCompanyName(companyName)) {
+      // Calculate Fingerprint
+      const fingerprintInput = `${companyName.toUpperCase()}|${role.toUpperCase()}|${category.toUpperCase()}|${batchYear}|${recruitmentCycle.toUpperCase()}`;
+      const encoder = new TextEncoder();
+      const data = encoder.encode(fingerprintInput);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const fingerprint = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
-    const eligibilityRules = {
-      min_cgpa: minCgpa,
-      min_tenth_marks: null,
-      min_twelfth_marks: null,
-      requires_no_arrears: requiresNoArrears
-    };
-
-    const companyData = {
-      name: companyName,
-      role: role,
-      category: category,
-      ctc: ctc,
-      stipend: stipend,
-      job_location: location,
-      eligible_branches: eligibleBranches,
-      eligibility_rules: eligibilityRules,
-      registration_deadline: deadline,
-      registration_link: regLink,
-      recruitment_cycle: recruitmentCycle,
-      fingerprint: fingerprint
-    };
-
-    if (company) {
-      const { error: updateError } = await supabaseClient
+      // Create or find Company
+      const { data: existingCompany } = await supabaseClient
         .from("companies")
-        .update(companyData)
-        .eq("id", company.id);
-      if (updateError) {
-        console.error("Failed to update company:", updateError);
-      }
-    } else {
-      const { data: newCompany, error: insertError } = await supabaseClient
-        .from("companies")
-        .insert(companyData)
-        .select()
-        .single();
-      if (insertError) {
-        console.error("Failed to insert company:", insertError);
-        throw insertError;
-      }
-      company = newCompany;
-    }
-
-    // Determine Event Type
-    let eventType = 'REGISTRATION';
-    const lSubject = subject.toLowerCase();
-    const lBody = emailBody.toLowerCase();
-    if (lSubject.includes('shortlist') || lBody.includes('shortlist')) {
-      eventType = 'SHORTLIST';
-    } else if (lSubject.includes('online test') || lSubject.includes('assessment') || lSubject.includes(' oa ')) {
-      eventType = 'OA';
-    } else if (lSubject.includes('interview') || lSubject.includes('schedule')) {
-      eventType = 'INTERVIEW';
-    } else if (lSubject.includes('offer') || lSubject.includes('congratulations')) {
-      eventType = 'OFFER';
-    }
-
-    const eventTimestamp = new Date(timestamp).toISOString();
-
-    // Create or find Event
-    let { data: event, error: eventQueryError } = await supabaseClient
-      .from("company_events")
-      .select("id")
-      .eq("company_id", company.id)
-      .eq("event_type", eventType)
-      .eq("subject", subject)
-      .eq("timestamp", eventTimestamp)
-      .maybeSingle();
-
-    if (!event) {
-      const { data: newEvent, error: insertEventError } = await supabaseClient
-        .from("company_events")
-        .insert({
-          company_id: company.id,
-          event_type: eventType,
-          subject: subject,
-          sender: sender,
-          body: emailBody,
-          timestamp: eventTimestamp
-        })
-        .select()
-        .single();
-      if (insertEventError) {
-        console.error("Failed to insert event:", insertEventError);
-        throw insertEventError;
-      }
-      event = newEvent;
-    }
-
-    // Upload and record attachments metadata
-    for (const att of (attachments || [])) {
-      const { data: existingAtt } = await supabaseClient
-        .from("attachments_metadata")
         .select("id")
-        .eq("company_event_id", event.id)
-        .eq("file_name", att.filename)
+        .eq("fingerprint", fingerprint)
         .maybeSingle();
 
-      if (!existingAtt) {
-        const storagePath = `attachments/${event.id}/${att.filename}`;
-        let uploadSuccess = false;
-        try {
-          // Decode Base64 to binary Uint8Array
-          const binaryString = atob(att.base64_data);
-          const len = binaryString.length;
-          const bytes = new Uint8Array(len);
-          for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
+      const eligibilityRules = {
+        min_cgpa: minCgpa,
+        min_tenth_marks: null,
+        min_twelfth_marks: null,
+        requires_no_arrears: requiresNoArrears
+      };
 
-          const { error: uploadError } = await supabaseClient
-            .storage
-            .from("attachments")
-            .upload(storagePath, bytes, {
-              contentType: att.content_type,
-              upsert: true
-            });
+      const companyData = {
+        name: companyName,
+        role: role,
+        category: category,
+        ctc: ctc,
+        stipend: stipend,
+        job_location: location,
+        eligible_branches: eligibleBranches,
+        eligibility_rules: eligibilityRules,
+        registration_deadline: deadline,
+        registration_link: regLink,
+        recruitment_cycle: recruitmentCycle,
+        fingerprint: fingerprint
+      };
 
-          if (!uploadError) {
-            uploadSuccess = true;
-          } else {
-            console.warn("Storage upload error:", uploadError.message);
-          }
-        } catch (storageErr) {
-          console.warn("Failed to upload binary to storage:", storageErr);
+      if (existingCompany) {
+        company = existingCompany;
+        const { error: updateError } = await supabaseClient
+          .from("companies")
+          .update(companyData)
+          .eq("id", company.id);
+        if (updateError) {
+          console.error("Failed to update company:", updateError);
+        }
+      } else {
+        const { data: newCompany, error: insertError } = await supabaseClient
+          .from("companies")
+          .insert(companyData)
+          .select()
+          .single();
+        if (insertError) {
+          console.error("Failed to insert company:", insertError);
+        } else {
+          company = newCompany;
+        }
+      }
+
+      if (company) {
+        // Determine Event Type
+        const lSubject = subject.toLowerCase();
+        const lBody = emailBody.toLowerCase();
+        let eventType = "REGISTRATION";
+        if (lSubject.includes("shortlist") || lBody.includes("shortlist")) {
+          eventType = "SHORTLIST";
+        } else if (lSubject.includes("online test") || lSubject.includes("assessment") || lSubject.includes(" oa ")) {
+          eventType = "OA";
+        } else if (lSubject.includes("interview") || lSubject.includes("schedule")) {
+          eventType = "INTERVIEW";
+        } else if (lSubject.includes("offer") || lSubject.includes("congratulations")) {
+          eventType = "OFFER";
         }
 
-        const fileType = att.filename.toLowerCase().endsWith(".pdf") ? "JD_PDF" : "SHORTLIST_EXCEL";
-        await supabaseClient
+        const eventTimestamp = new Date(timestamp).toISOString();
+
+        const { data: existingEvent } = await supabaseClient
+          .from("company_events")
+          .select("id")
+          .eq("company_id", company.id)
+          .eq("event_type", eventType)
+          .eq("subject", subject)
+          .eq("timestamp", eventTimestamp)
+          .maybeSingle();
+
+        if (!existingEvent) {
+          const { data: newEvent, error: insertEventError } = await supabaseClient
+            .from("company_events")
+            .insert({
+              company_id: company.id,
+              event_type: eventType,
+              subject: subject,
+              sender: sender,
+              body: emailBody,
+              timestamp: eventTimestamp
+            })
+            .select()
+            .single();
+          if (insertEventError) {
+            console.error("Failed to insert event:", insertEventError);
+          } else {
+            event = newEvent;
+          }
+        } else {
+          event = existingEvent;
+        }
+      }
+    } else {
+      console.log(`Skipping company/event workspace for generic name: "${companyName}". Python worker will resolve.`);
+    }
+
+    // Upload and record attachments metadata (only if we have a valid event)
+    if (event) {
+      for (const att of (attachments || [])) {
+        const { data: existingAtt } = await supabaseClient
           .from("attachments_metadata")
-          .insert({
-            company_event_id: event.id,
-            file_name: att.filename,
-            file_type: fileType,
-            storage_path: uploadSuccess ? storagePath : null,
-            parsed_meta: {}
-          });
+          .select("id")
+          .eq("company_event_id", event.id)
+          .eq("file_name", att.filename)
+          .maybeSingle();
+
+        if (!existingAtt) {
+          const storagePath = `attachments/${event.id}/${att.filename}`;
+          let uploadSuccess = false;
+          try {
+            const binaryString = atob(att.base64_data);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            const { error: uploadError } = await supabaseClient
+              .storage
+              .from("attachments")
+              .upload(storagePath, bytes, {
+                contentType: att.content_type,
+                upsert: true
+              });
+
+            if (!uploadError) {
+              uploadSuccess = true;
+            } else {
+              console.warn("Storage upload error:", uploadError.message);
+            }
+          } catch (storageErr) {
+            console.warn("Failed to upload binary to storage:", storageErr);
+          }
+
+          const fileType = att.filename.toLowerCase().endsWith(".pdf") ? "JD_PDF" : "SHORTLIST_EXCEL";
+          await supabaseClient
+            .from("attachments_metadata")
+            .insert({
+              company_event_id: event.id,
+              file_name: att.filename,
+              file_type: fileType,
+              storage_path: uploadSuccess ? storagePath : null,
+              parsed_meta: {}
+            });
+        }
       }
     }
 

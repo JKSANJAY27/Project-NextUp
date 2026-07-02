@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import api from "@/lib/api";
 
 import { useCalendarEvents, useApplications } from "@/lib/queries";
+import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -69,6 +70,7 @@ export default function CalendarPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
+  const [selectedWorkspaceCompanyId, setSelectedWorkspaceCompanyId] = useState<string | null>(null);
 
   // Form Fields
   const [formTitle, setFormTitle] = useState('');
@@ -503,7 +505,7 @@ export default function CalendarPage() {
                             title={`${e.title} (${e.event_type.toUpperCase()})`}
                           >
                             <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${clr.dot}`} />
-                            <span className="truncate uppercase">{e.title}</span>
+                            <span className="truncate uppercase">{e.company_name || e.title.replace(/(registration|update|deadline|oa|interview|assessment)/gi, '').replace(/^[-:\s]+|[-:\s]+$/g, '').trim() || e.title}</span>
                           </div>
                         );
                       })}
@@ -568,7 +570,7 @@ export default function CalendarPage() {
 
                       {/* Title */}
                       <h4 className={`font-extrabold text-sm uppercase tracking-tight text-foreground leading-snug ${e.completed ? "line-through" : ""}`}>
-                        {e.title}
+                        {e.company_name || e.title.replace(/registration deadline:?\s*/i, '').replace(/- registration deadline\s*/i, '')}
                       </h4>
 
                       {/* Display Info (Company & Role) if available */}
@@ -598,17 +600,24 @@ export default function CalendarPage() {
                         </div>
                       )}
 
-                      {/* Source Info */}
-                      <div className="text-[10px] font-bold text-muted-foreground uppercase flex items-center gap-1.5 border-t border-border/20 pt-2">
-                        <span>SOURCE:</span>
-                        {e.source === 'application_timeline' ? (
-                          <span className="text-emerald-500 font-extrabold flex items-center gap-1">
-                            ✓ AUTO (CDC MAIL)
-                          </span>
-                        ) : (
-                          <span className="text-amber-500 font-extrabold flex items-center gap-1">
-                            ✏ MANUAL
-                          </span>
+                      {/* Source Info and Workspace Link */}
+                      <div className="flex items-center justify-between border-t border-border/20 pt-2 mt-1">
+                        <div className="text-[10px] font-bold text-muted-foreground uppercase flex items-center gap-1.5">
+                          <span>SOURCE:</span>
+                          {e.source === 'application_timeline' ? (
+                            <span className="text-emerald-500 font-extrabold flex items-center gap-1">
+                              ✓ AUTO (CDC MAIL)
+                            </span>
+                          ) : (
+                            <span className="text-amber-500 font-extrabold flex items-center gap-1">
+                              ✏ MANUAL
+                            </span>
+                          )}
+                        </div>
+                        {e.company_id && (
+                          <button onClick={() => setSelectedWorkspaceCompanyId(e.company_id!)} className="text-[9px] font-black tracking-widest text-accent uppercase hover:underline transition-all">
+                            VIEW WORKSPACE &rarr;
+                          </button>
                         )}
                       </div>
 
@@ -971,6 +980,15 @@ export default function CalendarPage() {
         </div>
       )}
 
+      {/* Global modern Company Workspace Drawer / Modal */}
+      {selectedWorkspaceCompanyId && (
+        <CompanyWorkspaceModal
+          companyId={selectedWorkspaceCompanyId}
+          onClose={() => setSelectedWorkspaceCompanyId(null)}
+        />
+      )}
+
     </div>
   );
 }
+

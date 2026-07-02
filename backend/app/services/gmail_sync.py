@@ -51,10 +51,12 @@ def log_execution_stage(db: Session, job_id: UUID, stage: str, status: str, mess
 def clean_company_name_key(name: str) -> str:
     if not name:
         return ""
+    # Strip leading asterisks, hashes, hyphens, and other special characters
+    name_stripped = re.sub(r'^[*#_\s\-–—]+', '', name).strip()
     cleaned = re.sub(
         r'\b(solutions|technologies|pvt|ltd|inc|co|india|corporation|group)\b',
         '',
-        name,
+        name_stripped,
         flags=re.I
     ).strip().lower()
     return re.sub(r'\s+', ' ', cleaned)
@@ -196,12 +198,14 @@ def process_event_attachments(db: Session, event: CompanyEvent, attachments: lis
                 file_name=filename,
                 file_type="JD_PDF" if filename.lower().endswith(".pdf") else "SHORTLIST_EXCEL",
                 storage_path=f"attachments/{event.id}/{filename}",
-                parsed_meta={}
+                parsed_meta={},
+                file_data=file_bytes
             )
             db.add(att_meta)
             db.flush()
         else:
             logger.info(f"Re-using existing attachment metadata for {filename}.")
+            att_meta.file_data = file_bytes
         
         # Write file to storage
         storage_dir = "storage"
@@ -622,7 +626,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 }
             }
         else:
-            raw_parsed_info = parse_placement_email(body, subject, attachment_text)
+            raw_parsed_info = parse_placement_email(body, subject, attachment_text, email_timestamp=email_timestamp)
         
         # Save raw parsed response into DB
         job.parsed_output = raw_parsed_info
@@ -691,11 +695,14 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                         file_name=filename,
                         file_type="ANNOUNCEMENT_ATTACHMENT",
                         storage_path=f"attachments/announcements/{announcement.id}/{filename}",
-                        parsed_meta={}
+                        parsed_meta={},
+                        file_data=file_bytes
                     )
                     db.add(att_meta)
                     db.flush()
                     logger.info(f"Processed and linked attachment {filename} to announcement {announcement.id}.")
+                else:
+                    att_meta.file_data = file_bytes
                 
                 # Write file to storage
                 storage_dir = "storage"
@@ -717,7 +724,28 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             log_execution_stage(db, job.id, "COMPLETED", "SUCCESS", "Processed as general cdc announcement.")
             return True
 
-        company_name = ext_data.get("company", {}).get("value", "Unknown Company").strip()
+        company_name = ext_data.get("company", {}).get("value") or "Unknown Company"
+        company_name = company_name.strip()
+
+        # -----------------------------------------------------------------------
+        # GUARD: If the company name is unknown/generic after parsing, do not
+        # create a workspace. The email could not be identified — flag it for
+        # manual review by setting requires_review=True and skipping workspace creation.
+        # -----------------------------------------------------------------------
+        from app.services.email_parser import is_generic_company_name
+        if is_generic_company_name(company_name):
+            logger.warning(
+                f"Job {job.id}: Parser returned generic/unknown company name '{company_name}'. "
+                f"Email subject: '{subject}'. Marking job as requires_review and skipping workspace creation."
+            )
+            job.status = "requires_review"
+            job.final_classification = "UNKNOWN_COMPANY"
+            job.processed_at = datetime.utcnow()
+            log_execution_stage(db, job.id, "COMPANY_MATCHED", "SKIPPED",
+                f"Company name '{company_name}' is generic/unknown. No workspace created. Manual review required.")
+            db.commit()
+            return False
+
         event_type = ext_data.get("event_type", {}).get("value", "GENERAL_UPDATE").strip()
         location = ext_data.get("job_location", {}).get("value")
         registration_deadline_str = ext_data.get("deadline_iso", {}).get("value")
@@ -1072,6 +1100,95 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             log_execution_stage(db, job.id, "APPLICATIONS_UPDATED", "SUCCESS")
             log_execution_stage(db, job.id, "CALENDAR_CREATED", "SUCCESS")
 
+            # ------------------------------------------------------------------
+            # Persist structured timeline milestone events from the events[] array.
+            # Each milestone has stage, date_iso, round_number, sequence, venue, mandatory.
+            # We upsert by (company_id, stage, round_number) to avoid duplicates across re-ingestion.
+            # ------------------------------------------------------------------
+            parsed_events_list = ext_data.get("events") or []
+            for ev_item in parsed_events_list:
+                if not isinstance(ev_item, dict):
+                    continue
+                ev_stage = ev_item.get("stage")
+                if not ev_stage:
+                    continue
+                ev_date_iso = ev_item.get("date_iso")
+                ev_date = None
+                if ev_date_iso:
+                    try:
+                        from datetime import timezone as _tz
+                        ev_date = datetime.fromisoformat(ev_date_iso)
+                        if ev_date.tzinfo:
+                            ev_date = ev_date.replace(tzinfo=None)
+                    except (ValueError, TypeError):
+                        pass
+                ev_round = ev_item.get("round_number")
+                ev_sequence = ev_item.get("sequence")
+                ev_mandatory = ev_item.get("mandatory", True)
+                ev_label = ev_item.get("label", ev_stage)
+                ev_venue = ev_item.get("venue")
+
+                # Map canonical stage → event_type
+                STAGE_TO_EVENT_TYPE = {
+                    "REGISTRATION": "NEW_DRIVE",
+                    "ONLINE_ASSESSMENT": "OA",
+                    "PRE_PLACEMENT_TALK": "GENERAL_UPDATE",
+                    "TECHNICAL_INTERVIEW": "INTERVIEW",
+                    "HR_INTERVIEW": "INTERVIEW",
+                    "OFFER": "OFFER",
+                    "REJECTION": "REJECTION_RELEASED",
+                    "GENERAL_UPDATE": "GENERAL_UPDATE",
+                }
+                milestone_event_type = STAGE_TO_EVENT_TYPE.get(ev_stage, "GENERAL_UPDATE")
+
+                # Check if milestone event already exists (deduplicate by company+stage+round)
+                existing_milestone = db.query(CompanyEvent).filter(
+                    CompanyEvent.company_id == company.id,
+                    CompanyEvent.stage == ev_stage,
+                    CompanyEvent.round_number == ev_round
+                ).first()
+
+                if existing_milestone:
+                    # Update date and stage info if we have better data now
+                    changed = False
+                    if ev_date and not existing_milestone.date:
+                        existing_milestone.date = ev_date
+                        changed = True
+                    if ev_sequence and not existing_milestone.sequence:
+                        existing_milestone.sequence = ev_sequence
+                        changed = True
+                    if ev_venue and not existing_milestone.parsed_metadata:
+                        existing_milestone.parsed_metadata = {"venue": ev_venue, "label": ev_label, "mandatory": ev_mandatory}
+                        changed = True
+                    if changed:
+                        db.flush()
+                else:
+                    milestone_event = CompanyEvent(
+                        company_id=company.id,
+                        event_type=milestone_event_type,
+                        stage=ev_stage,
+                        date=ev_date,
+                        status="pending",
+                        subject=subject,
+                        sender=sender,
+                        body=None,  # Keep body null for milestones to save space
+                        timestamp=email_timestamp,
+                        source_email=sender,
+                        round_number=ev_round,
+                        sequence=ev_sequence,
+                        parsed_metadata={
+                            "venue": ev_venue,
+                            "label": ev_label,
+                            "mandatory": ev_mandatory,
+                            "confidence": ev_item.get("confidence", 0.5),
+                        }
+                    )
+                    db.add(milestone_event)
+
+            if parsed_events_list:
+                db.flush()
+                logger.info(f"Persisted {len(parsed_events_list)} timeline milestones for company {company.id}")
+
             # For update-type events (OA, SHORTLIST, INTERVIEW, etc.) that carry a deadline,
             # update the company's stored deadline and record the label so the frontend
             # can show "OA Deadline" instead of "Registration Deadline".
@@ -1148,12 +1265,14 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                         file_name=filename,
                         file_type="JD_PDF" if filename.lower().endswith(".pdf") else "SHORTLIST_EXCEL",
                         storage_path=f"attachments/{event.id}/{filename}",
-                        parsed_meta={}
+                        parsed_meta={},
+                        file_data=file_bytes
                     )
                     db.add(att_meta)
                     db.flush()
                 else:
                     logger.info(f"Re-using existing attachment metadata for {filename}.")
+                    att_meta.file_data = file_bytes
                 
                 # Write file to storage
                 storage_dir = "storage"

@@ -151,29 +151,53 @@ async def import_placement_file(
         except UnicodeDecodeError:
             email_text = file_bytes.decode("latin-1")
             
-        parsed = parse_placement_email(email_text)
+        raw_parsed = parse_placement_email(email_text)
+        from app.services.validator import validate_and_normalize_parsed_data
+        validated = validate_and_normalize_parsed_data(raw_parsed, db)
+        ext_data = validated.get("extracted_data", {})
         
-        # Set up eligibility rules JSONB
+        company_name = ext_data.get("company", {}).get("value") or "Unknown Company"
+        role_data = ext_data.get("roles", [{}])[0] if ext_data.get("roles") else {}
+        role = role_data.get("role", {}).get("value") or "Software Engineer"
+        ctc = role_data.get("ctc", {}).get("value")
+        stipend = role_data.get("stipend", {}).get("value")
+        eligible_branches = role_data.get("eligible_branches", {}).get("value") or []
+        min_cgpa = role_data.get("min_cgpa", {}).get("value")
+        min_tenth_marks = role_data.get("min_tenth_marks", {}).get("value")
+        min_twelfth_marks = role_data.get("min_twelfth_marks", {}).get("value")
+        requires_no_arrears = role_data.get("requires_no_arrears", {}).get("value", False)
+        
+        category = ext_data.get("email_category") or "Regular"
+        if category in ("NEW_DRIVE", "DRIVE_UPDATE"):
+            category = "Regular"
+            
         eligibility_rules = {
-            "min_cgpa": parsed.get("min_cgpa"),
-            "min_tenth_marks": None,
-            "min_twelfth_marks": None,
-            "requires_no_arrears": parsed.get("requires_no_arrears", False)
+            "min_cgpa": min_cgpa,
+            "min_tenth_marks": min_tenth_marks,
+            "min_twelfth_marks": min_twelfth_marks,
+            "requires_no_arrears": requires_no_arrears
         }
         
-        # Create company
+        deadline_str = ext_data.get("deadline_iso", {}).get("value")
+        registration_deadline = None
+        if deadline_str:
+            try:
+                registration_deadline = datetime.fromisoformat(deadline_str.replace("Z", "+00:00"))
+            except Exception:
+                pass
+                
         new_company = Company(
-            name=parsed["company"],
-            role=parsed["role"],
-            category=parsed["category"],
-            ctc=parsed["ctc"],
-            stipend=parsed["stipend"],
-            eligible_branches=parsed.get("eligible_branches"),
+            name=company_name,
+            role=role,
+            category=category,
+            ctc=ctc,
+            stipend=stipend,
+            eligible_branches=eligible_branches,
             eligibility_rules=eligibility_rules,
-            job_location=parsed.get("job_location"),
-            registration_deadline=parsed.get("deadline_iso"),
-            registration_link=parsed.get("registration_link"),
-            jd_text=parsed.get("jd_text")
+            job_location=ext_data.get("job_location", {}).get("value"),
+            registration_deadline=registration_deadline,
+            registration_link=ext_data.get("registration_link", {}).get("value"),
+            jd_text=email_text
         )
         db.add(new_company)
         db.commit()
@@ -345,19 +369,45 @@ def get_company_events(
         ).all()
         for n in notifications:
             notif_map[n.company_event_id] = n.message
+
+    attachments_map = defaultdict(list)
+    if event_ids:
+        from app.models.models import AttachmentMetadata
+        attachments = db.query(AttachmentMetadata).filter(AttachmentMetadata.company_event_id.in_(event_ids)).all()
+        for att in attachments:
+            attachments_map[att.company_event_id].append({
+                "id": str(att.id),
+                "file_name": att.file_name,
+                "file_type": att.file_type
+            })
             
     results = []
     for e in events:
+        pm = e.parsed_metadata or {}
         results.append({
             "id": str(e.id),
             "company_id": str(e.company_id),
             "event_type": e.event_type,
+            # Timeline milestone columns
+            "stage": e.stage,
+            "date": e.date.isoformat() if e.date else None,
+            "status": e.status or "pending",
+            "round_number": e.round_number,
+            "sequence": e.sequence,
+            "source_email": e.source_email,
+            # Metadata from parsed_metadata.venue / label / mandatory
+            "venue": pm.get("venue"),
+            "label": pm.get("label") or pm.get("deadline_label") or e.event_type,
+            "mandatory": pm.get("mandatory", True),
+            # Original email-arrival fields
             "subject": e.subject,
             "sender": e.sender,
             "body": e.body,
             "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+            "parsed_metadata": pm,
             "confidence_scores": audit_map[e.id],
-            "user_notification_msg": notif_map.get(e.id)
+            "user_notification_msg": notif_map.get(e.id),
+            "attachments": attachments_map[e.id]
         })
         
     set_cache(cache_key, results, expire_seconds=600)

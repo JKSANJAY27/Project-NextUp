@@ -1,23 +1,21 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-
+import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/lib/store";
 import api from "@/lib/api";
-import { useQueryClient } from "@tanstack/react-query";
 import { useCompanies, useApplications } from "@/lib/queries";
 import { Company, Application, CompanyEvent } from "./types";
 import TrackingStats from "@/components/TrackingStats";
 import TrackingSection from "@/components/TrackingSection";
 import TrackingCard from "@/components/TrackingCard";
-import TrackingDrawer from "@/components/TrackingDrawer";
+import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
+import ConfirmArchiveModal from "@/components/ConfirmArchiveModal";
 import { Activity } from "lucide-react";
-
 type FilterMode = "ALL" | "ACTIVE_ROUNDS" | "UPCOMING_7_DAYS" | "INTERVIEWS" | "OFFERS";
 
 export default function TrackingPage() {
-  const { user } = useAppStore();
-  const queryClient = useQueryClient();
+  const { user, encryptionKey } = useAppStore();
 
   const [companies, setCompanies] = useState<Company[]>([]);
   const [applications, setApplications] = useState<Record<string, Application>>({});
@@ -28,8 +26,70 @@ export default function TrackingPage() {
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [companyEvents, setCompanyEvents] = useState<Record<string, CompanyEvent[]>>({});
 
+  // Workspace modal states
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any
+  const [decryptedNotes, setDecryptedNotes] = useState<Record<string, any>>({});
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const queryClient = useQueryClient();
   const { data: companiesData, isLoading: companiesLoading } = useCompanies(!!user);
   const { data: applicationsData, isLoading: applicationsLoading } = useApplications(!!user);
+
+  const [archiveConfirm, setArchiveConfirm] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: () => {}
+  });
+
+  const handleArchive = (companyId: string) => {
+    const compName = companies.find(c => c.id === companyId)?.name || "this company";
+    setArchiveConfirm({
+      isOpen: true,
+      title: "Archive Workspace",
+      message: `Are you sure you want to archive ${compName}? This will remove it from active tracking.`,
+      onConfirm: async () => {
+        try {
+          const app = applications[companyId];
+          if (app) {
+            // Optimistic UI update
+            setApplications(prev => {
+              const next = { ...prev };
+              delete next[companyId];
+              return next;
+            });
+            
+            await api.patch(`/applications/${app.id}`, {
+              user_decision: "archived",
+              status: "Archived"
+            });
+          } else {
+            // If for some reason there is no application workspace, call opportunity state
+            await api.post(`/applications/opportunity-state?company_id=${companyId}&action=archive&reason=MANUAL_NOT_INTERESTED`);
+          }
+          
+          // Invalidate queries
+          queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+          queryClient.invalidateQueries({ queryKey: ["applications"] });
+          queryClient.invalidateQueries({ queryKey: ["calendar"] });
+        } catch (err) {
+          console.error("Failed to archive application", err);
+          alert("Failed to archive application.");
+          // Refetch to restore state
+          queryClient.invalidateQueries({ queryKey: ["applications"] });
+        } finally {
+          setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
 
   useEffect(() => {
     setLoading(companiesLoading || applicationsLoading);
@@ -54,9 +114,7 @@ export default function TrackingPage() {
     }
   }, [applicationsData]);
 
-  const fetchTrackingData = async () => {
-    queryClient.invalidateQueries();
-  };
+
 
   useEffect(() => {
     if (selectedCompanyId && !companyEvents[selectedCompanyId]) {
@@ -111,40 +169,89 @@ export default function TrackingPage() {
   const getNextEvent = (compId: string) => {
     const events = companyEvents[compId];
     if (!events || events.length === 0) return null;
-    return events[events.length - 1]; // Assume last is next, or sorting logic
+    return events[events.length - 1];
   };
 
-  const handleMoveStage = async (newStage: string) => {
-    if (!selectedCompanyId) return;
-    const appId = applications[selectedCompanyId]?.id;
-    if (!appId) return;
-    try {
-      if (newStage === "Archive") {
-         await api.patch(`/applications/${appId}`, { user_decision: "archived" });
-         setSelectedCompanyId(null);
-      } else {
-         const recruitmentMap: Record<string, string> = {
-           "Applied": "Registration",
-           "Shortlisted": "Shortlisted",
-           "OA": "OA",
-           "Interview": "Interview",
-           "Offer": "Offer",
-           "Rejected": "Rejected"
-         };
-         await api.patch(`/applications/${appId}`, { 
-           status: newStage,
-           recruitment_state: recruitmentMap[newStage] || newStage
-         });
-      }
-      fetchTrackingData();
-    } catch(e) {
-      console.error(e);
-    }
-  };
+
 
   const selectedCompany = companies.find(c => c.id === selectedCompanyId) || null;
-  const selectedApp = selectedCompanyId ? applications[selectedCompanyId] : null;
-  const selectedNextEvent = selectedCompanyId ? getNextEvent(selectedCompanyId) : null;
+
+  // Decrypt notes whenever selectedCompany changes or encryption key is available
+  useEffect(() => {
+    const decryptNotesObj = async () => {
+      if (!selectedCompany || !encryptionKey) {
+        setDecryptedNotes({});
+        return;
+      }
+      const app = applications[selectedCompany.id];
+      if (!app || !app.notes_enc) {
+        setDecryptedNotes({});
+        return;
+      }
+      
+      try {
+        const { decryptData } = await import("@/lib/crypto");
+        const plaintext = await decryptData(app.notes_enc, encryptionKey);
+        const parsed = JSON.parse(plaintext);
+        setDecryptedNotes(parsed || {});
+      } catch (err) {
+        console.error("Failed to decrypt notes:", err);
+        setDecryptedNotes({
+          [app.status || "Applied"]: app.notes_enc
+        });
+      }
+    };
+    decryptNotesObj();
+  }, [selectedCompany, applications, encryptionKey]);
+
+  // PDF Rendering Hook
+  const jdPdfAttachment = React.useMemo(() => {
+    if (!selectedCompanyId) return null;
+    const evts = companyEvents[selectedCompanyId] || [];
+    for (const evt of evts) {
+      if (evt.attachments) {
+        const pdf = evt.attachments.find((att) => att.file_type === 'JD_PDF');
+        if (pdf) return pdf;
+      }
+    }
+    return null;
+  }, [selectedCompanyId, companyEvents]);
+
+  useEffect(() => {
+    let active = true;
+    let localPdfUrl: string | null = null;
+    const loadPdf = async () => {
+      if (!jdPdfAttachment) {
+        setPdfUrl(null);
+        return;
+      }
+      setPdfLoading(true);
+      try {
+        const response = await api.get(`/announcements/attachment/${jdPdfAttachment.id}`, {
+          responseType: 'blob',
+        });
+        if (active) {
+          const blob = new Blob([response.data], { type: 'application/pdf' });
+          localPdfUrl = URL.createObjectURL(blob);
+          setPdfUrl(localPdfUrl);
+        }
+      } catch (err) {
+        console.error("Failed to load JD PDF:", err);
+      } finally {
+        if (active) {
+          setPdfLoading(false);
+        }
+      }
+    };
+    loadPdf();
+
+    return () => {
+      active = false;
+      if (localPdfUrl) {
+        URL.revokeObjectURL(localPdfUrl);
+      }
+    };
+  }, [jdPdfAttachment]);
 
   return (
     <>
@@ -203,37 +310,37 @@ export default function TrackingPage() {
           <div className="space-y-6">
             <TrackingSection title="Registration" count={categorized.REGISTRATION.length} colorClass="bg-yellow-500">
               {categorized.REGISTRATION.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REGISTRATION" onClick={() => setSelectedCompanyId(c.id)} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REGISTRATION" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
             
             <TrackingSection title="Shortlisted" count={categorized.SHORTLISTED.length} colorClass="bg-blue-500">
               {categorized.SHORTLISTED.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="SHORTLISTED" onClick={() => setSelectedCompanyId(c.id)} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="SHORTLISTED" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
 
             <TrackingSection title="Online Assessment" count={categorized.ONLINE_ASSESSMENT.length} colorClass="bg-orange-500">
               {categorized.ONLINE_ASSESSMENT.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="ONLINE_ASSESSMENT" onClick={() => setSelectedCompanyId(c.id)} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="ONLINE_ASSESSMENT" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
 
             <TrackingSection title="Interview" count={categorized.INTERVIEW.length} colorClass="bg-purple-500">
               {categorized.INTERVIEW.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="INTERVIEW" onClick={() => setSelectedCompanyId(c.id)} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="INTERVIEW" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
 
             <TrackingSection title="Offer Received" count={categorized.OFFER.length} colorClass="bg-emerald-500">
               {categorized.OFFER.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="OFFER" onClick={() => setSelectedCompanyId(c.id)} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="OFFER" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
             
             <TrackingSection title="Rejected" count={categorized.REJECTED.length} colorClass="bg-red-500">
               {categorized.REJECTED.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REJECTED" onClick={() => setSelectedCompanyId(c.id)} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REJECTED" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
           </div>
@@ -241,13 +348,20 @@ export default function TrackingPage() {
 
       </div>
 
-      <TrackingDrawer
-        company={selectedCompany}
-        application={selectedApp}
-        nextEvent={selectedNextEvent}
-        isOpen={!!selectedCompanyId}
-        onClose={() => setSelectedCompanyId(null)}
-        onMoveStage={handleMoveStage}
+      {/* Global modern Company Workspace Drawer / Modal */}
+      {selectedCompany && (
+        <CompanyWorkspaceModal
+          companyId={selectedCompany.id}
+          onClose={() => setSelectedCompanyId(null)}
+        />
+      )}
+
+      <ConfirmArchiveModal
+        isOpen={archiveConfirm.isOpen}
+        title={archiveConfirm.title}
+        message={archiveConfirm.message}
+        onConfirm={archiveConfirm.onConfirm}
+        onCancel={() => setArchiveConfirm(prev => ({ ...prev, isOpen: false }))}
       />
     </>
   );

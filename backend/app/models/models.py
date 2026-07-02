@@ -1,9 +1,22 @@
 import uuid
-from datetime import datetime
-from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, ForeignKey, JSON, UniqueConstraint, Index
+from datetime import datetime, timezone
+from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, ForeignKey, JSON, UniqueConstraint, Index, LargeBinary
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from app.core.database import Base
+
+
+class CompanyRegistry(Base):
+    """Canonical company name registry to prevent duplicate workspace creation."""
+    __tablename__ = "company_registry"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    canonical_name = Column(String(255), unique=True, nullable=False, index=True)
+    aliases = Column(JSONB, default=list)  # List of known aliases/alternate spellings
+    website = Column(String(255), nullable=True)
+    email_domains = Column(JSONB, default=list)  # e.g. ["jpmorgan.com", "careers.jpmorgan.com"]
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class User(Base):
     __tablename__ = "users"
@@ -146,15 +159,39 @@ class Company(Base):
 
     @property
     def effective_deadline(self):
+        """Return the nearest upcoming pending timeline event date.
+        
+        Scans all CompanyEvents for this company looking for:
+          status == 'pending' (or null/unset) AND date >= today
+        Returns the minimum such date (next upcoming milestone).
+        Falls back to registration_deadline_db if no upcoming events found.
+        """
+        now = datetime.utcnow()
+        upcoming_dates = []
+
         if self.events:
-            # Sort events by timestamp descending, stripping tzinfo for safe comparison
+            for e in self.events:
+                event_status = getattr(e, 'status', None)
+                # Treat NULL status as 'pending' for backward compat
+                if event_status in (None, 'pending', 'rescheduled'):
+                    event_date = getattr(e, 'date', None) or e.timestamp
+                    if event_date:
+                        # Strip tzinfo for naive comparison
+                        cmp_date = event_date.replace(tzinfo=None) if event_date.tzinfo else event_date
+                        if cmp_date >= now:
+                            upcoming_dates.append(cmp_date)
+
+        if upcoming_dates:
+            return min(upcoming_dates)
+
+        # Fall back to the old parsed_metadata.deadline_iso for events that predate new columns
+        if self.events:
             def _ts(e):
                 t = e.timestamp
                 if t is None:
                     return datetime.min
                 return t.replace(tzinfo=None) if t.tzinfo else t
-            sorted_events = sorted(self.events, key=_ts, reverse=True)
-            for e in sorted_events:
+            for e in sorted(self.events, key=_ts, reverse=True):
                 if e.parsed_metadata and isinstance(e.parsed_metadata, dict):
                     ev_date = e.parsed_metadata.get("deadline_iso")
                     if ev_date:
@@ -162,6 +199,7 @@ class Company(Base):
                             return datetime.fromisoformat(ev_date)
                         except ValueError:
                             pass
+
         return self.registration_deadline_db
 
     @property
@@ -195,6 +233,21 @@ class CompanyEvent(Base):
     body = Column(String)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     parsed_metadata = Column(JSON, default=dict)
+
+    # Timeline milestone columns — added in migrate_events_columns.py
+    # stage: Canonical stage name, e.g. REGISTRATION, ONLINE_ASSESSMENT, TECHNICAL_INTERVIEW, OFFER
+    stage = Column(String(100), nullable=True, index=True)
+    # date: The actual date/time of this milestone event (distinct from email arrival timestamp)
+    date = Column(DateTime, nullable=True, index=True)
+    # status: pending | completed | cancelled | rescheduled
+    status = Column(String(50), nullable=True, default="pending")
+    # source_email: sender address of the source email
+    source_email = Column(String(255), nullable=True)
+    # round_number: e.g. 1, 2 for Technical Interview Round 1, Round 2
+    round_number = Column(Integer, nullable=True)
+    # sequence: absolute order within the recruitment workflow (1=Registration, 2=OA, 3=Interview...)
+    sequence = Column(Integer, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     company = relationship("Company", back_populates="events")
     attachments = relationship("AttachmentMetadata", back_populates="company_event", cascade="all, delete-orphan")
@@ -283,6 +336,7 @@ class AttachmentMetadata(Base):
     file_name = Column(String, nullable=False)
     file_type = Column(String, nullable=False)  # 'JD_PDF', 'SHORTLIST_EXCEL', 'ANNOUNCEMENT_ATTACHMENT'
     storage_path = Column(String)
+    file_data = Column(LargeBinary, nullable=True)
     parsed_meta = Column(JSON)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 

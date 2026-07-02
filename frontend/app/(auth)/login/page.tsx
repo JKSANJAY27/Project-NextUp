@@ -7,7 +7,7 @@ import { useAppStore } from "@/lib/store";
 import { deriveKey, exportKeyToHex } from "@/lib/crypto";
 import { supabase } from "@/lib/supabase";
 import api from "@/lib/api";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, ArrowLeft } from "lucide-react";
 import CrowdCanvas from "@/components/CrowdCanvas";
 
 async function getDeterministicSalt(email: string): Promise<string> {
@@ -88,7 +88,10 @@ export default function LoginPage() {
     <main className="flex min-h-screen flex-col bg-background text-foreground md:flex-row">
       {/* Visual panel */}
       <section className="relative overflow-hidden flex flex-col justify-between border-b-2 border-border p-8 bg-accent text-black md:w-1/2 md:border-b-0 md:border-r-2 md:p-16">
-        <div className="relative z-10">
+        <div className="relative z-10 flex flex-col items-start gap-4">
+          <Link href="/" className="inline-flex items-center gap-2 text-xs font-bold tracking-widest uppercase text-muted-foreground hover:text-black transition-colors">
+            <ArrowLeft size={16} /> Back to Home
+          </Link>
           <Link href="/" className="text-3xl font-extrabold tracking-tighter uppercase leading-none">
             NEXTUP.AI
           </Link>

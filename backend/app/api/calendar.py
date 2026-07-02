@@ -20,13 +20,16 @@ def list_calendar_events(
 ):
     """
     Retrieves all non-deleted calendar events for the current user.
-    Pure read endpoint - does not trigger sync.
+    Triggers dynamic synchronization to ensure populated states.
     """
     version = get_user_version(current_user.id)
     cache_key = f"nextup:cache:user:{current_user.id}:calendar:v{version}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
+
+    from app.services.calendar_sync import sync_user_calendar_events
+    sync_user_calendar_events(db, current_user.id)
 
     events = db.query(CalendarEvent).filter(
         CalendarEvent.user_id == current_user.id,
@@ -36,7 +39,7 @@ def list_calendar_events(
     # Serialize response list using CalendarEventOut schema to avoid Pydantic serialization issues
     serialized_events = [CalendarEventOut.from_orm(e).dict() for e in events]
     set_cache(cache_key, serialized_events, expire_seconds=30)
-    return events
+    return serialized_events
 
 @router.post("", response_model=CalendarEventOut)
 def create_calendar_event(

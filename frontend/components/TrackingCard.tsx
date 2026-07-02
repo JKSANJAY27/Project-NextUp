@@ -1,5 +1,6 @@
 import React from "react";
 import { Company, Application, CompanyEvent } from "@/app/tracking/types";
+import { Archive } from "lucide-react";
 
 
 export const STAGE_COLORS = {
@@ -17,6 +18,7 @@ interface TrackingCardProps {
   nextEvent?: CompanyEvent | null;
   stage: keyof typeof STAGE_COLORS;
   onClick: () => void;
+  onArchive?: () => void;
 }
 
 export default function TrackingCard({
@@ -25,12 +27,9 @@ export default function TrackingCard({
   nextEvent,
   stage,
   onClick,
+  onArchive,
 }: TrackingCardProps) {
   const colorClass = STAGE_COLORS[stage] || "border-border bg-card";
-
-  // Priority stars
-  const priorityCount = Math.min(Math.max(application.priority_score || 1, 1), 5);
-  const stars = Array(priorityCount).fill("★").join("") + Array(5 - priorityCount).fill("☆").join("");
 
   // Last update
   const lastUpdate = application.last_user_activity_at
@@ -54,9 +53,18 @@ export default function TrackingCard({
         <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 bg-background border border-border text-foreground">
           {company.category}
         </span>
-        <div className="text-[10px] text-accent tracking-widest font-black" title="Priority">
-          {stars}
-        </div>
+        {onArchive && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onArchive();
+            }}
+            className="p-1 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all rounded shrink-0"
+            title="Archive application"
+          >
+            <Archive size={12} />
+          </button>
+        )}
       </div>
 
       {/* Main Info */}

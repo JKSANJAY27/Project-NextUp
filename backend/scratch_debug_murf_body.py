@@ -6,20 +6,20 @@ load_dotenv()
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app.core.database import SessionLocal
-from app.models.models import RawIngestionJob
-from app.services.email_parser import extract_placements_regex
+from app.models.models import CompanyEvent
+from app.services.email_parser import parse_placement_email
+import json
 
 db = SessionLocal()
 try:
-    j = db.query(RawIngestionJob).filter(RawIngestionJob.id == "2ec64bf6-bea7-4117-a5b0-af290dcb1daf").first()
-    if j:
-        print("=== Murf Job ===")
-        print(f"Subject: {j.payload.get('subject')!r}")
-        print("Body (first 1000 chars):")
-        print(repr(j.payload.get('body')[:1000]))
-        print("\nRegex parser output:")
-        print(extract_placements_regex(j.payload.get('body'), j.payload.get('subject')))
+    e = db.query(CompanyEvent).filter(CompanyEvent.id == "4c525724-6762-4111-8ba6-cac8779002df").first()
+    if e:
+        print("=== EVENT BODY ===")
+        print(repr(e.body))
+        print("=== EVENT PARSED ===")
+        parsed = parse_placement_email(e.body, e.subject)
+        print(json.dumps(parsed, indent=2))
     else:
-        print("Job not found!")
+        print("Event not found.")
 finally:
     db.close()
