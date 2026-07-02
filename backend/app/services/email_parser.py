@@ -10,24 +10,30 @@ import requests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# spaCy is optional — only loaded if available
-try:
-    import spacy
-    try:
-        nlp = spacy.load("en_core_web_sm")
-    except OSError:
-        logger.info("spaCy model 'en_core_web_sm' not found. Downloading...")
-        import subprocess
-        import sys
+_nlp = None
+
+def get_nlp():
+    """Lazy-load the spaCy model only when needed to save startup memory."""
+    global _nlp
+    if _nlp is None:
         try:
-            subprocess.run([sys.executable, "-m", "spacy", "download", "en_core_web_sm"], check=True)
-            nlp = spacy.load("en_core_web_sm")
-        except Exception as e:
-            logger.error(f"Failed to download spaCy model: {str(e)}")
-            nlp = None
-except ImportError:
-    logger.warning("spaCy not installed. NER fallback disabled.")
-    nlp = None
+            import spacy
+            try:
+                _nlp = spacy.load("en_core_web_sm")
+            except OSError:
+                logger.info("spaCy model 'en_core_web_sm' not found. Downloading...")
+                import subprocess
+                import sys
+                try:
+                    subprocess.run([sys.executable, "-m", "spacy", "download", "en_core_web_sm"], check=True)
+                    _nlp = spacy.load("en_core_web_sm")
+                except Exception as e:
+                    logger.error(f"Failed to download spaCy model: {str(e)}")
+                    _nlp = None
+        except ImportError:
+            logger.warning("spaCy not installed. NER fallback disabled.")
+            _nlp = None
+    return _nlp
 
 
 # ---------------------------------------------------------------------------
@@ -63,9 +69,48 @@ def is_generic_company_name(name: str) -> bool:
     """Returns True if name is a known bad/generic company name."""
     if not name:
         return True
-    cleaned = re.sub(r'[*#_\-–—\s]+', ' ', name).strip().lower()
+    cleaned = re.sub(r'[*#_\-–—\s\t\n\r]+', ' ', name).strip().lower()
+    
+    # Heuristics to reject long sentences/subject-lines
+    if len(cleaned) > 40:
+        return True
+    if len(cleaned.split()) > 5:
+        return True
+        
     if cleaned in GENERIC_COMPANY_NAMES:
         return True
+        
+    # Reject common non-company phrases in subjects
+    generic_patterns = [
+        r'\bcongratulations\b',
+        r'\bcongrats\b',
+        r'\bkind\s+attention\b',
+        r'\battention\b',
+        r'\bselection\s+process\b',
+        r'\bonline\s+test\b',
+        r'\bonline\s+assessment\b',
+        r'\boa\b',
+        r'\bscheduled\b',
+        r'\btest\s+link\b',
+        r'\bshortlist\b',
+        r'\bshortlisted\b',
+        r'\bselect\s+list\b',
+        r'\bselected\b',
+        r'\bplacement\s+officer\b',
+        r'\bcdc\b',
+        r'\bpat\b',
+        r'\bvit\b',
+        r'\bstudent\b',
+        r'\bstudents\b',
+        r'\bbatch\b',
+        r'\bregistration\b',
+        r'\bapply\b',
+        r'\bplacements\b',
+    ]
+    for pattern in generic_patterns:
+        if re.search(pattern, cleaned):
+            return True
+            
     # Reject if the name is entirely numeric or a year
     if re.match(r'^\d+$', cleaned):
         return True
@@ -822,8 +867,9 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     else:
         # 1b. spaCy NER — only if available, filter out academic/CDC-related org names
         ner_company = None
-        if nlp:
-            doc = nlp(email_body[:2000])  # Only scan first 2000 chars for speed
+        nlp_obj = get_nlp()
+        if nlp_obj:
+            doc = nlp_obj(email_body[:2000])  # Only scan first 2000 chars for speed
             for ent in doc.ents:
                 if ent.label_ == "ORG":
                     ner_name = ent.text.strip()
@@ -1194,7 +1240,8 @@ def extract_timeline_events(email_body: str, subject: str = "", email_timestamp=
             if hasattr(email_timestamp, 'tzinfo') else email_timestamp
         )
 
-    lines = email_body.split("\n")
+    # Filter out empty lines to ensure the 3-line window captures dates separated by whitespace/newlines
+    lines = [line.strip() for line in email_body.split("\n") if line.strip()]
 
     for stage_pattern, canonical_stage, sequence in _STAGE_KEYWORDS:
         for i, line in enumerate(lines):
@@ -1262,9 +1309,10 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
     parsed = extract_placements_regex(email_body, subject)
 
     # spaCy NER as fallback for missing/generic fields
-    if nlp and ("deadline_iso" not in parsed or "job_location" not in parsed
+    nlp_obj = get_nlp()
+    if nlp_obj and ("deadline_iso" not in parsed or "job_location" not in parsed
                 or parsed.get("company") in (None, "Unknown Company")):
-        doc = nlp(email_body)
+        doc = nlp_obj(email_body)
         orgs, dates, gpes = [], [], []
         for ent in doc.ents:
             if ent.label_ == "ORG":

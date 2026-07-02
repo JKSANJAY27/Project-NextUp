@@ -4,19 +4,24 @@ import json
 import logging
 import requests
 from typing import Dict, Any, List
-import spacy
-
 from app.services.pdf_extractor import extract_text_from_pdf, extract_skills_from_text
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load spaCy NER (optional)
-try:
-    nlp = spacy.load("en_core_web_sm")
-except Exception:
-    nlp = None
+_nlp = None
+
+def get_nlp():
+    """Lazy-load the spaCy model only when needed to save startup memory."""
+    global _nlp
+    if _nlp is None:
+        try:
+            import spacy
+            _nlp = spacy.load("en_core_web_sm")
+        except Exception:
+            _nlp = None
+    return _nlp
 
 def clean_json_string(s: str) -> str:
     s = s.strip()
@@ -763,8 +768,9 @@ def parse_resume_pdf(file_bytes: bytes) -> Dict[str, Any]:
         parsed = parse_resume_text_regex(text)
         
         # spaCy name extraction fallback
-        if "full_name" not in parsed and nlp:
-            doc = nlp(text[:1000])
+        nlp_obj = get_nlp()
+        if "full_name" not in parsed and nlp_obj:
+            doc = nlp_obj(text[:1000])
             for ent in doc.ents:
                 if ent.label_ == "PERSON" and len(ent.text.strip()) > 3:
                     parsed["full_name"] = ent.text.strip()

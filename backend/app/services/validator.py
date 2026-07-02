@@ -1,12 +1,34 @@
+from datetime import datetime, timezone
 import logging
 import re
 import dateparser
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from app.models.models import Company
 from app.services.email_parser import normalize_degree, normalize_specialization, is_generic_company_name
 
 logger = logging.getLogger(__name__)
+
+def parse_date_safely(date_str: str, settings: dict) -> Optional[datetime]:
+    if not date_str:
+        return None
+    date_str_clean = str(date_str).strip()
+    
+    # 1. Try parsing directly as standard ISO-8601 first to avoid DMY format swapping
+    try:
+        val = date_str_clean.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(val)
+        return dt
+    except (ValueError, TypeError):
+        pass
+
+    # 2. Fall back to dateparser with custom settings for human dates
+    try:
+        dt = dateparser.parse(date_str_clean, settings=settings)
+        return dt
+    except Exception as e:
+        logger.warning(f"dateparser failed to parse date '{date_str_clean}': {e}")
+        return None
 
 # Canonical Event Translation Map
 # Preserves specific result/extension types for richer timeline tracking
@@ -219,7 +241,7 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session,
                 # the email's received timestamp so they resolve correctly regardless of
                 # when the ingestion pipeline processes the email.
                 dp_settings['RELATIVE_BASE'] = email_timestamp.replace(tzinfo=None) if hasattr(email_timestamp, 'tzinfo') else email_timestamp
-            parsed_date = dateparser.parse(deadline_val, settings=dp_settings)
+            parsed_date = parse_date_safely(deadline_val, settings=dp_settings)
             if parsed_date:
                 formatted_deadline = parsed_date.isoformat()
             else:
@@ -289,7 +311,7 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session,
         if email_timestamp:
             # Anchor relative date expressions to the email's received timestamp
             dp_settings['RELATIVE_BASE'] = email_timestamp.replace(tzinfo=None) if hasattr(email_timestamp, 'tzinfo') else email_timestamp
-        parsed_date = dateparser.parse(deadline_val, settings=dp_settings)
+        parsed_date = parse_date_safely(deadline_val, settings=dp_settings)
         if parsed_date:
             formatted_deadline = parsed_date.isoformat()
         else:
@@ -539,7 +561,7 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session,
             date_iso = ev.get("date_iso")
             validated_date_iso = None
             if date_iso:
-                parsed_ev_date = dateparser.parse(str(date_iso), settings=dp_settings_ev)
+                parsed_ev_date = parse_date_safely(str(date_iso), settings=dp_settings_ev)
                 if parsed_ev_date:
                     validated_date_iso = parsed_ev_date.isoformat()
 

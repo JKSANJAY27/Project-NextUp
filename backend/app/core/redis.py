@@ -18,8 +18,11 @@ except ImportError:
 # Initialize redis connection pool
 try:
     redis_client = redis.Redis.from_url(settings.REDIS_URL, socket_timeout=2.0, socket_connect_timeout=2.0)
+    # Check if redis is actually reachable on startup
+    redis_client.ping()
+    logger.info("Successfully connected to Redis cache.")
 except Exception as e:
-    logger.error(f"Redis initialization failed: {e}")
+    logger.warning(f"Redis connection failed (caching disabled, falling back to DB): {e}")
     redis_client = None
 
 # Metrics Counters

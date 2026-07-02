@@ -112,10 +112,32 @@ def update_expired_opportunities(db: Session, user_id: UUID):
             )
             moved_count += 1
 
+    # Reverse Transition: If deadline was corrected to be in the future (or removed),
+    # move from 'decision_pending' back to 'unseen' so it returns to Opportunities.
+    active_companies = db.query(Company).filter(
+        or_(
+            Company.registration_deadline_db == None,
+            Company.registration_deadline_db >= now
+        )
+    ).all()
+    active_ids = {c.id for c in active_companies}
+
+    if active_ids:
+        stale_decisions = db.query(OpportunityState).filter(
+            OpportunityState.user_id == user_id,
+            OpportunityState.state == "decision_pending",
+            OpportunityState.company_id.in_(active_ids)
+        ).all()
+        for os_record in stale_decisions:
+            os_record.state = "unseen"
+            os_record.decision_pending_since = None
+            os_record.updated_at = now
+            moved_count += 1
+
     if moved_count > 0:
         db.commit()
         bump_user_version(user_id)
-        logger.info(f"Moved {moved_count} opportunities to 'decision_pending' for user {user_id}")
+        logger.info(f"Updated {moved_count} opportunities (expired/restored) for user {user_id}")
 
 
 def auto_archive_expired_decisions(db: Session, user_id: UUID):
