@@ -6,21 +6,23 @@ load_dotenv()
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app.core.database import SessionLocal
-from app.models.models import CompanyEvent, Company
+from app.models.models import Company, CompanyEvent
+import json
 
 db = SessionLocal()
 try:
-    events = db.query(CompanyEvent).all()
-    print(f"Total company events: {len(events)}")
-    for e in events:
-        if "credence" in e.subject.lower() or "credence" in e.body.lower():
-            c = db.query(Company).filter(Company.id == e.company_id).first()
-            comp_name = c.name if c else "Unknown"
+    c = db.query(Company).filter(Company.name.like("%Super Dream%")).first()
+    if c:
+        print(f"Company: {c.name!r} | ID: {c.id}")
+        events = db.query(CompanyEvent).filter(CompanyEvent.company_id == c.id).all()
+        for e in events:
             print(f"Event ID: {e.id}")
-            print(f"  Company Name: {comp_name}")
-            print(f"  Event Type: {e.event_type}")
+            print(f"  Type: {e.event_type!r}")
             print(f"  Subject: {e.subject!r}")
-            print(f"  Body snippet: {repr(e.body[:150])}")
-            print("-" * 50)
+            print(f"  Timestamp: {e.timestamp}")
+            print(f"  Parsed Metadata: {e.parsed_metadata}")
+            print("-" * 30)
+    else:
+        print("Not found.")
 finally:
     db.close()

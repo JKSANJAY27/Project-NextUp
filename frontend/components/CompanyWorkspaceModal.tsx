@@ -164,8 +164,57 @@ export default function CompanyWorkspaceModal({
 
   if (!companyId || !selectedCompany) return null;
 
-  const workspaceEvents = companyEvents;
-  
+  // Separate milestone events (stage-based) from general email trail events
+  const milestoneEvents = companyEvents
+    .filter((e: any) => e.stage && e.date)
+    .sort((a: any, b: any) => {
+      const seqA = a.sequence ?? 99;
+      const seqB = b.sequence ?? 99;
+      if (seqA !== seqB) return seqA - seqB;
+      return new Date(a.date).getTime() - new Date(b.date).getTime();
+    });
+
+  const emailTrailEvents = companyEvents
+    .filter((e: any) => e.body)
+    .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  const workspaceEvents = emailTrailEvents;
+
+  // Stage icon map
+  const STAGE_ICON: Record<string, string> = {
+    REGISTRATION: "📝",
+    ONLINE_ASSESSMENT: "💻",
+    PRE_PLACEMENT_TALK: "🎤",
+    TECHNICAL_INTERVIEW: "⚙️",
+    HR_INTERVIEW: "🤝",
+    OFFER: "🎉",
+    REJECTION: "❌",
+    GENERAL_UPDATE: "📢",
+  };
+
+  const STAGE_COLOR: Record<string, string> = {
+    REGISTRATION: "border-accent bg-accent/10 text-accent",
+    ONLINE_ASSESSMENT: "border-blue-500 bg-blue-500/10 text-blue-400",
+    PRE_PLACEMENT_TALK: "border-purple-500 bg-purple-500/10 text-purple-400",
+    TECHNICAL_INTERVIEW: "border-orange-500 bg-orange-500/10 text-orange-400",
+    HR_INTERVIEW: "border-teal-500 bg-teal-500/10 text-teal-400",
+    OFFER: "border-emerald-500 bg-emerald-500/10 text-emerald-400",
+    REJECTION: "border-red-500 bg-red-500/10 text-red-400",
+    GENERAL_UPDATE: "border-border bg-muted/20 text-muted-foreground",
+  };
+
+  const STAGE_DOT: Record<string, string> = {
+    REGISTRATION: "bg-accent",
+    ONLINE_ASSESSMENT: "bg-blue-500",
+    PRE_PLACEMENT_TALK: "bg-purple-500",
+    TECHNICAL_INTERVIEW: "bg-orange-500",
+    HR_INTERVIEW: "bg-teal-500",
+    OFFER: "bg-emerald-500",
+    REJECTION: "bg-red-500",
+    GENERAL_UPDATE: "bg-muted-foreground",
+  };
+
+
   // Health computation
   let healthVal = 10;
   if (selectedCompany.registration_link) healthVal += 20;
@@ -385,6 +434,73 @@ export default function CompanyWorkspaceModal({
                 <div className="space-y-4">
                   <h3 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
                     📅 WORKSPACE TIMELINE MILESTONES
+                  </h3>
+
+                  {/* Recruitment Milestone Timeline */}
+                  {milestoneEvents.length > 0 && (
+                    <div className="relative border-l-2 border-border ml-3 pl-6 space-y-6">
+                      {milestoneEvents.map((evt: any) => (
+                        <div key={evt.id} className="relative space-y-2">
+                          <div
+                            className={`absolute -left-[30px] top-1.5 h-4 w-4 border-2 border-black ${
+                              STAGE_DOT[evt.stage] || "bg-muted-foreground"
+                            }`}
+                          />
+                          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className={`inline-flex items-center gap-1.5 border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider ${
+                                  STAGE_COLOR[evt.stage] || STAGE_COLOR.GENERAL_UPDATE
+                                }`}>
+                                  {STAGE_ICON[evt.stage] || "📌"} {evt.stage.replace(/_/g, " ")}
+                                  {evt.round_number && <span className="opacity-70">· Round {evt.round_number}</span>}
+                                </span>
+                                {!evt.mandatory && (
+                                  <span className="text-[8px] border border-border/50 text-muted-foreground px-1.5 py-0.5 uppercase">Optional</span>
+                                )}
+                              </div>
+                              <h5 className="text-sm font-black uppercase tracking-tight text-foreground">
+                                {evt.label || evt.stage.replace(/_/g, " ")}
+                              </h5>
+                              {evt.date && (
+                                <span className="text-[10px] font-mono font-bold text-accent block">
+                                  📅 {new Date(evt.date).toLocaleString("en-IN", {
+                                    day: "numeric", month: "short", year: "numeric",
+                                    hour: "2-digit", minute: "2-digit", hour12: true,
+                                    timeZone: "Asia/Kolkata"
+                                  })}
+                                </span>
+                              )}
+                              {evt.venue && (
+                                <span className="text-[10px] text-muted-foreground uppercase">📍 {evt.venue}</span>
+                              )}
+                            </div>
+                            <span className={`self-start text-[9px] font-black uppercase px-2 py-1 border ${
+                              evt.status === "done" ? "border-emerald-500/50 text-emerald-400 bg-emerald-950/20" :
+                              evt.status === "cancelled" ? "border-red-500/50 text-red-400 bg-red-950/20" :
+                              "border-border/50 text-muted-foreground bg-muted/10"
+                            }`}>
+                              {evt.status === "done" ? "✓ Done" : evt.status === "cancelled" ? "✗ Cancelled" : "Pending"}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* No milestones fallback */}
+                  {milestoneEvents.length === 0 && (
+                    <div className="border border-dashed border-border/50 p-6 text-center">
+                      <p className="text-[10px] text-muted-foreground uppercase font-bold">No structured milestones detected yet.</p>
+                      <p className="text-[9px] text-muted-foreground/60 mt-1">Dates will populate as CDC emails are processed.</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Email Trail */}
+                <div className="space-y-4">
+                  <h3 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
+                    📨 EMAIL TRAIL
                   </h3>
 
                   <div className="relative border-l-2 border-border ml-3 pl-6 space-y-8">

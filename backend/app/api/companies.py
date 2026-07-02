@@ -383,14 +383,28 @@ def get_company_events(
             
     results = []
     for e in events:
+        pm = e.parsed_metadata or {}
         results.append({
             "id": str(e.id),
             "company_id": str(e.company_id),
             "event_type": e.event_type,
+            # Timeline milestone columns
+            "stage": e.stage,
+            "date": e.date.isoformat() if e.date else None,
+            "status": e.status or "pending",
+            "round_number": e.round_number,
+            "sequence": e.sequence,
+            "source_email": e.source_email,
+            # Metadata from parsed_metadata.venue / label / mandatory
+            "venue": pm.get("venue"),
+            "label": pm.get("label") or pm.get("deadline_label") or e.event_type,
+            "mandatory": pm.get("mandatory", True),
+            # Original email-arrival fields
             "subject": e.subject,
             "sender": e.sender,
             "body": e.body,
             "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+            "parsed_metadata": pm,
             "confidence_scores": audit_map[e.id],
             "user_notification_msg": notif_map.get(e.id),
             "attachments": attachments_map[e.id]

@@ -4,7 +4,7 @@ import dateparser
 from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 from app.models.models import Company
-from app.services.email_parser import normalize_degree, normalize_specialization
+from app.services.email_parser import normalize_degree, normalize_specialization, is_generic_company_name
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +248,10 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session,
         requires_review = True
         
     norm_company = normalize_company_name(comp_val, db)
+    # Additional guard: if the normalized company name is still generic/unknown, flag for review
+    if is_generic_company_name(norm_company):
+        requires_review = True
+        norm_company = comp_val  # Preserve original for display even if generic
     ext["company"] = {
         "value": norm_company,
         "confidence": comp_conf
@@ -481,6 +485,87 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session,
         })
         
     ext["roles"] = validated_roles
+
+    # 7. Events Array Normalization
+    # Validate and normalize the events[] array from the LLM or regex parser.
+    VALID_STAGES = frozenset({
+        "REGISTRATION", "ONLINE_ASSESSMENT", "PRE_PLACEMENT_TALK",
+        "TECHNICAL_INTERVIEW", "HR_INTERVIEW", "OFFER", "REJECTION", "GENERAL_UPDATE"
+    })
+    raw_events = ext.get("events")
+    if isinstance(raw_events, list):
+        dp_settings_ev = {
+            'TIMEZONE': 'Asia/Kolkata',
+            'TO_TIMEZONE': 'UTC',
+            'RETURN_AS_TIMEZONE_AWARE': True,
+            'DATE_ORDER': 'DMY',
+            'PREFER_DAY_OF_MONTH': 'first',
+        }
+        if email_timestamp:
+            dp_settings_ev['RELATIVE_BASE'] = (
+                email_timestamp.replace(tzinfo=None)
+                if hasattr(email_timestamp, 'tzinfo') else email_timestamp
+            )
+
+        validated_events = []
+        seen_ev_keys = set()
+        for ev in raw_events:
+            if not isinstance(ev, dict):
+                continue
+            stage = (ev.get("stage") or "").upper()
+            if stage not in VALID_STAGES:
+                # Try mapping from event_type
+                stage = CANONICAL_EVENT_MAP.get(stage, "") or "GENERAL_UPDATE"
+            round_number = ev.get("round_number")
+            if round_number is not None:
+                try:
+                    round_number = int(round_number)
+                except (TypeError, ValueError):
+                    round_number = None
+            sequence = ev.get("sequence")
+            if sequence is not None:
+                try:
+                    sequence = int(sequence)
+                except (TypeError, ValueError):
+                    sequence = None
+
+            # Deduplicate by stage+round_number
+            dedup_key = (stage, round_number)
+            if dedup_key in seen_ev_keys:
+                continue
+            seen_ev_keys.add(dedup_key)
+
+            # Validate and parse date_iso
+            date_iso = ev.get("date_iso")
+            validated_date_iso = None
+            if date_iso:
+                parsed_ev_date = dateparser.parse(str(date_iso), settings=dp_settings_ev)
+                if parsed_ev_date:
+                    validated_date_iso = parsed_ev_date.isoformat()
+
+            confidence = ev.get("confidence", 0.5)
+            try:
+                confidence = float(confidence)
+            except (TypeError, ValueError):
+                confidence = 0.5
+
+            validated_events.append({
+                "stage": stage,
+                "label": str(ev.get("label") or stage).strip()[:120],
+                "date_iso": validated_date_iso,
+                "venue": str(ev.get("venue")).strip()[:255] if ev.get("venue") else None,
+                "mandatory": bool(ev.get("mandatory", True)),
+                "round_number": round_number,
+                "sequence": sequence,
+                "confidence": confidence,
+            })
+
+        # Sort by sequence (ascending), then date_iso
+        validated_events.sort(key=lambda e: (e["sequence"] or 99, e["date_iso"] or ""))
+        ext["events"] = validated_events
+    else:
+        # No events array — ensure key exists as empty list
+        ext["events"] = []
     
     # Store the requires_review indicator in the metadata
     if "parser_metadata" not in parsed_data:
