@@ -314,7 +314,9 @@ function DashboardPageContent() {
 
   // Mock function for backwards compatibility with any remaining manual triggers
   const fetchDashboardData = async () => {
-    queryClient.invalidateQueries();
+    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    await queryClient.invalidateQueries({ queryKey: ["calendar"] });
+    await queryClient.invalidateQueries({ queryKey: ["applications"] });
   };
 
   useEffect(() => {
@@ -626,7 +628,133 @@ function DashboardPageContent() {
   };
 
   const handleOpportunityAction = async (companyId: string, action: "track" | "archive" | "snooze" | "restore", reason?: string) => {
+    const prevOppStates = { ...opportunityStates };
+    const prevApps = { ...applications };
+
     try {
+      // Optimistic UI updates
+      if (action === "track") {
+        setOpportunityStates(prev => {
+          const next = { ...prev };
+          const existing = next[companyId] || {
+            record_type: "opportunity_state",
+            company_id: companyId,
+            state: "unseen",
+            archive_reason: null,
+            archived_at: null,
+            decision_pending_since: null,
+            snoozed_until: null,
+            previous_state: null,
+            updated_at: new Date().toISOString(),
+            company: null
+          };
+          next[companyId] = { ...existing, state: "tracking", previous_state: existing.state };
+          return next;
+        });
+        setApplications(prev => {
+          const next = { ...prev };
+          const existing = next[companyId];
+          next[companyId] = existing ? {
+            ...existing,
+            user_decision: "tracking"
+          } : {
+            id: "temp-id",
+            record_type: "application",
+            company_id: companyId,
+            status: "Applied",
+            current_round: "Applied",
+            notes_enc: null,
+            user_decision: "tracking",
+            recruitment_state: "Registration",
+            last_user_activity_at: new Date().toISOString(),
+            workspace_priority_override: null,
+            snoozed_until: null,
+            priority_score: 0,
+            is_stale: false,
+            match_score: 0
+          };
+          return next;
+        });
+      } else if (action === "archive") {
+        setOpportunityStates(prev => {
+          const next = { ...prev };
+          const existing = next[companyId] || {
+            record_type: "opportunity_state",
+            company_id: companyId,
+            state: "unseen",
+            archive_reason: null,
+            archived_at: null,
+            decision_pending_since: null,
+            snoozed_until: null,
+            previous_state: null,
+            updated_at: new Date().toISOString(),
+            company: null
+          };
+          next[companyId] = {
+            ...existing,
+            state: "archived",
+            archive_reason: reason || "MANUAL_NOT_INTERESTED",
+            archived_at: new Date().toISOString(),
+            previous_state: existing.state
+          };
+          return next;
+        });
+        if (applications[companyId]) {
+          setApplications(prev => {
+            const next = { ...prev };
+            next[companyId] = { ...next[companyId], user_decision: "archived" };
+            return next;
+          });
+        }
+      } else if (action === "snooze") {
+        setOpportunityStates(prev => {
+          const next = { ...prev };
+          const existing = next[companyId] || {
+            record_type: "opportunity_state",
+            company_id: companyId,
+            state: "unseen",
+            archive_reason: null,
+            archived_at: null,
+            decision_pending_since: null,
+            snoozed_until: null,
+            previous_state: null,
+            updated_at: new Date().toISOString(),
+            company: null
+          };
+          const snoozeDate = new Date();
+          snoozeDate.setDate(snoozeDate.getDate() + 7);
+          next[companyId] = {
+            ...existing,
+            state: "decision_pending",
+            snoozed_until: snoozeDate.toISOString(),
+            previous_state: existing.state
+          };
+          return next;
+        });
+      } else if (action === "restore") {
+        setOpportunityStates(prev => {
+          const next = { ...prev };
+          if (next[companyId]) {
+            const restoreTarget = next[companyId].previous_state || "decision_pending";
+            next[companyId] = {
+              ...next[companyId],
+              state: restoreTarget,
+              archive_reason: null,
+              archived_at: null,
+              previous_state: null
+            };
+          }
+          return next;
+        });
+        if (applications[companyId]) {
+          setApplications(prev => {
+            const next = { ...prev };
+            next[companyId] = { ...next[companyId], user_decision: "tracking" };
+            return next;
+          });
+        }
+      }
+
       let url = `/applications/opportunity-state?company_id=${companyId}&action=${action}`;
       if (reason) {
         url += `&reason=${reason}`;
@@ -634,7 +762,9 @@ function DashboardPageContent() {
       await api.post(url);
       await fetchDashboardData();
     } catch (err) {
-      console.error(`Opportunity action '${action}' failed:`, err);
+      console.error(`Opportunity action '${action}' failed, rolling back:`, err);
+      setOpportunityStates(prevOppStates);
+      setApplications(prevApps);
       alert(`Failed to ${action} opportunity.`);
     }
   };
