@@ -141,6 +141,8 @@ export default function CompanyWorkspaceModal({
         });
       }
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["applications"] });
+      queryClient.invalidateQueries({ queryKey: ["calendar"] });
     } catch (err) {
       console.error("Failed to update application", err);
       alert("Failed to update tracking status.");
@@ -316,24 +318,47 @@ export default function CompanyWorkspaceModal({
                   </div>
                   <div className="flex items-center gap-3">
                     {selectedApp && selectedApp.user_decision === 'tracking' && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-black text-muted-foreground uppercase">STAGE:</span>
-                        <select
-                          value={selectedApp.status || "Applied"}
-                          onChange={async (e) => {
-                            await handleUpdateApplication(selectedCompany.id, {
-                              status: e.target.value,
-                              current_round: e.target.value
-                            });
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-black text-muted-foreground uppercase">STAGE:</span>
+                          <select
+                            value={selectedApp.status || "Applied"}
+                            onChange={async (e) => {
+                              await handleUpdateApplication(selectedCompany.id, {
+                                status: e.target.value,
+                                current_round: e.target.value
+                              });
+                            }}
+                            className="bg-zinc-950 border-2 border-black px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-accent focus:outline-none cursor-pointer hover:bg-zinc-900 transition-colors"
+                          >
+                            {["Applied", "Shortlisted", "OA", "Technical", "HR", "Offer", "Rejected"].map((s) => (
+                              <option key={s} value={s}>
+                                {s.toUpperCase()}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            if (window.confirm(`Are you sure you want to archive ${selectedCompany.name}? This will remove it from active tracking.`)) {
+                              await handleUpdateApplication(selectedCompany.id, {
+                                user_decision: "archived",
+                                status: "Archived"
+                              });
+                              // Also call the opportunity state archive endpoint to sync state with the dashboard page
+                              try {
+                                await api.post(`/applications/opportunity-state?company_id=${selectedCompany.id}&action=archive&reason=MANUAL_NOT_INTERESTED`);
+                              } catch (e) {
+                                console.error(e);
+                              }
+                              onClose();
+                            }
                           }}
-                          className="bg-zinc-950 border-2 border-black px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-accent focus:outline-none cursor-pointer hover:bg-zinc-900 transition-colors"
+                          className="h-8 px-3 border-2 border-red-500/50 bg-red-500/10 text-red-400 font-bold text-[10px] uppercase tracking-wider hover:bg-red-500 hover:text-white transition-all"
+                          title="Archive application"
                         >
-                          {["Applied", "Shortlisted", "OA", "Technical", "HR", "Offer", "Rejected"].map((s) => (
-                            <option key={s} value={s}>
-                              {s.toUpperCase()}
-                            </option>
-                          ))}
-                        </select>
+                          Archive
+                        </button>
                       </div>
                     )}
                   </div>

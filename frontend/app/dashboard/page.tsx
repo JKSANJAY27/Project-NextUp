@@ -1252,8 +1252,10 @@ function DashboardPageContent() {
                   {selectedDecisionIds.length > 0 && (
                     <button
                       onClick={async () => {
-                        await Promise.all(selectedDecisionIds.map(id => handleOpportunityAction(id, 'archive', 'NOT_APPLIED')));
-                        setSelectedDecisionIds([]);
+                        if (window.confirm(`Are you sure you want to archive the ${selectedDecisionIds.length} selected opportunities?`)) {
+                          await Promise.all(selectedDecisionIds.map(id => handleOpportunityAction(id, 'archive', 'NOT_APPLIED')));
+                          setSelectedDecisionIds([]);
+                        }
                       }}
                       className="flex items-center gap-2 h-8 px-4 border border-red-500/50 bg-red-500/10 text-red-400 font-bold text-[10px] uppercase tracking-wider hover:bg-red-500 hover:text-white transition-all shrink-0"
                     >
@@ -1336,7 +1338,11 @@ function DashboardPageContent() {
                             ✅ Yes, I Applied
                           </button>
                           <button
-                            onClick={() => handleOpportunityAction(comp.id, 'archive', 'NOT_APPLIED')}
+                            onClick={() => {
+                              if (window.confirm(`Are you sure you want to archive ${comp.name}?`)) {
+                                handleOpportunityAction(comp.id, 'archive', 'NOT_APPLIED');
+                              }
+                            }}
                             className="flex-1 h-8 bg-transparent text-muted-foreground font-bold text-[9px] uppercase tracking-wider hover:bg-muted border border-border transition-all"
                           >
                             ✗ No, Archive
@@ -1855,7 +1861,11 @@ function DashboardPageContent() {
                                       ✅ Apply
                                     </button>
                                     <button
-                                      onClick={() => handleOpportunityAction(c.id, 'archive', 'MANUAL_NOT_INTERESTED')}
+                                      onClick={() => {
+                                        if (window.confirm(`Are you sure you want to archive ${c.name}?`)) {
+                                          handleOpportunityAction(c.id, 'archive', 'MANUAL_NOT_INTERESTED');
+                                        }
+                                      }}
                                       className="h-10 px-3 border-2 border-border bg-background text-xs font-bold tracking-wider uppercase hover:bg-muted transition-all"
                                     >
                                       ✗ Archive
@@ -2225,7 +2235,11 @@ function DashboardPageContent() {
               ✅ Apply
             </button>
             <button
-              onClick={() => handleBulkAction("archived")}
+              onClick={() => {
+                if (window.confirm(`Are you sure you want to archive the ${selectedCompanyIds.length} selected opportunities?`)) {
+                  handleBulkAction("archived");
+                }
+              }}
               className="h-9 px-4 border border-border bg-transparent text-muted-foreground font-bold text-xs hover:bg-red-950 hover:text-red-400 hover:border-red-500 uppercase tracking-wider transition-all"
             >
               👁️ Archive

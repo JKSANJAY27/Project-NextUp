@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/lib/store";
 import api from "@/lib/api";
 import { useCompanies, useApplications } from "@/lib/queries";
@@ -31,8 +32,44 @@ export default function TrackingPage() {
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [pdfLoading, setPdfLoading] = useState(false);
+  const queryClient = useQueryClient();
   const { data: companiesData, isLoading: companiesLoading } = useCompanies(!!user);
   const { data: applicationsData, isLoading: applicationsLoading } = useApplications(!!user);
+
+  const handleArchive = async (companyId: string) => {
+    const compName = companies.find(c => c.id === companyId)?.name || "this company";
+    if (window.confirm(`Are you sure you want to archive ${compName}? This will remove it from active tracking.`)) {
+      try {
+        const app = applications[companyId];
+        if (app) {
+          // Optimistic UI update
+          setApplications(prev => {
+            const next = { ...prev };
+            delete next[companyId];
+            return next;
+          });
+          
+          await api.patch(`/applications/${app.id}`, {
+            user_decision: "archived",
+            status: "Archived"
+          });
+        }
+        
+        // Also call the opportunity state archive endpoint to sync state
+        await api.post(`/applications/opportunity-state?company_id=${companyId}&action=archive&reason=MANUAL_NOT_INTERESTED`);
+        
+        // Invalidate queries
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+        queryClient.invalidateQueries({ queryKey: ["applications"] });
+        queryClient.invalidateQueries({ queryKey: ["calendar"] });
+      } catch (err) {
+        console.error("Failed to archive application", err);
+        alert("Failed to archive application.");
+        // Refetch to restore state
+        queryClient.invalidateQueries({ queryKey: ["applications"] });
+      }
+    }
+  };
 
   useEffect(() => {
     setLoading(companiesLoading || applicationsLoading);
@@ -253,37 +290,37 @@ export default function TrackingPage() {
           <div className="space-y-6">
             <TrackingSection title="Registration" count={categorized.REGISTRATION.length} colorClass="bg-yellow-500">
               {categorized.REGISTRATION.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REGISTRATION" onClick={() => { setSelectedCompanyId(c.id); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REGISTRATION" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
             
             <TrackingSection title="Shortlisted" count={categorized.SHORTLISTED.length} colorClass="bg-blue-500">
               {categorized.SHORTLISTED.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="SHORTLISTED" onClick={() => { setSelectedCompanyId(c.id); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="SHORTLISTED" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
 
             <TrackingSection title="Online Assessment" count={categorized.ONLINE_ASSESSMENT.length} colorClass="bg-orange-500">
               {categorized.ONLINE_ASSESSMENT.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="ONLINE_ASSESSMENT" onClick={() => { setSelectedCompanyId(c.id); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="ONLINE_ASSESSMENT" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
 
             <TrackingSection title="Interview" count={categorized.INTERVIEW.length} colorClass="bg-purple-500">
               {categorized.INTERVIEW.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="INTERVIEW" onClick={() => { setSelectedCompanyId(c.id); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="INTERVIEW" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
 
             <TrackingSection title="Offer Received" count={categorized.OFFER.length} colorClass="bg-emerald-500">
               {categorized.OFFER.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="OFFER" onClick={() => { setSelectedCompanyId(c.id); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="OFFER" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
             
             <TrackingSection title="Rejected" count={categorized.REJECTED.length} colorClass="bg-red-500">
               {categorized.REJECTED.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REJECTED" onClick={() => { setSelectedCompanyId(c.id); }} />
+                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="REJECTED" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
               ))}
             </TrackingSection>
           </div>
