@@ -195,6 +195,24 @@ def clean_json_string(s: str) -> str:
         return s[start:end + 1]
     return s
 
+def repair_and_parse_json(raw_str: str) -> Dict[str, Any]:
+    """
+    Attempts to parse JSON defensively. If standard json.loads fails,
+    uses the json_repair library to resolve trailing commas, unclosed quotes,
+    or truncated brackets.
+    """
+    cleaned = clean_json_string(raw_str)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        try:
+            import json_repair
+            repaired = json_repair.repair_json(cleaned)
+            return json.loads(repaired)
+        except Exception as e:
+            logger.warning(f"JSON repair failed: {e}")
+            raise
+
 
 def get_parser_prompt(context_text: str) -> str:
     """You are a structured data extractor and classifier for university placement emails.
@@ -202,15 +220,11 @@ Analyze the following email (subject, body, and any attachment text) and extract
 Output ONLY a valid raw JSON object — no markdown, no explanation, no code fences.
 
 CRITICAL — Company Name Rules (READ FIRST):
-- NEVER use placement category headings as the company name. Examples of BANNED values:
-  "Super Dream Placement", "Dream Internship", "Super Dream Internship / Placement - 2027 Batch",
-  "Congratulations", "Congratulations !!", "Next Round of Selection Process",
-  "Registration Open", "CDC Drive", "Campus Recruitment", "Unknown Company".
-- The company name must be the ACTUAL ORGANISATION NAME, e.g. "Groww", "Google", "JPMorgan Chase", "Ericsson".
-- ONLY use the value that follows a label like: "Name of the Company:", "Company:", "Organisation:",
-  or a known company branding found in the email signature/domain.
-- If you cannot identify the actual company name with >0.80 confidence, set company.value = null and company.confidence = 0.0.
-  DO NOT guess. DO NOT return a generic or category heading as the company name.
+- The company name must be the ACTUAL, CANONICAL BRAND NAME (e.g. "Groww", "Google", "JPMorgan Chase", "Ericsson", "Schneider Electric").
+- NEVER use placement categories, drive types, or subject headings as the company name. 
+  BANNED values include: "Super Dream Placement", "Dream Internship", "Super Dream Internship / Placement", "Dream", "Super Dream", "Regular", "Congratulations", "Next Round of Selection", "Registration Open", "CDC Drive", "Campus Recruitment", "Unknown Company".
+- Locate the company name from labels like "Name of the Company:", "Company Name:", "Organisation:", or the email's signature/branding.
+- If the company name is missing, set company.value = null and company.confidence = 0.0. DO NOT guess.
 
 Required JSON Output Format:
 {{
@@ -433,18 +447,15 @@ def parse_with_ollama(context_text: str) -> Dict[str, Any]:
         if response.status_code == 200:
             result = response.json()
             response_text = result.get("response", "{}").strip()
-            clean_str = clean_json_string(response_text)
-            parsed = json.loads(clean_str)
+            parsed = repair_and_parse_json(response_text)
             if "parser_metadata" in parsed:
                 parsed["parser_metadata"]["model_used"] = f"ollama-{ollama_model}"
             logger.info(f"Ollama ({ollama_model}) parse succeeded.")
             return parsed
         else:
             logger.warning(f"Ollama returned HTTP {response.status_code}: {response.text[:200]}")
-    except json.JSONDecodeError as e:
-        logger.warning(f"Ollama response JSON decode failed: {str(e)}")
     except Exception as e:
-        logger.warning(f"Ollama ({ollama_model}) parsing failed: {str(e)}")
+        logger.warning(f"Ollama ({ollama_model}) parsing/repair failed: {str(e)}")
     return {}
 
 
@@ -491,7 +502,6 @@ def parse_with_huggingface(context_text: str) -> Dict[str, Any]:
         )
         if response.status_code == 200:
             res_json = response.json()
-            # OpenAI-compatible response format
             generated_text = (
                 res_json.get("choices", [{}])[0]
                 .get("message", {})
@@ -502,18 +512,15 @@ def parse_with_huggingface(context_text: str) -> Dict[str, Any]:
                 logger.warning("HuggingFace returned empty content.")
                 return {}
 
-            clean_str = clean_json_string(generated_text)
-            parsed = json.loads(clean_str)
+            parsed = repair_and_parse_json(generated_text)
             if "parser_metadata" in parsed:
                 parsed["parser_metadata"]["model_used"] = f"huggingface-{model_id}"
             logger.info(f"HuggingFace ({model_id}) parse succeeded.")
             return parsed
         else:
             logger.warning(f"HuggingFace API returned error ({response.status_code}): {response.text[:300]}")
-    except json.JSONDecodeError as e:
-        logger.warning(f"HuggingFace response JSON decode failed: {str(e)}")
     except Exception as e:
-        logger.warning(f"HuggingFace escalation parsing failed: {str(e)}")
+        logger.warning(f"HuggingFace escalation parsing/repair failed: {str(e)}")
     return {}
 
 
