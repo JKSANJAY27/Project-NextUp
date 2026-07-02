@@ -70,10 +70,10 @@ export default function TrackingPage() {
               user_decision: "archived",
               status: "Archived"
             });
+          } else {
+            // If for some reason there is no application workspace, call opportunity state
+            await api.post(`/applications/opportunity-state?company_id=${companyId}&action=archive&reason=MANUAL_NOT_INTERESTED`);
           }
-          
-          // Also call the opportunity state archive endpoint to sync state
-          await api.post(`/applications/opportunity-state?company_id=${companyId}&action=archive&reason=MANUAL_NOT_INTERESTED`);
           
           // Invalidate queries
           queryClient.invalidateQueries({ queryKey: ["dashboard"] });

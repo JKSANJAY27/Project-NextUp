@@ -362,11 +362,6 @@ export default function CompanyWorkspaceModal({
                                   user_decision: "archived",
                                   status: "Archived"
                                 });
-                                try {
-                                  await api.post(`/applications/opportunity-state?company_id=${selectedCompany.id}&action=archive&reason=MANUAL_NOT_INTERESTED`);
-                                } catch (e) {
-                                  console.error(e);
-                                }
                                 setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
                                 onClose();
                               }
