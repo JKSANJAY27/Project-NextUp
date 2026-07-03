@@ -4,7 +4,7 @@ from uuid import UUID
 from datetime import datetime, timedelta
 import urllib.parse
 import requests
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -18,13 +18,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
 @router.get("/google/auth-url")
-def get_google_auth_url(current_user: User = Depends(get_current_user)):
+def get_google_auth_url(request: Request, current_user: User = Depends(get_current_user)):
     """
     Generates the Google OAuth consent screen URL for linking Google Calendar.
     """
     client_id = settings.GOOGLE_CLIENT_ID
-    # Needs to match the authorized redirect URIs in Google Console
-    redirect_uri = "http://localhost:8000/api/calendar/google/callback"
+    
+    # Construct redirect_uri dynamically based on the current request host
+    base_url = str(request.base_url).rstrip('/')
+    redirect_uri = f"{base_url}{settings.API_V1_STR}/calendar/google/callback"
     scopes = "https://www.googleapis.com/auth/calendar.events"
     
     params = {
@@ -41,17 +43,22 @@ def get_google_auth_url(current_user: User = Depends(get_current_user)):
     return {"url": url}
 
 @router.get("/google/callback")
-def google_callback(code: str, state: str, db: Session = Depends(get_db)):
+def google_callback(request: Request, code: str, state: str, db: Session = Depends(get_db)):
     """
     Google OAuth Callback endpoint. Exchanges authorization code for tokens,
     saves credentials in the database, triggers initial sync, and redirects back to frontend.
     """
     token_url = "https://oauth2.googleapis.com/token"
+    
+    # Construct redirect_uri dynamically to match the authorize request
+    base_url = str(request.base_url).rstrip('/')
+    redirect_uri = f"{base_url}{settings.API_V1_STR}/calendar/google/callback"
+    
     payload = {
         "code": code,
         "client_id": settings.GOOGLE_CLIENT_ID,
         "client_secret": settings.GOOGLE_CLIENT_SECRET,
-        "redirect_uri": "http://localhost:8000/api/calendar/google/callback",
+        "redirect_uri": redirect_uri,
         "grant_type": "authorization_code"
     }
     
