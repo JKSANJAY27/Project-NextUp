@@ -374,6 +374,31 @@ ALTER TABLE company_change_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE attachments_metadata ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingestion_audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notification_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE announcements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE company_registry ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingestion_execution_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE opportunity_states ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pending_company_events ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Authenticated users can read announcements" 
+    ON announcements FOR SELECT 
+    USING (auth.role() = 'authenticated');
+
+CREATE POLICY "Admin/Coordinators can manage announcements" 
+    ON announcements FOR ALL 
+    USING (auth.jwt() ->> 'role' IN ('admin', 'coordinator'));
+
+CREATE POLICY "Authenticated users can read company registry" 
+    ON company_registry FOR SELECT 
+    USING (auth.role() = 'authenticated');
+
+CREATE POLICY "Admin/Coordinators can manage company registry" 
+    ON company_registry FOR ALL 
+    USING (auth.jwt() ->> 'role' IN ('admin', 'coordinator'));
+
+CREATE POLICY "Users can manage their own opportunity states" 
+    ON opportunity_states FOR ALL 
+    USING (auth.uid() = user_id);
 
 -- 19. Calendar Events Table
 CREATE TABLE IF NOT EXISTS calendar_events (
@@ -394,6 +419,7 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     is_user_modified BOOLEAN DEFAULT FALSE,
     source VARCHAR(50) NOT NULL CHECK (source IN ('application_timeline', 'manual')),
     source_key VARCHAR(255) UNIQUE,
+    google_event_id VARCHAR(255) DEFAULT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -404,10 +430,27 @@ CREATE POLICY "Users can manage their own calendar events"
     ON calendar_events FOR ALL 
     USING (auth.uid() = user_id);
 
+-- 20. User Google Credentials Table
+CREATE TABLE IF NOT EXISTS user_google_credentials (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT,
+    token_uri TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    client_secret TEXT NOT NULL,
+    scopes TEXT[],
+    expiry TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE user_google_credentials ENABLE ROW LEVEL SECURITY;
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_calendar_user_date ON calendar_events(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_calendar_source_key ON calendar_events(source_key);
 CREATE INDEX IF NOT EXISTS idx_calendar_company ON calendar_events(user_id, company_id);
+
 
 
 

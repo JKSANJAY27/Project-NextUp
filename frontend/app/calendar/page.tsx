@@ -62,6 +62,79 @@ export default function CalendarPage() {
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Google Calendar integration states
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [syncingGoogle, setSyncingGoogle] = useState(false);
+  const [googleMsg, setGoogleMsg] = useState('');
+
+  // Check Google Calendar connection status
+  useEffect(() => {
+    const checkGoogleStatus = async () => {
+      try {
+        const res = await api.get("/calendar/google/status");
+        setGoogleConnected(res.data.connected);
+      } catch (err) {
+        console.error("Failed to fetch Google status:", err);
+      }
+    };
+    checkGoogleStatus();
+  }, []);
+
+  // Display feedback if redirect callback returned query params
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get("connected") === "true") {
+        setGoogleConnected(true);
+        setGoogleMsg("SUCCESSFULLY CONNECTED TO GOOGLE CALENDAR!");
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } else if (urlParams.get("error") === "oauth_failed") {
+        setGoogleMsg("GOOGLE OAUTH FAILED. PLEASE TRY AGAIN.");
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+  }, []);
+
+  const handleLinkGoogle = async () => {
+    try {
+      const res = await api.get("/calendar/google/auth-url");
+      if (res.data.url) {
+        window.location.href = res.data.url;
+      }
+    } catch (err) {
+      console.error("Failed to get Google auth URL:", err);
+      setGoogleMsg("FAILED TO INITIALIZE GOOGLE AUTH");
+    }
+  };
+
+  const handleSyncGoogle = async () => {
+    setSyncingGoogle(true);
+    setGoogleMsg("");
+    try {
+      const res = await api.post("/calendar/google/sync");
+      setGoogleMsg(`SUCCESSFULLY SYNCED ${res.data.synced_count} EVENTS!`);
+    } catch (err) {
+      console.error("Failed to sync Google calendar:", err);
+      setGoogleMsg("FAILED TO SYNC EVENTS");
+    } finally {
+      setSyncingGoogle(false);
+    }
+  };
+
+  const handleDisconnectGoogle = async () => {
+    if (!confirm("UNLINK GOOGLE CALENDAR? THIS WILL STOP EVENT SYNCING.")) {
+      return;
+    }
+    try {
+      await api.post("/calendar/google/disconnect");
+      setGoogleConnected(false);
+      setGoogleMsg("DISCONNECTED GOOGLE CALENDAR");
+    } catch (err) {
+      console.error("Failed to disconnect Google:", err);
+      setGoogleMsg("FAILED TO DISCONNECT");
+    }
+  };
+
   // Filters
   const [filterType, setFilterType] = useState<'ALL' | 'FOCUS' | 'COMPANY'>('ALL');
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
@@ -372,6 +445,52 @@ export default function CalendarPage() {
           </button>
         </div>
       </div>
+
+      {/* Google Calendar Link Card */}
+      <div className="mt-6 border-2 border-border p-5 bg-card flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-xs font-black uppercase text-accent">
+            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${googleConnected ? "bg-green-500" : "bg-zinc-500 animate-pulse"}`} />
+            <span>Google Calendar Sync Integration</span>
+          </div>
+          <p className="text-xs font-bold text-muted-foreground uppercase">
+            {googleConnected 
+              ? "Your placement events will automatically synchronize to your Google Calendar." 
+              : "Link your Google Calendar to synchronize registration deadlines, assessments, and interviews."
+            }
+          </p>
+          {googleMsg && (
+            <p className="text-xs font-black text-accent uppercase">{googleMsg}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {googleConnected ? (
+            <>
+              <button
+                onClick={handleSyncGoogle}
+                disabled={syncingGoogle}
+                className="h-10 px-5 border-2 border-accent bg-accent text-black hover:bg-transparent hover:text-accent font-extrabold text-xs tracking-wider transition-all active:scale-95 uppercase disabled:opacity-50"
+              >
+                {syncingGoogle ? "SYNCING..." : "SYNC NOW"}
+              </button>
+              <button
+                onClick={handleDisconnectGoogle}
+                className="h-10 px-5 border-2 border-red-600 bg-red-600/10 text-red-500 hover:bg-red-600 hover:text-black hover:border-red-600 font-extrabold text-xs tracking-wider transition-all active:scale-95 uppercase"
+              >
+                UNLINK
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleLinkGoogle}
+              className="h-10 px-5 border-2 border-accent bg-accent text-black hover:bg-transparent hover:text-accent font-extrabold text-xs tracking-wider transition-all active:scale-95 uppercase"
+            >
+              LINK GOOGLE CALENDAR
+            </button>
+          )}
+        </div>
+      </div>
+
 
       {/* Filter and Top Controls Bar */}
       <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4 mt-8 pb-4 border-b border-border/50">

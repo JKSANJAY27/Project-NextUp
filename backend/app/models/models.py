@@ -469,6 +469,7 @@ class CalendarEvent(Base):
     is_user_modified = Column(Boolean, default=False)
     source = Column(String, default="manual")  # 'application_timeline', 'manual'
     source_key = Column(String, unique=True, nullable=True)
+    google_event_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -489,4 +490,22 @@ class IngestionExecutionLog(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
 
     job = relationship("RawIngestionJob")
+
+
+class UserGoogleCredentials(Base):
+    __tablename__ = "user_google_credentials"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    access_token = Column(String, nullable=False)
+    refresh_token = Column(String, nullable=True)
+    token_uri = Column(String, nullable=False)
+    client_id = Column(String, nullable=False)
+    client_secret = Column(String, nullable=False)
+    scopes = Column(ARRAY(String), nullable=True)
+    expiry = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+
 
