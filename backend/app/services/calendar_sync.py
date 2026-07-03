@@ -7,11 +7,22 @@ from app.models.models import Application, Company, CompanyEvent, CalendarEvent,
 
 logger = logging.getLogger(__name__)
 
-def map_event_type(company_event_type: str) -> str:
+def map_event_type(company_event_type: str, stage: Optional[str] = None) -> str:
     """
-    Maps company_event_type from raw emails/notifications to clean calendar event types:
+    Maps company_event_type and stage from raw emails/notifications/milestones to clean calendar event types:
     'registration_deadline', 'online_assessment', 'interview', 'offer_result', 'manual'
     """
+    if stage:
+        stage_upper = stage.upper()
+        if stage_upper == 'REGISTRATION':
+            return 'registration_deadline'
+        elif stage_upper == 'ONLINE_ASSESSMENT':
+            return 'online_assessment'
+        elif stage_upper in ('TECHNICAL_INTERVIEW', 'HR_INTERVIEW', 'PRE_PLACEMENT_TALK'):
+            return 'interview'
+        elif stage_upper == 'OFFER':
+            return 'offer_result'
+
     cet_upper = company_event_type.upper()
     if cet_upper in ('REGISTRATION', 'DEADLINE', 'DEADLINE_EXTENSION'):
         return 'registration_deadline'
@@ -129,22 +140,30 @@ def sync_user_calendar_events(db: Session, user_id: UUID, company_id: Optional[U
 
             # B. Company Milestones / Events (only if tracked)
             if company.id in tracking_company_ids:
-                company_events = db.query(CompanyEvent).filter(CompanyEvent.company_id == company.id).all()
+                # Query only milestones (where stage is set) and avoid duplicate registration milestone
+                company_events = db.query(CompanyEvent).filter(
+                    CompanyEvent.company_id == company.id,
+                    CompanyEvent.stage.isnot(None),
+                    CompanyEvent.stage != 'REGISTRATION'
+                ).all()
                 for ce in company_events:
                     source_key = f"{user_id}:{ce.id}:event"
                     cal_event = db.query(CalendarEvent).filter(CalendarEvent.source_key == source_key).first()
-                    mapped_type = map_event_type(ce.event_type)
+                    mapped_type = map_event_type(ce.event_type, ce.stage)
+
+                    # Determine descriptive title using stage if available
+                    title_str = f"{company.name} - {ce.stage.replace('_', ' ').title()}" if ce.stage else f"{company.name} - {ce.event_type.upper()}"
 
                     if not cal_event:
                         cal_event = CalendarEvent(
                             user_id=user_id,
                             company_id=company.id,
                             company_event_id=ce.id,
-                            title=f"{company.name} - {ce.event_type.upper()}",
+                            title=title_str,
                             company_name=company.name,
                             role=company.role,
                             event_type=mapped_type,
-                            date=ce.timestamp or datetime.utcnow(),
+                            date=ce.date or ce.timestamp or datetime.utcnow(),
                             notes=ce.body or ce.subject,
                             completed=False,
                             is_manual=False,
@@ -156,10 +175,10 @@ def sync_user_calendar_events(db: Session, user_id: UUID, company_id: Optional[U
                         db.add(cal_event)
                     else:
                         if not cal_event.is_deleted and not cal_event.is_user_modified:
-                            cal_event.title = f"{company.name} - {ce.event_type.upper()}"
+                            cal_event.title = title_str
                             cal_event.company_name = company.name
                             cal_event.role = company.role
-                            cal_event.date = ce.timestamp or datetime.utcnow()
+                            cal_event.date = ce.date or ce.timestamp or datetime.utcnow()
                             cal_event.notes = ce.body or ce.subject
 
         db.commit()

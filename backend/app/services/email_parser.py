@@ -1191,7 +1191,7 @@ _STAGE_KEYWORDS: List[tuple] = [
     (r"\b(?:technical\s+interview|tech\s+interview|coding\s+interview|technical\s+round)\b", "TECHNICAL_INTERVIEW", 4),
     (r"\b(?:hr\s+interview|hr\s+round|managerial\s+interview|managerial\s+round|final\s+interview)\b", "HR_INTERVIEW", 5),
     (r"\b(?:interview)\b", "TECHNICAL_INTERVIEW", 4),
-    (r"\b(?:offer|selection|placed|final\s+result)\b", "OFFER", 6),
+    (r"\b(?:offer|placed|final\s+result|selected|selection\s+(?:list|status|results?|letters?))\b", "OFFER", 6),
 ]
 
 # Date fragments to search near stage keywords
@@ -1204,8 +1204,8 @@ _DATE_PATTERN = (
     r"|\d{4}[-/]\d{2}[-/]\d{2}"
     r"|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"
     r")"
-    # Optional time: "6 pm", "18:00", "(9.00 am)"
-    r"(?:\s*[\(]?\s*\d{1,2}[:.\s]\d{2}\s*(?:am|pm)?[\)]?|\s*\d{1,2}\s*(?:am|pm))?"
+    # Optional time: allows separators like -, @, at, etc., and parses times with or without minutes/parentheses
+    r"(?:\s*(?:-|@|at|from|,)?\s*[\(]?\s*\d{1,2}[:.\s]\d{2}\s*(?:am|pm)?[\)]?|\s*(?:-|@|at|from|,)?\s*\d{1,2}\s*(?:am|pm))?"
 )
 
 
@@ -1240,8 +1240,10 @@ def extract_timeline_events(email_body: str, subject: str = "", email_timestamp=
             if hasattr(email_timestamp, 'tzinfo') else email_timestamp
         )
 
-    # Filter out empty lines to ensure the 3-line window captures dates separated by whitespace/newlines
-    lines = [line.strip() for line in email_body.split("\n") if line.strip()]
+    # Filter out empty lines to ensure the 3-line window captures dates separated by whitespace/newlines,
+    # and strip markdown markers like * or _ to prevent matching interference
+    lines = [re.sub(r'[*_#]', '', line).strip() for line in email_body.split("\n")]
+    lines = [line for line in lines if line]
 
     for stage_pattern, canonical_stage, sequence in _STAGE_KEYWORDS:
         for i, line in enumerate(lines):

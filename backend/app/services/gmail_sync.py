@@ -1149,17 +1149,31 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 ).first()
 
                 if existing_milestone:
-                    # Update date and stage info if we have better data now
+                    # Update date and stage info if we have better/changed data now
                     changed = False
-                    if ev_date and not existing_milestone.date:
+                    if ev_date and existing_milestone.date != ev_date:
                         existing_milestone.date = ev_date
                         changed = True
-                    if ev_sequence and not existing_milestone.sequence:
+                    if ev_sequence and existing_milestone.sequence != ev_sequence:
                         existing_milestone.sequence = ev_sequence
                         changed = True
-                    if ev_venue and not existing_milestone.parsed_metadata:
-                        existing_milestone.parsed_metadata = {"venue": ev_venue, "label": ev_label, "mandatory": ev_mandatory}
+                    
+                    parsed_meta = dict(existing_milestone.parsed_metadata or {})
+                    meta_changed = False
+                    if ev_venue and parsed_meta.get("venue") != ev_venue:
+                        parsed_meta["venue"] = ev_venue
+                        meta_changed = True
+                    if ev_label and parsed_meta.get("label") != ev_label:
+                        parsed_meta["label"] = ev_label
+                        meta_changed = True
+                    if ev_mandatory != parsed_meta.get("mandatory"):
+                        parsed_meta["mandatory"] = ev_mandatory
+                        meta_changed = True
+                    
+                    if meta_changed:
+                        existing_milestone.parsed_metadata = parsed_meta
                         changed = True
+                        
                     if changed:
                         db.flush()
                 else:
