@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError as SAOperationalError
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.api import auth, users, companies, applications, gmail, notifications, resumes, ai, calendar, announcements, dashboard
@@ -15,6 +17,16 @@ app = FastAPI(
 )
 
 import logging
+
+@app.exception_handler(SAOperationalError)
+async def db_operational_error_handler(request: Request, exc: SAOperationalError):
+    """Return 503 on stale DB SSL connections so the frontend can retry."""
+    logging.error(f"Database OperationalError on {request.method} {request.url.path}: {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Database temporarily unavailable. Please retry."},
+    )
+
 # Middleware to log headers
 @app.middleware("http")
 async def log_requests(request: Request, call_next):

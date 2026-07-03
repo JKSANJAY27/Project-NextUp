@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError as SAOperationalError
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.models import User
@@ -88,22 +89,29 @@ def get_current_user(request: Request, token: str = Depends(oauth2_scheme), db: 
             JWKS_CACHE = None # Force refresh next time
         raise credentials_exception
     
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        # Auto-create user from Supabase JWT if not in our DB
-        email = payload.get("email")
-        if not email:
-            raise credentials_exception
-            
-        user = User(id=user_id, email=email, role="student")
-        db.add(user)
-        try:
-            db.commit()
-            db.refresh(user)
-        except Exception as e:
-            db.rollback()
-            logging.error(f"Failed to auto-create user: {str(e)}")
-            raise credentials_exception
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            # Auto-create user from Supabase JWT if not in our DB
+            email = payload.get("email")
+            if not email:
+                raise credentials_exception
+                
+            user = User(id=user_id, email=email, role="student")
+            db.add(user)
+            try:
+                db.commit()
+                db.refresh(user)
+            except Exception as e:
+                db.rollback()
+                logging.error(f"Failed to auto-create user: {str(e)}")
+                raise credentials_exception
+    except SAOperationalError as e:
+        logging.error(f"DB connection error in get_current_user: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please retry.",
+        )
     
     # Store X-Client-Key in-memory active cache if present in headers
     client_key = request.headers.get("X-Client-Key")

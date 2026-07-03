@@ -13,9 +13,16 @@ engine_kwargs = {
 }
 if not settings.DATABASE_URL.startswith("sqlite"):
     engine_kwargs.update({
-        "pool_size": 20,
-        "max_overflow": 40,
-        "pool_recycle": 1800,
+        # Render free/starter has ~512MB RAM. Keep pool small:
+        # pool_size=5 + max_overflow=10 = 15 max connections.
+        # Each PostgreSQL client connection uses ~5–10 MB RAM.
+        "pool_size": 5,
+        "max_overflow": 10,
+        # Recycle connections every 5 minutes to prevent stale SSL errors
+        # after Render sleeps/restarts the DB proxy.
+        "pool_recycle": 300,
+        # Give up after 10 seconds waiting for a connection (fail fast)
+        "pool_timeout": 10,
     })
 
 engine = create_engine(
