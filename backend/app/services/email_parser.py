@@ -204,7 +204,45 @@ SPECIALIZATION_ONTOLOGY = {
     "ai & ds": "CSE_AI_ML",
     "ai/ds": "CSE_AI_ML",
     
-    "other": "OTHER"
+    "other": "OTHER",
+
+    # Non-CS Specializations
+    "electronics and computer engineering": "ELECTRONICS_COMPUTER",
+    "electronics & computer engineering": "ELECTRONICS_COMPUTER",
+    "electronics and computer": "ELECTRONICS_COMPUTER",
+    "electronics & computer": "ELECTRONICS_COMPUTER",
+    "ece": "ECE",
+    "electronics and communication": "ECE",
+    "electronics & communication": "ECE",
+    "electronics and communication engineering": "ECE",
+    "electronics & communication engineering": "ECE",
+    "eee": "EEE",
+    "electrical and electronics": "EEE",
+    "electrical & electronics": "EEE",
+    "electrical and electronics engineering": "EEE",
+    "electrical & electronics engineering": "EEE",
+    "electrical": "ELECTRICAL",
+    "electrical engineering": "ELECTRICAL",
+    "mechanical": "MECH",
+    "mechanical engineering": "MECH",
+    "mech": "MECH",
+    "civil": "CIVIL",
+    "civil engineering": "CIVIL",
+    "chemical": "CHEM",
+    "chemical engineering": "CHEM",
+    "chem": "CHEM",
+    "biotechnology": "BIOTECH",
+    "biotech": "BIOTECH",
+    "mechatronics": "MECHATRONICS",
+    "mechatronics and automation": "MECHATRONICS",
+    "robotics": "ROBOTICS",
+    "automation": "AUTOMATION",
+    "manufacturing": "MANUFACTURING",
+    "manufacturing engineering": "MANUFACTURING",
+    "aerospace": "AEROSPACE",
+    "aerospace engineering": "AEROSPACE",
+    "automobile": "AUTOMOBILE",
+    "automobile engineering": "AUTOMOBILE"
 }
 
 def normalize_degree(raw_str: str) -> Optional[str]:
@@ -227,6 +265,10 @@ def normalize_specialization(raw_str: str) -> Optional[str]:
     for k, v in SPECIALIZATION_ONTOLOGY.items():
         if k in val:
             return v
+    # Fallback for other non-CS branches: return uppercase clean string if it has non-CS keywords
+    non_cs_terms = ["ece", "eee", "mech", "civil", "chem", "biotech", "mechatronics", "robotics", "automation", "manufacturing", "aerospace", "automobile", "electronics", "electrical", "telecom"]
+    if any(term in val for term in non_cs_terms):
+        return raw_str.strip().upper()
     return None
 
 def clean_json_string(s: str) -> str:
@@ -694,20 +736,12 @@ def clean_val(val: str) -> Optional[str]:
 
 def get_branches_from_text(text: str, strict: bool = False) -> List[str]:
     """
-    Extract CSE-family eligible branches from a text block.
-    
-    This system is CSE-only. We never return ECE, EEE, MECH, CIVIL etc.
-    
-    If strict=True (used when no dedicated "Eligible Branches" block was found),
-    only match unambiguous full-form names (e.g. "computer science", "information technology")
-    to avoid false positives from body text like "AI model" or "it is required".
-    
-    If strict=False (used on the isolated branches block), broader abbreviations are accepted.
+    Extract eligible branches (both CS and non-CS) from a text block.
     """
     branches = set()
     text_lower = text.lower()
     
-    # --- Always-on matches (safe even in full body) ---
+    # 1. CS / IT / Allied Branches
     if re.search(r'\b(computer\s*science(?:\s*(?:and|&)\s*engineering)?|cse)\b', text_lower):
         branches.add("CSE")
     if re.search(r'\binformation\s+technology\b', text_lower):
@@ -716,6 +750,38 @@ def get_branches_from_text(text: str, strict: bool = False) -> List[str]:
         branches.add("MCA")
     if re.search(r'\bintegrated\s+m\.?\s*tech\b', text_lower):
         branches.add("MTECH_INT")
+        
+    # 2. Non-CS Branches (extracted on isolated block, or with strict keyword matching in full body)
+    if re.search(r'\b(electronics\s*(?:and|&)\s*computer|electronics\s*&\s*computer)\b', text_lower):
+        branches.add("Electronics & Computer Engineering")
+    if re.search(r'\b(electronics\s*(?:and|&)\s*communication|electronics\s*&\s*communication|ece)\b', text_lower):
+        branches.add("ECE")
+        
+    if re.search(r'\b(electrical\s*(?:and|&)\s*electronics|electrical\s*&\s*electronics|eee)\b', text_lower):
+        branches.add("EEE")
+    if re.search(r'\belectrical\b', text_lower) and not re.search(r'\b(electrical\s*(?:and|&)\s*electronics|electrical\s*&\s*electronics|eee)\b', text_lower):
+        branches.add("Electrical Engineering")
+        
+    if re.search(r'\b(mechanical|mech)\b', text_lower):
+        branches.add("Mechanical Engineering")
+    if re.search(r'\b(civil)\b', text_lower):
+        branches.add("Civil Engineering")
+    if re.search(r'\b(chemical|chem)\b', text_lower):
+        branches.add("Chemical Engineering")
+    if re.search(r'\b(biotechnology|biotech)\b', text_lower):
+        branches.add("Biotechnology")
+    if re.search(r'\b(mechatronics)\b', text_lower):
+        branches.add("Mechatronics")
+    if re.search(r'\b(robotics)\b', text_lower):
+        branches.add("Robotics")
+    if re.search(r'\b(automation)\b', text_lower):
+        branches.add("Automation")
+    if re.search(r'\b(manufacturing)\b', text_lower):
+        branches.add("Manufacturing Engineering")
+    if re.search(r'\b(aerospace|aeronautical)\b', text_lower):
+        branches.add("Aerospace Engineering")
+    if re.search(r'\b(automobile)\b', text_lower):
+        branches.add("Automobile Engineering")
     
     if not strict:
         # Abbreviation matches — only safe when scanning an isolated branches block
@@ -852,7 +918,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     #    1c. Subject line extraction (last resort, very cleaned)
     #    1d. Unknown Company (never guess)
     comp_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Name of the Company|Company Name|Name of the Organisation|Organisation|\bCompany\b(?!\s*(?:website|profile|url|link|domain|page|site|info|description|overview|logo|details)))\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Name of the Company|Company Name|Name of the Organisation|Organisation|\bCompany\b(?!\s*(?:website|profile|url|link|domain|page|site|info|description|overview|logo|details)))\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*\*?([^\n\r*]+)",
         email_body,
         re.IGNORECASE
     )
@@ -914,7 +980,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 
     # 3. Role
     role_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Designation|Role|Job Title|Profile|Position|Job Title/Role)\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Designation|Role|Job Title|Profile|Position|Job Title/Role)\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*\*?([^\n\r*]+)",
         email_body,
         re.IGNORECASE
     )
@@ -925,7 +991,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 
     # 4. CTC
     ctc_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:CTC|Salary|Package|Annual\s*CTC)\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:CTC|Salary|Package|Annual\s*CTC)\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*\*?([^\n\r*]+)",
         email_body,
         re.IGNORECASE
     )
@@ -940,7 +1006,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 
     # 5. Stipend
     stipend_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Stipend|Internship\s*Stipend|Monthly\s*Stipend)\s*[:\-\–\—\s]\s*[\n\r]*\s*\*?([^\n\r*]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Stipend|Internship\s*Stipend|Monthly\s*Stipend)\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*\*?([^\n\r*]+)",
         email_body,
         re.IGNORECASE
     )
@@ -965,7 +1031,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 
     # 6. Registration Deadline
     deadline_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Last\s*date\s*for\s*Registration|Last\s*Date\s*to\s*Apply|Registration\s*Deadline|Last\s*Date|Deadline|Last\s*date)\s*[:\-\–\—\s]\s*[\n\r]*\s*([^\n\r]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Last\s*date\s*for\s*Registration|Last\s*Date\s*to\s*Apply|Registration\s*Deadline|Last\s*Date|Deadline|Last\s*date)\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*([^\n\r]+)",
         email_body,
         re.IGNORECASE
     )
@@ -977,7 +1043,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     else:
         # Try inline "register on or before [date]"
         on_or_before = re.search(
-            r"(?:register|apply|submission|submit)\s*(?:[^\n\r]{0,50}?)(?:on\s*or\s*before|before|by|on)\s*\*?([^\n\r]{5,40})",
+            r"(?:register|apply|submission|submit)\s*(?:[^\n\r{0,50}?)(?:on\s*or\s*before|before|by|on)\s*\*?([^\n\r]{5,40})",
             email_body,
             re.I
         )
@@ -991,7 +1057,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     # Try to isolate the "Eligible Branches" section before scanning for branches.
     # Stop at section headers: Eligibility Criteria, CTC, Stipend, Last date, Website, Designation, etc.
     branches_block_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Eligible\s*Branches|Eligibility\s*Branches|Eligible\s*Departments?|Eligible\s*Programs?)\s*[:\-\–\—\s]\s*[\n\r]*(.*?)(?=\n\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Eligibility\s*Criteria|Eligibility|Criteria|CTC|Salary|Stipend|Last\s+date|Last\s+Date|Website|Job\s+location|Designation|Date\s+of\s+Visit)|$)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Eligible\s*Branches|Eligibility\s*Branches|Eligible\s*Departments?|Eligible\s*Programs?)\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*[\n\r]*(.*?)(?=\n\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Eligibility\s*Criteria|Eligibility|Criteria|CTC|Salary|Stipend|Last\s+date|Last\s+Date|Website|Job\s+location|Designation|Date\s+of\s+Visit)|$)",
         email_body,
         re.IGNORECASE | re.DOTALL
     )
@@ -1034,19 +1100,44 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     found_specializations = []
     spec_search = branches_text if branches_text else ""
     if spec_search:
+        # Join lines that are wrapped/broken (replace \n with space if the next line does not start with a bullet/star)
+        spec_clean = ""
+        lines = spec_search.split("\n")
+        for i, line in enumerate(lines):
+            line_strip = line.strip()
+            if not line_strip:
+                continue
+            if line_strip.startswith(('*', '-', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'Ø')):
+                spec_clean += "\n" + line_strip
+            else:
+                spec_clean += " " + line_strip
+                
         # Explicit specialization keywords in the branches block
-        if re.search(r'\b(computer\s*science(?:\s*(?:and|&)\s*engineering)?|cse)\b', spec_search, re.I):
-            found_specializations.append("CSE_CORE")
-        if re.search(r'\b(information?\s*sec(?:urity)?|cyber\s*sec(?:urity)?)\b', spec_search, re.I):
-            found_specializations.append("CSE_INFO_SEC")
-        if re.search(r'\b(iot|internet\s+of\s+things)\b', spec_search, re.I):
-            found_specializations.append("CSE_IOT")
-        if re.search(r'\b(data\s+science)\b', spec_search, re.I):
-            found_specializations.append("CSE_DATA_SCIENCE")
-        if re.search(r'\b(blockchain|block\s*chain)\b', spec_search, re.I):
-            found_specializations.append("CSE_BLOCKCHAIN")
-        if re.search(r'\b(artificial\s*intelligence|machine\s*learning|ai\s*(?:and|&|/)\s*ml|aiml)\b', spec_search, re.I):
-            found_specializations.append("CSE_AI_ML")
+        for line in spec_clean.split("\n"):
+            line_lower = line.lower()
+            if not line_lower.strip():
+                continue
+            # If the line contains non-CS keywords, skip extracting CS specializations from it
+            if any(w in line_lower for w in ["electronics", "ece", "electrical", "eee", "mechanical", "mech", "civil", "chemical", "chem", "biotech", "mechatronics", "robotics", "automation", "manufacturing", "aerospace", "automobile"]):
+                continue
+            if re.search(r'\b(computer\s*science(?:\s*(?:and|&)\s*engineering)?|cse)\b', line_lower, re.I):
+                found_specializations.append("CSE_CORE")
+            if re.search(r'\b(information?\s*sec(?:urity)?|cyber\s*sec(?:urity)?)\b', line_lower, re.I):
+                found_specializations.append("CSE_INFO_SEC")
+            if re.search(r'\b(iot|internet\s+of\s+things)\b', line_lower, re.I):
+                found_specializations.append("CSE_IOT")
+            if re.search(r'\b(data\s+science)\b', line_lower, re.I):
+                found_specializations.append("CSE_DATA_SCIENCE")
+            if re.search(r'\b(blockchain|block\s*chain)\b', line_lower, re.I):
+                found_specializations.append("CSE_BLOCKCHAIN")
+            if re.search(r'\b(artificial\s*intelligence|machine\s*learning|ai\s*(?:and|&|/)\s*ml|aiml)\b', line_lower, re.I):
+                found_specializations.append("CSE_AI_ML")
+
+    # Also, add all non-CS branch names/tokens that were found in get_branches_from_text to found_specializations
+    for br in data.get("eligible_branches", []):
+        if br not in ["CSE", "IT", "MCA", "MTECH_INT", "MTECH", "AIDS", "AIML", "SWE"]:
+            found_specializations.append(br)
+
     # If specializations not found in a block, default to CSE_CORE (safest assumption for CSE-only system)
     if not found_specializations:
         found_specializations.append("CSE_CORE")
@@ -1054,7 +1145,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 
     # 8. Eligibility Criteria block extraction
     elig_block_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Eligibility Criteria|Eligibility|Criteria)\s*[:\-\–\—\s]\s*[\n\r]*(.*?)(?:CTC|Stipend|Last date|Website|Job location|Designation|$)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Eligibility Criteria|Eligibility|Criteria)\s*[\*_]*\s*[:\-\–\—\s]\s*[\n\r]*(.*?)(?:CTC|Stipend|Last date|Website|Job location|Designation|$)",
         email_body,
         re.IGNORECASE | re.DOTALL
     )
@@ -1135,7 +1226,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 
     # 9. Job location
     location_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Job\s*Location|Location|Work\s*Location|Place\s*of\s*Posting)\s*[:\-\–\—\s]\s*[\n\r]*\s*(.+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Job\s*Location|Location|Work\s*Location|Place\s*of\s*Posting)\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*(.+)",
         email_body,
         re.IGNORECASE
     )
@@ -1166,12 +1257,13 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 
     # 11. Date of Visit
     visit_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Date of Visit|Visit Date|Date of recruitment|Recruitment Date)\s*[:\-\–\—\s]\s*[\n\r]*\s*(.+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Date of Visit|Visit Date|Date of recruitment|Recruitment Date)\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*(.+)",
         email_body,
         re.IGNORECASE
     )
     if visit_match:
-        data["date_of_visit"] = clean_val(visit_match.group(1))
+        val = clean_val(visit_match.group(1))
+        data["date_of_visit"] = val if val else "Will be announced later"
     else:
         data["date_of_visit"] = "Will be announced later"
 

@@ -115,6 +115,18 @@ def normalize_company_name(name: str, db: Session) -> str:
     company_name = name.strip()
     company_name = re.sub(r'^[*#_\s\-–—]+', '', company_name).strip()
     
+    # Strip common prefix patterns (e.g. "Update :", "Fwd :", "Re :")
+    prev_c = None
+    while company_name != prev_c:
+        prev_c = company_name
+        company_name = re.sub(
+            r'^(?:congratulations|congrats|kind\s+attn|kind\s+attention|summer\s+sem|updated|update|re|fwd|urgnt|urgent|notice|report\s+immediately|reminder|gentle\s+reminder|webinar)\b[:\s!]*',
+            '',
+            company_name,
+            flags=re.I
+        ).strip()
+        company_name = re.sub(r'^[:\s!]+', '', company_name)
+    
     # Fetch all unique company names in database
     existing_companies = db.query(Company.name).distinct().all()
     existing_names = [c[0] for c in existing_companies]
