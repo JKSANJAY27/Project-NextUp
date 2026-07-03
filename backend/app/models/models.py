@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, ForeignKey, JSON, UniqueConstraint, Index, LargeBinary
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, deferred
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from app.core.database import Base
 
@@ -230,7 +230,7 @@ class CompanyEvent(Base):
     event_type = Column(String, nullable=False, index=True)  # 'REGISTRATION', 'SHORTLIST', 'OA', 'INTERVIEW', 'OFFER'
     subject = Column(String)
     sender = Column(String)
-    body = Column(String)
+    body = deferred(Column(String))
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     parsed_metadata = Column(JSON, default=dict)
 
@@ -336,7 +336,7 @@ class AttachmentMetadata(Base):
     file_name = Column(String, nullable=False)
     file_type = Column(String, nullable=False)  # 'JD_PDF', 'SHORTLIST_EXCEL', 'ANNOUNCEMENT_ATTACHMENT'
     storage_path = Column(String)
-    file_data = Column(LargeBinary, nullable=True)
+    file_data = deferred(Column(LargeBinary, nullable=True))
     parsed_meta = Column(JSON)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
@@ -394,7 +394,7 @@ class RawIngestionJob(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     source_id = Column(UUID(as_uuid=True), ForeignKey("ingestion_sources.id", ondelete="SET NULL"))
     status = Column(String, default="pending", index=True)
-    payload = Column(JSON, nullable=False)
+    payload = deferred(Column(JSON, nullable=False))
     retry_count = Column(Integer, default=0)
     locked_at = Column(DateTime)
     locked_by = Column(String)

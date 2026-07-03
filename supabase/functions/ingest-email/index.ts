@@ -405,7 +405,7 @@ serve(async (req) => {
           attachments: attachments || []
         }
       })
-      .select()
+      .select("id")
       .single();
 
     if (jobError) {

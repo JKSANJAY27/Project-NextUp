@@ -86,7 +86,7 @@ def get_notifications(
             company_id=company_id,
             subject=event.subject,
             sender=event.sender,
-            body=event.body,
+            body=None,
             timestamp=event.timestamp,
             confidence_scores=confidence_map[n.company_event_id]
         )
