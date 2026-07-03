@@ -98,7 +98,10 @@ export default function TrackingCard({
       <div className="border-t border-border pt-3 mt-1 flex justify-between items-center bg-background/50 -mx-4 -mb-4 p-3 px-4">
         <div>
           <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-0.5">Package</p>
-          <p className="text-[10px] font-mono font-bold uppercase">{company.ctc || company.stipend || "TBD"}</p>
+          <p className="text-[10px] font-mono font-bold uppercase">{company.ctc || "TBD"}</p>
+          <p className="text-[9px] text-muted-foreground uppercase mt-1">
+            Stipend: <span className="font-mono font-bold text-foreground">{company.stipend || "TBD"}</span>
+          </p>
         </div>
         <div className="text-right">
           <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-0.5">Next Event</p>

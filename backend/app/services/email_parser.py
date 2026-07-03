@@ -465,6 +465,15 @@ CGPA rules:
 - Extract only the numeric CGPA threshold (0.0 to 10.0).
 - If percentage (e.g. 60%) is given for 10th/12th only, do NOT use it as min_cgpa.
 - If both percentage and CGPA are given (e.g. "60% or 6.0 CGPA"), use the CGPA value.
+- Preserve decimal CGPA values exactly. For "75% or 7.5 CGPA", min_cgpa is 7.5, never 7 or 75.
+- Prefer the CGPA on the "Pursuing Degree", "Current Degree", or equivalent line. Do not use the "in UG (for PGs)" value as min_cgpa.
+
+Compensation rules:
+- ctc and stipend are different fields. CTC/package is full-time annual compensation; stipend is internship pay.
+- Extract ctc only when the source explicitly labels or describes CTC, package, salary, annual compensation, or a full-time compensation breakdown.
+- Extract stipend only when the source explicitly labels or describes an internship stipend.
+- If one is not explicitly stated, set that field's value to null. Never copy stipend into ctc, copy ctc into stipend, infer one from the other, or invent "will be announced".
+- Preserve multiple explicitly stated CTC periods concisely (for example, "Year 1: 22 LPA; Year 2: 26 LPA").
 
 Deadline rules:
 - Convert deadline to ISO 8601 format: YYYY-MM-DDTHH:MM:SS
@@ -905,6 +914,169 @@ def extract_multiple_roles_from_body(email_body: str) -> List[Dict[str, Any]]:
     return []
 
 
+_SECTION_HEADERS = {
+    "name of the company", "category", "date of visit", "eligible branches",
+    "eligibility criteria", "ctc", "package", "ctc / package", "salary",
+    "annual ctc", "compensation",
+    "stipend", "internship stipend", "monthly stipend",
+    "last date for registration", "registration deadline", "website",
+    "designation", "location", "job location", "work location",
+}
+
+
+def _plain_line(line: str) -> str:
+    """Remove mail/markdown decoration while retaining the field value."""
+    return re.sub(
+        r"\s+", " ",
+        re.sub(r"^[\s*#>Ø•\-\u2013\u2014]+|[\s*#]+$", "", line),
+    ).strip()
+
+
+def _section_value(email_body: str, labels: set[str]) -> Optional[str]:
+    """Read an explicit field whose value may start several blank lines later."""
+    lines = email_body.splitlines()
+    for index, raw_line in enumerate(lines):
+        line = _plain_line(raw_line)
+        label_match = re.match(r"^([A-Za-z /]+?)\s*:\s*(.*)$", line)
+        line_label = (label_match.group(1) if label_match else line).strip().lower()
+        line_label = re.sub(r"\s*\([^)]*\)\s*$", "", line_label).strip()
+        if line_label not in labels:
+            continue
+
+        inline_value = label_match.group(2).strip() if label_match else ""
+        values = [inline_value] if inline_value else []
+        for following in lines[index + 1:]:
+            cleaned = _plain_line(following)
+            if not cleaned:
+                continue
+            possible_header = re.sub(r":\s*$", "", cleaned).strip().lower()
+            if possible_header in _SECTION_HEADERS:
+                break
+            values.append(cleaned)
+        value = " ".join(values).strip()
+        return value or None
+    return None
+
+
+def extract_explicit_compensation(email_body: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Extract independently source-grounded CTC and stipend values.
+
+    Unlabelled currency amounts are intentionally ignored: an absent field is
+    None, so internship pay cannot silently become a full-time package.
+    """
+    ctc = _section_value(
+        email_body,
+        {"ctc", "package", "ctc / package", "salary", "annual ctc", "compensation"},
+    )
+    stipend = _section_value(
+        email_body, {"stipend", "internship stipend", "monthly stipend"}
+    )
+
+    if not ctc:
+        match = re.search(
+            r"(?im)^\s*[*#>\-Ø•\s]*(?:CTC|Package|Salary|Annual\s+CTC|Compensation)"
+            r"\s*[:\-–—]\s*\*?([^\r\n*]+)",
+            email_body,
+        )
+        if match:
+            ctc = _plain_line(match.group(1))
+    if not stipend:
+        match = re.search(
+            r"(?im)^\s*[*#>\-Ø•\s]*(?:Internship\s+Stipend|Monthly\s+Stipend|Stipend)"
+            r"\s*[:\-–—]\s*\*?([^\r\n*]+)",
+            email_body,
+        )
+        if match:
+            stipend = _plain_line(match.group(1))
+
+    return ctc, stipend
+
+
+def extract_min_cgpa(email_body: str) -> Optional[float]:
+    """Extract a complete number only when it is explicitly tied to CGPA."""
+    candidates: list[tuple[int, float]] = []
+    for raw_line in re.split(r"[\r\n;]+", email_body):
+        line = _plain_line(raw_line)
+        if not line or "cgpa" not in line.lower():
+            continue
+
+        lower = line.lower()
+        patterns = (
+            r"(?<![\d.])(?P<value>\d+(?:\.\d+)?)(?![\d.])\s*CGPA\b",
+            r"\bCGPA\s*(?:of|is|:|>=|=>|>|=|-|–|—)?\s*"
+            r"(?<![\d.])(?P<value>\d+(?:\.\d+)?)(?![\d.])",
+        )
+        for pattern in patterns:
+            for match in re.finditer(pattern, line, re.I):
+                context = lower[max(0, match.start() - 50):match.end()]
+                if re.search(r"\b(?:in\s+ug|ug\s*(?:\(|cgpa)|undergrad)", context):
+                    continue
+                priority = (
+                    2
+                    if re.search(
+                        r"\b(?:pursuing|current|degree|graduation|b\.?\s*tech)\b",
+                        context,
+                    )
+                    else 1
+                )
+                value = float(match.group("value"))
+                if 0.0 <= value <= 10.0:
+                    candidates.append((priority, value))
+
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
+def ground_role_facts_in_source(
+    parsed: Dict[str, Any], email_body: str
+) -> Dict[str, Any]:
+    """Replace fragile model outputs with deterministic facts from the mail."""
+    ext = parsed.get("extracted_data") if isinstance(parsed, dict) else None
+    roles = ext.get("roles") if isinstance(ext, dict) else None
+    if not isinstance(roles, list) or not roles:
+        return parsed
+
+    ctc, stipend = extract_explicit_compensation(email_body)
+    min_cgpa = extract_min_cgpa(email_body)
+
+    def role_key(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
+
+    multi_role_values = extract_multiple_roles_from_body(email_body)
+    by_role = {
+        role_key(item["role"]): item for item in multi_role_values
+    }
+
+    for role in roles:
+        if not isinstance(role, dict):
+            continue
+        role_obj = role.get("role", {})
+        role_name = role_obj.get("value", "") if isinstance(role_obj, dict) else role_obj
+        explicit_role = by_role.get(role_key(role_name))
+        if explicit_role:
+            role_ctc = explicit_role.get("ctc")
+            role_stipend = explicit_role.get("stipend")
+        elif by_role:
+            role_ctc = None
+            role_stipend = None
+        else:
+            role_ctc = ctc
+            role_stipend = stipend
+        role["ctc"] = {
+            "value": role_ctc,
+            "confidence": 0.99 if role_ctc else 0.95,
+        }
+        role["stipend"] = {
+            "value": role_stipend,
+            "confidence": 0.99 if role_stipend else 0.95,
+        }
+        role["min_cgpa"] = {
+            "value": min_cgpa,
+            "confidence": 0.99 if min_cgpa is not None else 0.95,
+        }
+    return parsed
+
+
 def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, Any]:
     """
     Rule-based extraction using regular expressions as a last-resort fallback.
@@ -989,45 +1161,8 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     else:
         data["role"] = "Software Engineer"
 
-    # 4. CTC
-    ctc_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:CTC|Salary|Package|Annual\s*CTC)\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*\*?([^\n\r*]+)",
-        email_body,
-        re.IGNORECASE
-    )
-    if ctc_match:
-        data["ctc"] = clean_val(ctc_match.group(1))
-    else:
-        ctc_num_match = re.search(r"(\d+(?:\.\d+)?\s*(?:LPA|Lakhs|Lakh|INR|Rs\.?))", email_body, re.IGNORECASE)
-        if ctc_num_match:
-            data["ctc"] = clean_val(ctc_num_match.group(1))
-        else:
-            data["ctc"] = "Will be announced later"
-
-    # 5. Stipend
-    stipend_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Stipend|Internship\s*Stipend|Monthly\s*Stipend)\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*\*?([^\n\r*]+)",
-        email_body,
-        re.IGNORECASE
-    )
-    if stipend_match:
-        data["stipend"] = clean_val(stipend_match.group(1))
-    else:
-        # Search for digits near "stipend" keyword (within 200 chars following it)
-        idx = email_body.lower().find("stipend")
-        if idx != -1:
-            stipend_sub = email_body[idx:]
-            stipend_num_match = re.search(
-                r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)\s*(?:pm|per\s*month|/month|K|k|thousand)?",
-                stipend_sub[:200],
-                re.IGNORECASE
-            )
-            if stipend_num_match:
-                data["stipend"] = stipend_num_match.group(1).replace(",", "").strip()
-            else:
-                data["stipend"] = "Will be announced later"
-        else:
-            data["stipend"] = "Will be announced later"
+    # 4/5. Keep full-time CTC and internship stipend independent.
+    data["ctc"], data["stipend"] = extract_explicit_compensation(email_body)
 
     # 6. Registration Deadline
     deadline_match = re.search(
@@ -1155,31 +1290,8 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     cleaned_elig_lines = [clean_val(line) for line in elig_lines if clean_val(line)]
     data["eligibility_raw_text"] = "\n".join(cleaned_elig_lines) if cleaned_elig_lines else None
 
-    # Min CGPA (exclusing percentage % values from matches)
-    pursuing_cgpa = re.search(
-        r"(?:pursuing|current|college|degree|cgpa\s*in\s*degree|graduation)\s*(?:degree)?\s*[\-–—:]?\s*(?:>=|>|:)?\s*([\d.]+)(?!\s*%)",
-        elig_text,
-        re.IGNORECASE
-    )
-    if pursuing_cgpa:
-        data["min_cgpa"] = float(pursuing_cgpa.group(1))
-    else:
-        cgpa_patterns = [
-            r"(?:min(?:imum)?\s+CGPA\s*(?:of|:)?\s*)([\d.]+)(?!\s*%)",
-            r"CGPA\s*(?:>=|>|:)?\s*([\d.]+)(?!\s*%)",
-            r"([\d.]+)\s*(?:CGPA|or\s+above\s+CGPA|or\s+higher\s+CGPA|cgpa)",
-        ]
-        data["min_cgpa"] = None
-        for pattern in cgpa_patterns:
-            cgpa_match = re.search(pattern, elig_text, re.IGNORECASE)
-            if cgpa_match:
-                try:
-                    val = float(cgpa_match.group(1))
-                    if 0.0 <= val <= 10.0:
-                        data["min_cgpa"] = val
-                        break
-                except ValueError:
-                    pass
+    # Require a complete numeric token explicitly tied to the word "CGPA".
+    data["min_cgpa"] = extract_min_cgpa(elig_text)
 
     # 10th / 12th percentages
     # Joint check: e.g. "X and XII – 75%"
@@ -1655,14 +1767,17 @@ def parse_placement_email(
 
     if is_high_confidence(parsed):
         logger.info("Ollama returned HIGH confidence. Using Ollama result.")
-        return parsed
+        return ground_role_facts_in_source(parsed, email_body)
 
     logger.info("Ollama low confidence or failed. Escalating to HuggingFace...")
     parsed_hf = parse_with_huggingface(context_text)
 
     if parsed_hf and parsed_hf.get("extracted_data"):
         logger.info("HuggingFace parse succeeded. Using HF result.")
-        return parsed_hf
+        return ground_role_facts_in_source(parsed_hf, email_body)
 
     logger.warning("Both LLM attempts failed. Falling back to Regex parser.")
-    return build_regex_fallback_response(email_body, subject, email_timestamp=email_timestamp)
+    fallback = build_regex_fallback_response(
+        email_body, subject, email_timestamp=email_timestamp
+    )
+    return ground_role_facts_in_source(fallback, email_body)

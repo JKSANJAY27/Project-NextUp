@@ -1329,7 +1329,9 @@ function DashboardPageContent() {
                         <div className="grid grid-cols-2 gap-2 py-2 border-t border-b border-border/40">
                           <div>
                             <span className="text-[8px] text-muted-foreground uppercase block">Package</span>
-                            <span className="text-[10px] font-bold text-foreground">{comp.ctc || comp.stipend || '—'}</span>
+                            <span className="text-[10px] font-bold text-foreground block">{comp.ctc || '—'}</span>
+                            <span className="text-[8px] text-muted-foreground uppercase block mt-1">Stipend</span>
+                            <span className="text-[10px] font-bold text-foreground">{comp.stipend || '—'}</span>
                           </div>
                           <div className="text-right">
                             {comp.registration_link ? (
@@ -2010,8 +2012,9 @@ function DashboardPageContent() {
                                   {c.category}
                                 </span>
                               </td>
-                              <td className="py-5 px-6 text-xs font-mono font-bold text-foreground/80">
-                                {c.ctc || c.stipend || "NO DATA"}
+                              <td className="py-5 px-6 text-xs text-foreground/80">
+                                <div><span className="text-[9px] text-muted-foreground uppercase">CTC:</span> <span className="font-mono font-bold">{c.ctc || "—"}</span></div>
+                                <div className="mt-1"><span className="text-[9px] text-muted-foreground uppercase">Stipend:</span> <span className="font-mono font-bold">{c.stipend || "—"}</span></div>
                               </td>
                               <td className="py-5 px-6 text-xs text-muted-foreground">
                                 {archiveDateStr}
