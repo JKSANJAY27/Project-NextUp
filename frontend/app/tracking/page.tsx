@@ -56,6 +56,7 @@ export default function TrackingPage() {
       title: "Archive Workspace",
       message: `Are you sure you want to archive ${compName}? This will remove it from active tracking.`,
       onConfirm: async () => {
+        setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
         try {
           const app = applications[companyId];
           if (app) {
@@ -84,8 +85,6 @@ export default function TrackingPage() {
           alert("Failed to archive application.");
           // Refetch to restore state
           queryClient.invalidateQueries({ queryKey: ["applications"] });
-        } finally {
-          setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
         }
       }
     });

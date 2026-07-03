@@ -358,12 +358,12 @@ export default function CompanyWorkspaceModal({
                               title: "Archive Workspace",
                               message: `Are you sure you want to archive ${selectedCompany.name}? This will remove it from active tracking.`,
                               onConfirm: async () => {
+                                setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                                onClose();
                                 await handleUpdateApplication(selectedCompany.id, {
                                   user_decision: "archived",
                                   status: "Archived"
                                 });
-                                setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
-                                onClose();
                               }
                             });
                           }}

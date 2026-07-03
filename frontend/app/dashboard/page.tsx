@@ -1269,9 +1269,9 @@ function DashboardPageContent() {
                           title: "Archive Selected",
                           message: `Are you sure you want to archive the ${selectedDecisionIds.length} selected opportunities?`,
                           onConfirm: async () => {
+                            setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
                             await Promise.all(selectedDecisionIds.map(id => handleOpportunityAction(id, 'archive', 'NOT_APPLIED')));
                             setSelectedDecisionIds([]);
-                            setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
                           }
                         });
                       }}
@@ -1362,8 +1362,8 @@ function DashboardPageContent() {
                                 title: "Archive Opportunity",
                                 message: `Are you sure you want to archive ${comp.name}?`,
                                 onConfirm: async () => {
-                                  await handleOpportunityAction(comp.id, 'archive', 'NOT_APPLIED');
                                   setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                                  await handleOpportunityAction(comp.id, 'archive', 'NOT_APPLIED');
                                 }
                               });
                             }}
@@ -1891,8 +1891,8 @@ function DashboardPageContent() {
                                           title: "Archive Opportunity",
                                           message: `Are you sure you want to archive ${c.name}?`,
                                           onConfirm: async () => {
-                                            await handleOpportunityAction(c.id, 'archive', 'MANUAL_NOT_INTERESTED');
                                             setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                                            await handleOpportunityAction(c.id, 'archive', 'MANUAL_NOT_INTERESTED');
                                           }
                                         });
                                       }}
@@ -2271,8 +2271,8 @@ function DashboardPageContent() {
                   title: "Archive Selected",
                   message: `Are you sure you want to archive the ${selectedCompanyIds.length} selected opportunities?`,
                   onConfirm: async () => {
-                    await handleBulkAction("archived");
                     setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                    await handleBulkAction("archived");
                   }
                 });
               }}

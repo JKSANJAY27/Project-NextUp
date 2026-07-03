@@ -69,14 +69,19 @@ def sync_user_calendar_events(db: Session, user_id: UUID, company_id: Optional[U
             if is_tracked:
                 tracking_company_ids.add(company.id)
 
+        # Bulk fetch all relevant calendar events for this user to avoid N+1 queries
+        cal_events_query = db.query(CalendarEvent).filter(
+            CalendarEvent.user_id == user_id,
+            CalendarEvent.source == 'application_timeline'
+        )
+        if company_id:
+            cal_events_query = cal_events_query.filter(CalendarEvent.company_id == company_id)
+        
+        existing_cal_events = cal_events_query.all()
+        cal_event_map = {ev.source_key: ev for ev in existing_cal_events if ev.source_key}
+
         # 3. Cleanup logic for database calendar events
         if not company_id:
-            # Get all calendar events from application timeline for this user
-            existing_cal_events = db.query(CalendarEvent).filter(
-                CalendarEvent.user_id == user_id,
-                CalendarEvent.source == 'application_timeline'
-            ).all()
-
             for cal_ev in existing_cal_events:
                 # Delete if company no longer exists or is archived
                 if not cal_ev.company_id or cal_ev.company_id not in active_company_ids:
@@ -88,21 +93,56 @@ def sync_user_calendar_events(db: Session, user_id: UUID, company_id: Optional[U
         else:
             # Delete if the specific company is archived or no longer active
             if company_id not in active_company_ids:
-                db.query(CalendarEvent).filter(
-                    CalendarEvent.user_id == user_id,
-                    CalendarEvent.company_id == company_id,
-                    CalendarEvent.source == 'application_timeline'
-                ).delete(synchronize_session=False)
+                for cal_ev in existing_cal_events:
+                    db.delete(cal_ev)
                 db.flush()
             # Delete milestones if company is active but no longer tracked
             elif company_id not in tracking_company_ids:
-                db.query(CalendarEvent).filter(
-                    CalendarEvent.user_id == user_id,
-                    CalendarEvent.company_id == company_id,
-                    CalendarEvent.source == 'application_timeline',
-                    CalendarEvent.event_type != 'registration_deadline'
-                ).delete(synchronize_session=False)
+                for cal_ev in existing_cal_events:
+                    if cal_ev.event_type != 'registration_deadline':
+                        db.delete(cal_ev)
                 db.flush()
+
+        # Update our in-memory map of calendar events to exclude deleted ones
+        deleted_keys = set()
+        if not company_id:
+            for cal_ev in existing_cal_events:
+                if not cal_ev.company_id or cal_ev.company_id not in active_company_ids:
+                    deleted_keys.add(cal_ev.source_key)
+                elif cal_ev.event_type != 'registration_deadline' and cal_ev.company_id not in tracking_company_ids:
+                    deleted_keys.add(cal_ev.source_key)
+        else:
+            if company_id not in active_company_ids:
+                for cal_ev in existing_cal_events:
+                    deleted_keys.add(cal_ev.source_key)
+            elif company_id not in tracking_company_ids:
+                for cal_ev in existing_cal_events:
+                    if cal_ev.event_type != 'registration_deadline':
+                        deleted_keys.add(cal_ev.source_key)
+        
+        for k in deleted_keys:
+            if k in cal_event_map:
+                del cal_event_map[k]
+
+        # Bulk fetch all relevant company events for tracked companies
+        company_events_by_id = {}
+        if tracking_company_ids:
+            ce_query = db.query(CompanyEvent).filter(
+                CompanyEvent.stage.isnot(None),
+                CompanyEvent.stage != 'REGISTRATION'
+            )
+            if company_id:
+                if company_id in tracking_company_ids:
+                    ce_query = ce_query.filter(CompanyEvent.company_id == company_id)
+                else:
+                    ce_query = None
+            else:
+                ce_query = ce_query.filter(CompanyEvent.company_id.in_(list(tracking_company_ids)))
+            
+            if ce_query:
+                company_events = ce_query.all()
+                for ce in company_events:
+                    company_events_by_id.setdefault(ce.company_id, []).append(ce)
 
         # 4. Reconcile/Create events
         for company in companies:
@@ -112,7 +152,7 @@ def sync_user_calendar_events(db: Session, user_id: UUID, company_id: Optional[U
             # A. Registration Deadline Event
             if company.registration_deadline:
                 source_key = f"{user_id}:{company.id}:registration_deadline"
-                cal_event = db.query(CalendarEvent).filter(CalendarEvent.source_key == source_key).first()
+                cal_event = cal_event_map.get(source_key)
 
                 if not cal_event:
                     cal_event = CalendarEvent(
@@ -140,18 +180,12 @@ def sync_user_calendar_events(db: Session, user_id: UUID, company_id: Optional[U
 
             # B. Company Milestones / Events (only if tracked)
             if company.id in tracking_company_ids:
-                # Query only milestones (where stage is set) and avoid duplicate registration milestone
-                company_events = db.query(CompanyEvent).filter(
-                    CompanyEvent.company_id == company.id,
-                    CompanyEvent.stage.isnot(None),
-                    CompanyEvent.stage != 'REGISTRATION'
-                ).all()
+                company_events = company_events_by_id.get(company.id, [])
                 for ce in company_events:
                     source_key = f"{user_id}:{ce.id}:event"
-                    cal_event = db.query(CalendarEvent).filter(CalendarEvent.source_key == source_key).first()
+                    cal_event = cal_event_map.get(source_key)
                     mapped_type = map_event_type(ce.event_type, ce.stage)
 
-                    # Determine descriptive title using stage if available
                     title_str = f"{company.name} - {ce.stage.replace('_', ' ').title()}" if ce.stage else f"{company.name} - {ce.event_type.upper()}"
 
                     if not cal_event:
