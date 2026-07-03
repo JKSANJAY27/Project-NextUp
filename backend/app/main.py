@@ -8,8 +8,9 @@ from app.core.database import engine, Base
 from app.api import auth, users, companies, applications, gmail, notifications, resumes, ai, calendar, announcements, dashboard
 from app.services.gmail_sync import start_scheduler, shutdown_scheduler
 
-# Auto-create tables (for SQLite local dev convenience, production uses migrations)
-Base.metadata.create_all(bind=engine)
+# NOTE: Do NOT call Base.metadata.create_all() at module level.
+# If the DB has a transient SSL issue at import time, it crashes the whole app
+# before uvicorn can even start. Instead, we run it in the startup event with retries.
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -68,6 +69,25 @@ app.include_router(dashboard.router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")
 def on_startup():
+    import time
+    from sqlalchemy.exc import OperationalError as SAOperationalError
+
+    # Retry create_all up to 5 times with backoff.
+    # Render's DB proxy can have a transient SSL blip right at deploy time.
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        try:
+            Base.metadata.create_all(bind=engine)
+            logging.info("Database tables verified/created successfully.")
+            break
+        except SAOperationalError as e:
+            if attempt == max_attempts:
+                logging.error(f"Could not connect to database after {max_attempts} attempts. Giving up: {e}")
+                raise
+            wait = 2 ** attempt  # 2, 4, 8, 16 seconds
+            logging.warning(f"DB connection attempt {attempt} failed (SSL/transient error). Retrying in {wait}s... Error: {e}")
+            time.sleep(wait)
+
     start_scheduler()
 
 @app.on_event("shutdown")
