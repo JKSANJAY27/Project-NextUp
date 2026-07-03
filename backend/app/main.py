@@ -69,24 +69,15 @@ app.include_router(dashboard.router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")
 def on_startup():
-    import time
-    from sqlalchemy.exc import OperationalError as SAOperationalError
-
-    # Retry create_all up to 5 times with backoff.
-    # Render's DB proxy can have a transient SSL blip right at deploy time.
-    max_attempts = 5
-    for attempt in range(1, max_attempts + 1):
-        try:
-            Base.metadata.create_all(bind=engine)
-            logging.info("Database tables verified/created successfully.")
-            break
-        except SAOperationalError as e:
-            if attempt == max_attempts:
-                logging.error(f"Could not connect to database after {max_attempts} attempts. Giving up: {e}")
-                raise
-            wait = 2 ** attempt  # 2, 4, 8, 16 seconds
-            logging.warning(f"DB connection attempt {attempt} failed (SSL/transient error). Retrying in {wait}s... Error: {e}")
-            time.sleep(wait)
+    # Only run create_all for SQLite (local development convenience).
+    # In production (PostgreSQL / Supabase), tables already exist and are
+    # managed via migrations. Calling create_all against Supabase's PgBouncer
+    # pooler triggers an hstore OID probe that always fails with an SSL error.
+    if settings.DATABASE_URL.startswith("sqlite"):
+        Base.metadata.create_all(bind=engine)
+        logging.info("SQLite: tables created/verified.")
+    else:
+        logging.info("PostgreSQL: skipping create_all — tables managed via migrations.")
 
     start_scheduler()
 

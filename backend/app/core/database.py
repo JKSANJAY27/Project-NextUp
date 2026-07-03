@@ -4,9 +4,18 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 
 # For SQLite, we need connect_args={"check_same_thread": False}
+# For PostgreSQL (Supabase), we need sslmode=require.
+# We also disable the hstore OID probe (use_native_hstore=False passed via
+# executemany_mode trick) because Supabase's PgBouncer terminates the
+# connection during the probe, causing SSL errors on every startup.
 connect_args = {}
 if settings.DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
+else:
+    # sslmode=require ensures the connection is encrypted.
+    # The hstore probe is handled by passing use_native_hstore=False
+    # as a dialect kwarg below.
+    connect_args = {"sslmode": "require"}
 
 engine_kwargs = {
     "pool_pre_ping": True,
@@ -23,7 +32,12 @@ if not settings.DATABASE_URL.startswith("sqlite"):
         "pool_recycle": 300,
         # Give up after 10 seconds waiting for a connection (fail fast)
         "pool_timeout": 10,
+        # CRITICAL: Disable hstore OID probe. Supabase's PgBouncer terminates
+        # the connection during this probe, causing "SSL connection has been
+        # closed unexpectedly" on every startup and every new pool connection.
+        "use_native_hstore": False,
     })
+
 
 engine = create_engine(
     settings.DATABASE_URL,
