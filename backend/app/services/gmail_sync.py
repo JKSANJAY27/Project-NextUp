@@ -173,6 +173,150 @@ def refresh_materialized_views(db: Session):
         db.rollback()
         logger.error(f"Failed to refresh materialized views concurrently: {str(e)}")
 
+def clean_job_payload(job: RawIngestionJob):
+    """
+    Cleans up base64 data from the job's payload attachments to reduce database size and egress.
+    """
+    if not job or not job.payload:
+        return
+    try:
+        payload = job.payload
+        if isinstance(payload, dict) and "attachments" in payload:
+            attachments = payload.get("attachments", [])
+            modified = False
+            for att in attachments:
+                if att.get("base64_data"):
+                    att["base64_data"] = ""
+                    modified = True
+            if modified:
+                job.payload = payload
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(job, "payload")
+                logger.info(f"Cleaned large base64 attachments from job {job.id} payload.")
+    except Exception as e:
+        logger.warning(f"Failed to clean job payload for {job.id}: {e}")
+
+def process_shortlist_excel_batched(db: Session, company: Company, event: Optional[CompanyEvent], filename: str, file_bytes: bytes, att_meta: AttachmentMetadata):
+    """
+    Batches database operations to parse CDC shortlist Excel files efficiently.
+    Reduces O(N) database query storms to O(1) bulk operations.
+    """
+    try:
+        neo_ids = extract_neo_ids_from_excel(file_bytes)
+        att_meta.parsed_meta = {"extracted_count": len(neo_ids)}
+        
+        if not neo_ids:
+            logger.info(f"No Neo IDs extracted from shortlist Excel: {filename}")
+            return
+            
+        shortlist_hashes = set()
+        for nid in neo_ids:
+            nid_hash = generate_blind_index(nid, settings.PEPPER)
+            shortlist_hashes.add(nid_hash)
+            
+        # 1. Bulk query StudentProfiles
+        profiles = db.query(StudentProfile).filter(StudentProfile.neo_id_hash.in_(list(shortlist_hashes))).all()
+        if not profiles:
+            logger.info(f"No matching system students found for shortlist: {filename}")
+            return
+            
+        matched_user_ids = {p.user_id for p in profiles}
+        
+        # 2. Bulk query existing Applications
+        existing_apps = db.query(Application).filter(
+            Application.company_id == company.id,
+            Application.user_id.in_(list(matched_user_ids))
+        ).all()
+        apps_by_user_id = {app.user_id: app for app in existing_apps}
+        
+        # 3. Bulk query existing OpportunityStates
+        existing_opp_states = db.query(OpportunityState).filter(
+            OpportunityState.company_id == company.id,
+            OpportunityState.user_id.in_(list(matched_user_ids))
+        ).all()
+        opp_states_by_user_id = {os.user_id: os for os in existing_opp_states}
+        
+        # 4. Bulk query existing Notifications for this event
+        notifs_by_user_id = set()
+        if event:
+            existing_notifs = db.query(Notification).filter(
+                Notification.company_event_id == event.id,
+                Notification.user_id.in_(list(matched_user_ids))
+            ).all()
+            notifs_by_user_id = {n.user_id for n in existing_notifs}
+        
+        matched_count = 0
+        for profile in profiles:
+            # Application status logic
+            app = apps_by_user_id.get(profile.user_id)
+            if not app:
+                app = Application(
+                    user_id=profile.user_id,
+                    company_id=company.id,
+                    status='Shortlisted',
+                    recruitment_state='Shortlisted',
+                    current_round='Shortlist Announcement',
+                    user_decision='tracking',
+                )
+                db.add(app)
+            else:
+                if app.status not in ('Offer', 'Rejected', 'Declined', 'Ignored'):
+                    app.status = 'Shortlisted'
+                    app.recruitment_state = 'Shortlisted'
+                    app.current_round = 'Shortlisted'
+                    app.user_decision = 'tracking'
+                    
+            # OpportunityState logic
+            opp_state = opp_states_by_user_id.get(profile.user_id)
+            if not opp_state:
+                opp_state = OpportunityState(
+                    user_id=profile.user_id,
+                    company_id=company.id,
+                    state='tracking',
+                )
+                db.add(opp_state)
+            else:
+                if opp_state.state not in ('tracking',):
+                    opp_state.previous_state = opp_state.state
+                opp_state.state = 'tracking'
+                opp_state.archive_reason = None
+                opp_state.archived_at = None
+                opp_state.updated_at = datetime.utcnow()
+                
+            # Notification logic
+            if event and profile.user_id not in notifs_by_user_id:
+                notif_msg = f"🎉 Congratulations! You are shortlisted in the {company.name} drive for the {company.role} role."
+                db.add(Notification(
+                    user_id=profile.user_id,
+                    company_event_id=event.id,
+                    message=notif_msg,
+                    notification_type='shortlist',
+                    severity=4,
+                ))
+            matched_count += 1
+            
+        # 5. Process Likely Rejected students
+        active_apps = db.query(Application).filter(
+            Application.company_id == company.id,
+            Application.status.in_(('Applied', 'Shortlisted', 'OA', 'Interview'))
+        ).all()
+        
+        unmatched_active_apps = [app for app in active_apps if app.user_id not in matched_user_ids]
+        if unmatched_active_apps:
+            unmatched_user_ids = {app.user_id for app in unmatched_active_apps}
+            unmatched_profiles = db.query(StudentProfile).filter(StudentProfile.user_id.in_(list(unmatched_user_ids))).all()
+            unmatched_profiles_by_user_id = {p.user_id: p for p in unmatched_profiles}
+            
+            for app in unmatched_active_apps:
+                profile = unmatched_profiles_by_user_id.get(app.user_id)
+                if profile and profile.neo_id_hash not in shortlist_hashes:
+                    app.status = 'Likely Rejected'
+                    logger.info(f"Student {app.user_id} marked as Likely Rejected for company {company.name}")
+                    
+        logger.info(f"Processed Shortlist Excel attachment: {filename}. Matched {matched_count} system students.")
+    except Exception as e:
+        logger.error(f"Failed to process Shortlist Excel {filename}: {str(e)}", exc_info=True)
+
 def process_event_attachments(db: Session, event: CompanyEvent, attachments: list):
     """
     Parses and stores attachments for a processed company event.
@@ -242,92 +386,7 @@ def process_event_attachments(db: Session, event: CompanyEvent, attachments: lis
             
         # Process Shortlist Excel
         elif filename.lower().endswith((".xls", ".xlsx")):
-            try:
-                neo_ids = extract_neo_ids_from_excel(file_bytes)
-                att_meta.parsed_meta = {"extracted_count": len(neo_ids)}
-                
-                matched_count = 0
-                matched_user_ids = set()
-                shortlist_hashes = set()
-                
-                for nid in neo_ids:
-                    nid_hash = generate_blind_index(nid, settings.PEPPER)
-                    shortlist_hashes.add(nid_hash)
-                    
-                    profile = db.query(StudentProfile).filter(StudentProfile.neo_id_hash == nid_hash).first()
-                    if profile:
-                        matched_user_ids.add(profile.user_id)
-                        app = db.query(Application).filter(
-                            Application.user_id == profile.user_id,
-                            Application.company_id == company.id
-                        ).first()
-
-                        if not app:
-                            app = Application(
-                                user_id=profile.user_id,
-                                company_id=company.id,
-                                status='Shortlisted',
-                                recruitment_state='Shortlisted',
-                                current_round='Shortlist Announcement',
-                                user_decision='tracking',
-                            )
-                            db.add(app)
-                        else:
-                            if app.status not in ('Offer', 'Rejected', 'Declined', 'Ignored'):
-                                app.status = 'Shortlisted'
-                                app.recruitment_state = 'Shortlisted'
-                                app.current_round = 'Shortlisted'
-                                app.user_decision = 'tracking'
-
-                        # Auto-restore OpportunityState to 'tracking'
-                        opp_state = db.query(OpportunityState).filter(
-                            OpportunityState.user_id == profile.user_id,
-                            OpportunityState.company_id == company.id,
-                        ).first()
-                        if not opp_state:
-                            opp_state = OpportunityState(
-                                user_id=profile.user_id,
-                                company_id=company.id,
-                                state='tracking',
-                            )
-                            db.add(opp_state)
-                        else:
-                            if opp_state.state not in ('tracking',):
-                                opp_state.previous_state = opp_state.state
-                            opp_state.state = 'tracking'
-                            opp_state.archive_reason = None
-                            opp_state.archived_at = None
-                            opp_state.updated_at = datetime.utcnow()
-
-                        notif_msg = f"🎉 Congratulations! You are shortlisted in the {company.name} drive for the {company.role} role."
-                        existing_notif = db.query(Notification).filter(
-                            Notification.user_id == profile.user_id,
-                            Notification.company_event_id == event.id
-                        ).first()
-                        if not existing_notif:
-                            db.add(Notification(
-                                user_id=profile.user_id,
-                                company_event_id=event.id,
-                                message=notif_msg,
-                                notification_type='shortlist',
-                                severity=4,
-                            ))
-                        matched_count += 1
-                        
-                active_apps = db.query(Application).filter(
-                    Application.company_id == company.id,
-                    Application.status.in_(('Applied', 'Shortlisted', 'OA', 'Interview'))
-                ).all()
-                
-                for app in active_apps:
-                    if app.user_id not in matched_user_ids:
-                        profile = db.query(StudentProfile).filter(StudentProfile.user_id == app.user_id).first()
-                        if profile and profile.neo_id_hash not in shortlist_hashes:
-                            app.status = 'Likely Rejected'
-                            logger.info(f"Student {app.user_id} marked as Likely Rejected for company {company.name}")
-                logger.info(f"Processed Shortlist Excel attachment: {filename}. Matched {matched_count} system students.")
-            except Exception as e:
-                logger.error(f"Failed to process Shortlist Excel {filename}: {str(e)}")
+            process_shortlist_excel_batched(db, company, event, filename, file_bytes, att_meta)
 
 def extract_event_metadata(body: str, subject: str, event_type: str, ext_data: dict) -> dict:
     meta = {
@@ -471,6 +530,7 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
         job.status = "completed"
         job.error_message = f"Reconciled directly with company: {company.name} - {company.role}"
         job.processed_at = datetime.utcnow()
+        clean_job_payload(job)
         
         db.add(pe)
         db.add(job)
@@ -719,6 +779,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             # Complete job successfully
             job.status = 'completed'
             job.processed_at = datetime.utcnow()
+            clean_job_payload(job)
             db.commit()
             logger.info(f"Job {job.id} processed as GENERAL_ANNOUNCEMENT successfully.")
             log_execution_stage(db, job.id, "COMPLETED", "SUCCESS", "Processed as general cdc announcement.")
@@ -1330,96 +1391,9 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                         logger.info(f"Processed JD PDF attachment: {filename} for event {event.id}.")
                     except Exception as e:
                         logger.error(f"Failed to process PDF {filename}: {str(e)}")
-                    
-                # Process Shortlist Excel
+                 # Process Shortlist Excel
                 elif filename.lower().endswith((".xls", ".xlsx")):
-                    try:
-                        neo_ids = extract_neo_ids_from_excel(file_bytes)
-                        att_meta.parsed_meta = {"extracted_count": len(neo_ids)}
-                        
-                        matched_count = 0
-                        matched_user_ids = set()
-                        shortlist_hashes = set()
-                        
-                        for nid in neo_ids:
-                            nid_hash = generate_blind_index(nid, settings.PEPPER)
-                            shortlist_hashes.add(nid_hash)
-                            
-                            profile = db.query(StudentProfile).filter(StudentProfile.neo_id_hash == nid_hash).first()
-                            if profile:
-                                matched_user_ids.add(profile.user_id)
-                                app = db.query(Application).filter(
-                                    Application.user_id == profile.user_id,
-                                    Application.company_id == company.id
-                                ).first()
-
-                                if not app:
-                                    app = Application(
-                                        user_id=profile.user_id,
-                                        company_id=company.id,
-                                        status='Shortlisted',
-                                        recruitment_state='Shortlisted',
-                                        current_round='Shortlist Announcement',
-                                        user_decision='tracking',
-                                    )
-                                    db.add(app)
-                                else:
-                                    if app.status not in ('Offer', 'Rejected', 'Declined', 'Ignored'):
-                                        app.status = 'Shortlisted'
-                                        app.recruitment_state = 'Shortlisted'
-                                        app.current_round = 'Shortlisted'
-                                        app.user_decision = 'tracking'
-
-                                # Auto-restore OpportunityState to 'tracking' (Neo ID match = evidence)
-                                opp_state = db.query(OpportunityState).filter(
-                                    OpportunityState.user_id == profile.user_id,
-                                    OpportunityState.company_id == company.id,
-                                    
-                                ).first()
-                                if not opp_state:
-                                    opp_state = OpportunityState(
-                                        user_id=profile.user_id,
-                                        company_id=company.id,
-                                        state='tracking',
-                                    )
-                                    db.add(opp_state)
-                                else:
-                                    if opp_state.state not in ('tracking',):
-                                        opp_state.previous_state = opp_state.state
-                                    opp_state.state = 'tracking'
-                                    opp_state.archive_reason = None
-                                    opp_state.archived_at = None
-                                    opp_state.updated_at = datetime.utcnow()
-
-                                notif_msg = f"🎉 Congratulations! You are shortlisted in the {company.name} drive for the {company.role} role."
-                                existing_notif = db.query(Notification).filter(
-                                    Notification.user_id == profile.user_id,
-                                    Notification.company_event_id == event.id
-                                ).first()
-                                if not existing_notif:
-                                    db.add(Notification(
-                                        user_id=profile.user_id,
-                                        company_event_id=event.id,
-                                        message=notif_msg,
-                                        notification_type='shortlist',
-                                        severity=4,
-                                    ))
-                                matched_count += 1
-                                
-                        active_apps = db.query(Application).filter(
-                            Application.company_id == company.id,
-                            Application.status.in_(('Applied', 'Shortlisted', 'OA', 'Interview'))
-                        ).all()
-                        
-                        for app in active_apps:
-                            if app.user_id not in matched_user_ids:
-                                profile = db.query(StudentProfile).filter(StudentProfile.user_id == app.user_id).first()
-                                if profile and profile.neo_id_hash not in shortlist_hashes:
-                                    app.status = 'Likely Rejected'
-                                    logger.info(f"Student {app.user_id} marked as Likely Rejected for company {company.name}")
-                        logger.info(f"Processed Shortlist Excel attachment: {filename}. Matched {matched_count} system students.")
-                    except Exception as e:
-                        logger.error(f"Failed to process Shortlist Excel {filename}: {str(e)}")
+                    process_shortlist_excel_batched(db, company, event, filename, file_bytes, att_meta)
             
             if has_attachments:
                 log_execution_stage(db, job.id, "ATTACHMENTS_PROCESSED", "SUCCESS")
@@ -1427,6 +1401,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         # 7. Complete job successfully
         job.status = 'completed'
         job.processed_at = datetime.utcnow()
+        clean_job_payload(job)
         # If no events were produced (all roles parked as PendingCompanyEvent), annotate the job
         if not processed_events:
             job.error_message = f"Suspended: non-announcement email ({event_type}) — stored as PendingCompanyEvent, awaiting parent announcement for '{company_name}'."
@@ -1471,6 +1446,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             job.retry_count += 1
             if job.retry_count >= 5:
                 job.status = 'dead_letter'
+                clean_job_payload(job)
             else:
                 job.status = 'failed'
             job.error_message = str(e)

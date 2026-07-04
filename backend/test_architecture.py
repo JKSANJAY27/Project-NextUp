@@ -16,6 +16,11 @@ sqlite3.register_adapter(list, json.dumps)
 def compile_array_sqlite(type_, compiler, **kw):
     return "TEXT"
 
+from sqlalchemy.dialects.postgresql import JSONB
+@compiles(JSONB, "sqlite")
+def compile_jsonb_sqlite(type_, compiler, **kw):
+    return "TEXT"
+
 from app.models.models import Base, Company, CompanyEvent, RawIngestionJob, PendingCompanyEvent, IngestionExecutionLog
 from app.services.gmail_sync import log_execution_stage, extract_event_metadata, clean_company_name_key
 from app.services.validator import normalize_role_name
