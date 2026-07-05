@@ -34,6 +34,7 @@ Thumbs.db
 srbhr-resume-matcher-8a5edab282632443.txt
 srbhr-resume-matcher-8a5edab282632443 (1).txt
 supabase/.temp/
-storage/
-backend/storage/
+storage/*
+backend/storage/*
+!backend/storage/hf_resume_space/
 scratch/
