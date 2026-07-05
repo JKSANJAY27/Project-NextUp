@@ -817,7 +817,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                 f"Job {job.id}: Parser returned generic/unknown company name '{company_name}'. "
                 f"Email subject: '{subject}'. Marking job as requires_review and skipping workspace creation."
             )
-            job.status = "requires_review"
+            job.status = "failed"
             job.final_classification = "UNKNOWN_COMPANY"
             job.processed_at = datetime.utcnow()
             log_execution_stage(db, job.id, "COMPANY_MATCHED", "SKIPPED",

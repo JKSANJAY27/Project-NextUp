@@ -536,7 +536,8 @@ def parse_with_ollama(context_text: str) -> Dict[str, Any]:
                 "options": {
                     "temperature": 0.1,
                     "num_predict": 1200,
-                    "num_thread": 4
+                    "num_thread": 4,
+                    "num_ctx": 16384
                 }
             },
             timeout=300
