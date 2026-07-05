@@ -550,6 +550,24 @@ def process_queued_jobs_cron():
     finally:
         db.close()
 
+def process_all_jobs_loop():
+    """Loops and processes all pending raw ingestion jobs in the background."""
+    logger.info("Starting background batch reprocessing loop...")
+    db = SessionLocal()
+    try:
+        count = 0
+        while True:
+            success = process_queued_jobs(db)
+            if not success:
+                logger.info("Batch reprocessing complete. No more pending jobs.")
+                break
+            count += 1
+            logger.info(f"Processed job {count} in background loop.")
+    except Exception as e:
+        logger.error(f"Error in background batch reprocessing: {str(e)}")
+    finally:
+        db.close()
+
 def refresh_views_cron():
     """Wrapper function for periodic view refreshing (uses own session)."""
     db = SessionLocal()
