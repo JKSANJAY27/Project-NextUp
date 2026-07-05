@@ -31,8 +31,8 @@ interface ResumeData {
   skills?: string[];
   projects?: Array<{ title: string; description: string }>;
   personal?: { name: string; email: string };
-  education?: any[];
-  experience?: any[];
+  education?: Record<string, unknown>[];
+  experience?: Record<string, unknown>[];
 }
 
 type PageView = "configure" | "progress" | "review" | "done";
@@ -61,7 +61,7 @@ export default function ResumePage() {
   // Generation flow
   const [view, setView] = useState<PageView>("configure");
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [jobResult, setJobResult] = useState<any>(null);
+  const [jobResult, setJobResult] = useState<Record<string, unknown> | null>(null);
   const [startingJob, setStartingJob] = useState(false);
   const [startError, setStartError] = useState("");
 
@@ -76,8 +76,9 @@ export default function ResumePage() {
       setSavedResume(data.resume_data || null);
       setCurrentTemplate(data.template || "Classic");
       setHasSavedResume(!!data.resume_data);
-    } catch (err: any) {
-      if (err.response?.status !== 404) {
+    } catch (err: unknown) {
+      const apiErr = err as { response?: { status?: number } };
+      if (apiErr.response?.status !== 404) {
         setResumeError("Could not load master resume. Please ensure you are logged in.");
       }
       setHasSavedResume(false);
@@ -90,7 +91,7 @@ export default function ResumePage() {
     try {
       setLoadingCompanies(true);
       const res = await api.get("/companies");
-      const list: Company[] = (res.data || []).filter((c: any) => !c.archived);
+      const list: Company[] = (res.data || []).filter((c: { archived?: boolean }) => !c.archived);
       setCompanies(list);
       if (list.length > 0 && !selectedCompanyId) {
         setSelectedCompanyId(list[0].id);
@@ -143,8 +144,9 @@ export default function ResumePage() {
         text: "Resume parsed and saved as your master profile. The AI will tailor this for each company."
       });
       await loadResume();
-    } catch (err: any) {
-      const msg = err.response?.data?.detail || "Failed to process your resume. Please try again.";
+    } catch (err: unknown) {
+      const apiErr = err as { response?: { data?: { detail?: string } } };
+      const msg = apiErr.response?.data?.detail || "Failed to process your resume. Please try again.";
       setUploadMsg({ type: "error", text: msg });
     } finally {
       setUploading(false);
@@ -203,8 +205,9 @@ export default function ResumePage() {
       });
       setActiveJobId(res.data.job_id);
       setView("progress");
-    } catch (err: any) {
-      const msg = err.response?.data?.detail || "Failed to queue resume generation job.";
+    } catch (err: unknown) {
+      const apiErr = err as { response?: { data?: { detail?: string } } };
+      const msg = apiErr.response?.data?.detail || "Failed to queue resume generation job.";
       setStartError(msg);
     } finally {
       setStartingJob(false);
@@ -213,7 +216,7 @@ export default function ResumePage() {
 
   // ─── Job Completion Handlers ──────────────────────────────────────────────
 
-  const handleJobComplete = (result: any) => {
+  const handleJobComplete = (result: Record<string, unknown>) => {
     setJobResult(result);
     setView("review");
   };
@@ -338,7 +341,7 @@ export default function ResumePage() {
           </h1>
           <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-2xl">
             Upload your master resume once. The AI will tailor your summary, skills, and project descriptions
-            specifically for each company's JD strategy — with zero hallucinations.
+            specifically for each company&apos;s JD strategy — with zero hallucinations.
           </p>
         </div>
 
@@ -532,7 +535,7 @@ export default function ResumePage() {
                   <span className="text-muted-foreground font-normal text-xs">— optional</span>
                 </h2>
                 <p className="text-[10px] text-muted-foreground mt-1">
-                  Additional guidance for the AI. e.g. "Emphasize my ML projects" or "Keep it under 1 page."
+                  Additional guidance for the AI. e.g. &quot;Emphasize my ML projects&quot; or &quot;Keep it under 1 page.&quot;
                 </p>
               </div>
               <textarea

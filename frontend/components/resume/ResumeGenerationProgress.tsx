@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from "react";
 import api from "@/lib/api";
-import { Loader2, AlertCircle, XCircle, Clock, Zap } from "lucide-react";
+import { Loader2, AlertCircle, XCircle, Clock } from "lucide-react";
 
 interface ResumeGenerationProgressProps {
   jobId: string;
-  onComplete: (result: any) => void;
+  onComplete: (result: Record<string, unknown>) => void;
   onCancel: () => void;
 }
 
@@ -20,8 +20,6 @@ export default function ResumeGenerationProgress({
   const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
-    let intervalId: NodeJS.Timeout;
-
     const checkJobStatus = async () => {
       try {
         const res = await api.get(`/resumes/jobs/${jobId}`);
@@ -38,14 +36,14 @@ export default function ResumeGenerationProgress({
           clearInterval(intervalId);
           onCancel();
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Failed to fetch job status:", err);
       }
     };
 
     // Run immediately, then poll
     checkJobStatus();
-    intervalId = setInterval(checkJobStatus, 3000);
+    const intervalId = setInterval(checkJobStatus, 3000);
 
     return () => clearInterval(intervalId);
   }, [jobId, onComplete, onCancel]);
@@ -55,7 +53,7 @@ export default function ResumeGenerationProgress({
       setCancelling(true);
       await api.post(`/resumes/jobs/${jobId}/cancel`);
       onCancel();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to cancel job:", err);
       setCancelling(false);
     }

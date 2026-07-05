@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import api from "@/lib/api";
-import { Loader2, CheckCircle2, ChevronRight, AlertCircle } from "lucide-react";
+import { Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 
 interface ProjectSuggestion {
   title: string;
@@ -49,9 +49,10 @@ export default function ReviewChanges({
         accept_projects: acceptProjects
       });
       onSuccess();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to apply resume changes:", err);
-      setErrorMsg(err.response?.data?.detail || "Failed to apply changes to your master resume.");
+      const apiErr = err as { response?: { data?: { detail?: string } } };
+      setErrorMsg(apiErr.response?.data?.detail || "Failed to apply changes to your master resume.");
       setApplying(false);
     }
   };
@@ -63,7 +64,7 @@ export default function ReviewChanges({
           Review Optimization Suggestions
         </h3>
         <p className="text-xs text-muted-foreground">
-          Compare the AI's proposed enhancements with your master resume. Select which updates you want to adopt and merge.
+          Compare the AI&apos;s proposed enhancements with your master resume. Select which updates you want to adopt and merge.
         </p>
       </div>
 
