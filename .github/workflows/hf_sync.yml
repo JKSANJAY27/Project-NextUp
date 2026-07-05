@@ -29,8 +29,8 @@ jobs:
           # Clean existing files in the space clone except .git
           find hf_space -mindepth 1 -maxdepth 1 ! -name ".git" -exec rm -rf {} +
           
-          # Copy the backend folder contents to the space root
-          cp -r backend/* hf_space/
+          # Copy only Git-tracked files in the backend folder to the space root (ignores local database/storage files)
+          git archive HEAD:backend | tar -x -C hf_space/
           
           # Commit and push
           cd hf_space
