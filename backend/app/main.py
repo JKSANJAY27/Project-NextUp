@@ -70,15 +70,44 @@ for api_prefix in [settings.API_V1_STR, "/api/v1"]:
 
 @app.on_event("startup")
 def on_startup():
-    # Only run create_all for SQLite (local development convenience).
-    # In production (PostgreSQL / Supabase), tables already exist and are
-    # managed via migrations. Calling create_all against Supabase's PgBouncer
-    # pooler triggers an hstore OID probe that always fails with an SSL error.
-    if settings.DATABASE_URL.startswith("sqlite"):
+    # Run structural schema migrations automatically on boot
+    db_url = settings.DATABASE_URL
+    is_sqlite = db_url.startswith("sqlite")
+    
+    migrations = [
+        "ALTER TABLE companies ADD COLUMN IF NOT EXISTS jd_strategy JSONB;" if not is_sqlite else "ALTER TABLE companies ADD COLUMN IF NOT EXISTS jd_strategy TEXT;",
+        "ALTER TABLE ai_generation_jobs ADD COLUMN IF NOT EXISTS result_json JSONB;" if not is_sqlite else "ALTER TABLE ai_generation_jobs ADD COLUMN IF NOT EXISTS result_json TEXT;",
+        "CREATE INDEX IF NOT EXISTS idx_ai_generation_jobs_status_created ON ai_generation_jobs(status, created_at);"
+    ]
+    
+    postgres_only = [
+        "ALTER TABLE ai_generation_jobs DROP CONSTRAINT IF EXISTS ai_generation_jobs_status_check;",
+        "ALTER TABLE ai_generation_jobs ADD CONSTRAINT ai_generation_jobs_status_check CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'cancelled'));"
+    ]
+    
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            trans = conn.begin()
+            try:
+                for sql in migrations:
+                    conn.execute(text(sql))
+                if not is_sqlite:
+                    for sql in postgres_only:
+                        conn.execute(text(sql))
+                trans.commit()
+                logging.info("Startup schema migration verified successfully.")
+            except Exception as mig_err:
+                trans.rollback()
+                logging.error(f"Startup schema migration failed: {mig_err}")
+    except Exception as outer_err:
+        logging.error(f"Startup migration outer execution failed: {outer_err}")
+
+    if is_sqlite:
         Base.metadata.create_all(bind=engine)
         logging.info("SQLite: tables created/verified.")
     else:
-        logging.info("PostgreSQL: skipping create_all — tables managed via migrations.")
+        logging.info("PostgreSQL: connection verified.")
 
     start_scheduler()
     from app.services.resume_worker import worker as resume_worker
