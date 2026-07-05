@@ -1,0 +1,43 @@
+name: Deploy Resume Space to Hugging Face
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/storage/hf_resume_space/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Push Subdirectory to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config --global user.email "github-actions-bot@example.com"
+          git config --global user.name "GitHub Actions Bot"
+          
+          # Clone the Hugging Face space repository
+          git clone https://x-access-token:$HF_TOKEN@huggingface.co/spaces/SanjayJK/nextup-resume-tailor hf_space_repo
+          
+          # Clean existing files inside cloned repo (excluding .git)
+          find hf_space_repo -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          
+          # Copy new files from backend/storage/hf_resume_space to the cloned repo
+          cp -r backend/storage/hf_resume_space/* hf_space_repo/
+          
+          # Commit and push changes
+          cd hf_space_repo
+          git add .
+          if git diff-index --quiet HEAD --; then
+            echo "No changes to deploy."
+          else
+            git commit -m "Deploy from GitHub Actions: ${{ github.sha }}"
+            git push origin main
+          fi
