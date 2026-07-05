@@ -54,18 +54,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include Routers
-app.include_router(auth.router, prefix=settings.API_V1_STR)
-app.include_router(users.router, prefix=settings.API_V1_STR)
-app.include_router(companies.router, prefix=settings.API_V1_STR)
-app.include_router(applications.router, prefix=settings.API_V1_STR)
-app.include_router(gmail.router, prefix=settings.API_V1_STR)
-app.include_router(notifications.router, prefix=settings.API_V1_STR)
-app.include_router(resumes.router, prefix=settings.API_V1_STR)
-app.include_router(ai.router, prefix=settings.API_V1_STR)
-app.include_router(calendar.router, prefix=settings.API_V1_STR)
-app.include_router(announcements.router, prefix=settings.API_V1_STR)
-app.include_router(dashboard.router, prefix=settings.API_V1_STR)
+# Include Routers (mounted under both /api and /api/v1 for compatibility)
+for api_prefix in [settings.API_V1_STR, "/api/v1"]:
+    app.include_router(auth.router, prefix=api_prefix)
+    app.include_router(users.router, prefix=api_prefix)
+    app.include_router(companies.router, prefix=api_prefix)
+    app.include_router(applications.router, prefix=api_prefix)
+    app.include_router(gmail.router, prefix=api_prefix)
+    app.include_router(notifications.router, prefix=api_prefix)
+    app.include_router(resumes.router, prefix=api_prefix)
+    app.include_router(ai.router, prefix=api_prefix)
+    app.include_router(calendar.router, prefix=api_prefix)
+    app.include_router(announcements.router, prefix=api_prefix)
+    app.include_router(dashboard.router, prefix=api_prefix)
 
 @app.on_event("startup")
 def on_startup():
