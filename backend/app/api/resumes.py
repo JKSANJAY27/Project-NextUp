@@ -86,7 +86,21 @@ def get_user_resume(
         return res
     except Exception as e:
         logger.error(f"Failed to decrypt resume for user {current_user.id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to decrypt secure resume database records.")
+        # Fallback to default structure so the UI does not crash, allowing user to upload a fresh PDF
+        profile = current_user.profile
+        full_name = profile.full_name if profile else ""
+        skills = profile.skills if profile else []
+        fallback_res = {
+            "template": "Classic",
+            "resume_data": {
+                "personal": {"name": full_name, "email": current_user.email},
+                "education": [],
+                "experience": [],
+                "projects": [],
+                "skills": skills
+            }
+        }
+        return fallback_res
 
 @router.put("/me")
 def update_user_resume(
