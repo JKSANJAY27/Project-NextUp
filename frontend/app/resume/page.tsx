@@ -14,8 +14,10 @@ import {
   AlertCircle,
   CheckCircle2,
   ChevronDown,
-  RefreshCw
+  RefreshCw,
+  Download
 } from "lucide-react";
+import { useAppStore } from "@/lib/store";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -40,6 +42,8 @@ type PageView = "configure" | "progress" | "review" | "done";
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function ResumePage() {
+  const encryptionKey = useAppStore((state) => state.encryptionKey);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   // Saved resume state
   const [savedResume, setSavedResume] = useState<ResumeData | null>(null);
   const [currentTemplate, setCurrentTemplate] = useState<string>("Classic");
@@ -227,6 +231,48 @@ export default function ResumePage() {
     setView("configure");
   };
 
+  const handleDownloadPDF = async () => {
+    if (!encryptionKey) {
+      alert("Encryption key missing. Please log in again to unlock your Vault.");
+      return;
+    }
+    setDownloadingPdf(true);
+    try {
+      const res = await api.get("/resumes/me");
+      const { pdf_file_enc, pdf_filename_enc } = res.data;
+      if (!pdf_file_enc) {
+        alert("No compiled PDF found. Try re-saving your resume.");
+        setDownloadingPdf(false);
+        return;
+      }
+      
+      const { decryptData } = await import("@/lib/crypto");
+      const decryptedBase64 = await decryptData(pdf_file_enc, encryptionKey);
+      const filename = pdf_filename_enc ? await decryptData(pdf_filename_enc, encryptionKey) : "tailored_resume.pdf";
+      
+      // Convert base64 string to Blob
+      const byteCharacters = atob(decryptedBase64);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: "application/pdf" });
+      
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error("Failed to download PDF:", err);
+      alert("Failed to decrypt and download compiled PDF.");
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
+
   const handleChangesAccepted = () => {
     setView("done");
   };
@@ -311,6 +357,23 @@ export default function ResumePage() {
             </p>
           </div>
           <div className="flex gap-3 justify-center">
+            <button
+              onClick={handleDownloadPDF}
+              disabled={downloadingPdf}
+              className="flex items-center gap-2 bg-accent hover:bg-accent/90 text-accent-foreground text-xs font-mono py-2.5 px-5 rounded-xl font-bold shadow-md transition disabled:opacity-50"
+            >
+              {downloadingPdf ? (
+                <>
+                  <Loader2 className="animate-spin h-3.5 w-3.5" />
+                  Decrypting...
+                </>
+              ) : (
+                <>
+                  <Download className="h-3.5 w-3.5" />
+                  Download compiled PDF
+                </>
+              )}
+            </button>
             <button
               onClick={() => {
                 setView("configure");
