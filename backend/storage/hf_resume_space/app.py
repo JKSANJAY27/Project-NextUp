@@ -33,17 +33,20 @@ def generate(req: GenerateRequest):
     from huggingface_hub import InferenceClient
     model_id = req.model or "Qwen/Qwen2.5-7B-Instruct"
     
-    # Compile prompt with system instruction
-    full_prompt = f"{req.system}\n\n{req.prompt}" if req.system else req.prompt
-
     try:
+        messages = []
+        if req.system:
+            messages.append({"role": "system", "content": req.system})
+        messages.append({"role": "user", "content": req.prompt})
+
         client = InferenceClient(token=hf_token)
-        generated_text = client.text_generation(
-            prompt=full_prompt,
+        response = client.chat_completion(
+            messages=messages,
             model=model_id,
-            max_new_tokens=req.max_tokens or 1024,
+            max_tokens=req.max_tokens or 1024,
             temperature=req.temperature or 0.2,
         )
+        generated_text = response.choices[0].message.content or ""
         return {"text": generated_text.strip()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
