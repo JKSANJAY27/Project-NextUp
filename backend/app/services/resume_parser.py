@@ -133,7 +133,10 @@ def parse_resume_with_ollama(text: str) -> Dict[str, Any]:
                 "model": ollama_model,
                 "prompt": prompt,
                 "stream": False,
-                "format": "json"
+                "format": "json",
+                "options": {
+                    "num_thread": 4
+                }
             },
             timeout=300
         )
