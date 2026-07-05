@@ -135,7 +135,7 @@ def parse_resume_with_ollama(text: str) -> Dict[str, Any]:
                 "stream": False,
                 "format": "json"
             },
-            timeout=120
+            timeout=300
         )
         if response.status_code == 200:
             res_text = response.json().get("response", "{}").strip()

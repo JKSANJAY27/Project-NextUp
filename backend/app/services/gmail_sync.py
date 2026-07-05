@@ -659,7 +659,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     from app.services.pdf_extractor import extract_text_from_pdf
                     txt = extract_text_from_pdf(file_bytes)
                     if txt:
-                        attachment_texts.append(f"--- ATTACHMENT (PDF): {filename} ---\n{txt[:3000]}")
+                        attachment_texts.append(f"--- ATTACHMENT (PDF): {filename} ---\n{txt[:1200]}")
                 except Exception as e:
                     logger.warning(f"Failed to extract PDF text from {filename}: {str(e)}")
 
@@ -672,7 +672,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     excel_preview = f"--- ATTACHMENT (EXCEL PREVIEW): {filename} ---\n"
                     excel_preview += f"Columns: {list(df.columns)}\n"
                     excel_preview += df.to_string(index=False, max_rows=20)
-                    attachment_texts.append(excel_preview[:1500])
+                    attachment_texts.append(excel_preview[:800])
                 except Exception as e:
                     logger.warning(f"Failed to extract Excel preview from {filename}: {str(e)}")
 

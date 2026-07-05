@@ -538,7 +538,7 @@ def parse_with_ollama(context_text: str) -> Dict[str, Any]:
                     "num_predict": 1200
                 }
             },
-            timeout=120
+            timeout=300
         )
         if response.status_code == 200:
             result = response.json()
