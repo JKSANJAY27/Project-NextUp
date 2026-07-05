@@ -38,4 +38,6 @@ EXPOSE 8000
 RUN chmod +x /app/start.sh
 
 CMD ["/app/start.sh"]
+# Trigger Hugging Face auto-sync workflow after adding token
+
 
