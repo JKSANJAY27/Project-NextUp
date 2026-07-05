@@ -154,7 +154,10 @@ class RemoteSpaceProvider(AIProvider):
 
     def __init__(self, base_url: str, model: str, auth_token: str = "",
                  name: str = "resume-space"):
-        self.base_url = base_url.rstrip("/")
+        url = base_url.rstrip("/")
+        if url.endswith("/tailor"):
+            url = url[:-7]
+        self.base_url = url.rstrip("/")
         self.model = model
         self.auth_token = auth_token
         self.name = name
