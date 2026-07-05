@@ -32,7 +32,7 @@ RUN ollama serve & \
     pkill ollama
 
 # Expose port 8000 (standard backend port, can be overridden by HF Space $PORT)
-EXPOSE 8000
+EXPOSE 7860
 
 # Add executable permissions to start script
 RUN chmod +x /app/start.sh
