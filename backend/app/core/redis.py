@@ -1,6 +1,7 @@
 import logging
 import time
 import gzip
+import threading
 from typing import Any, Optional
 from uuid import UUID
 import redis
@@ -16,11 +17,17 @@ except ImportError:
     HAS_ORJSON = False
 
 # Initialize redis connection pool
+_redis_metrics_lock = threading.Lock()
 try:
-    redis_client = redis.Redis.from_url(settings.REDIS_URL, socket_timeout=2.0, socket_connect_timeout=2.0)
+    redis_client = redis.Redis.from_url(
+        settings.REDIS_URL,
+        socket_timeout=2.0,
+        socket_connect_timeout=2.0,
+        max_connections=20
+    )
     # Check if redis is actually reachable on startup
     redis_client.ping()
-    logger.info("Successfully connected to Redis cache.")
+    logger.info("Successfully connected to Redis cache with connection pool.")
 except Exception as e:
     logger.warning(f"Redis connection failed (caching disabled, falling back to DB): {e}")
     redis_client = None
@@ -34,6 +41,10 @@ metrics = {
     "total_get_time_ms": 0.0,
     "total_gets": 0
 }
+
+def _incr_metric(key: str, val: int = 1):
+    with _redis_metrics_lock:
+        metrics[key] += val
 
 def _serialize(value: Any) -> bytes:
     if HAS_ORJSON:
@@ -52,16 +63,16 @@ def _deserialize(data: bytes) -> Any:
 def get_cache(key: str) -> Optional[Any]:
     """Retrieve and decompress cached JSON data from Redis."""
     if not redis_client:
-        metrics["db_fallback"] += 1
+        _incr_metric("db_fallback")
         return None
     
     start_time = time.perf_counter()
-    metrics["total_gets"] += 1
+    _incr_metric("total_gets")
     
     try:
         data = redis_client.get(key)
         if data is None:
-            metrics["miss"] += 1
+            _incr_metric("miss")
             logger.info(f"Cache MISS for key: {key}")
             return None
         
@@ -76,16 +87,17 @@ def get_cache(key: str) -> Optional[Any]:
             except Exception:
                 raise decomp_err
         
-        metrics["hit"] += 1
+        _incr_metric("hit")
         elapsed = (time.perf_counter() - start_time) * 1000.0
-        metrics["total_get_time_ms"] += elapsed
-        avg_time = metrics["total_get_time_ms"] / metrics["total_gets"]
+        with _redis_metrics_lock:
+            metrics["total_get_time_ms"] += elapsed
+            avg_time = metrics["total_get_time_ms"] / metrics["total_gets"]
         logger.info(f"Cache HIT for key: {key} in {elapsed:.2f}ms (Avg: {avg_time:.2f}ms).")
         return value
         
     except Exception as e:
-        metrics["error"] += 1
-        metrics["db_fallback"] += 1
+        _incr_metric("error")
+        _incr_metric("db_fallback")
         logger.warning(f"Redis get error (falling back to DB): {e}")
         return None
 
@@ -99,9 +111,22 @@ def set_cache(key: str, value: Any, expire_seconds: int = 300) -> bool:
         redis_client.setex(key, expire_seconds, compressed)
         return True
     except Exception as e:
-        metrics["error"] += 1
+        _incr_metric("error")
         logger.warning(f"Redis set error: {e}")
         return False
+
+def get_jd_strategy_cache(company_id: UUID) -> Optional[dict]:
+    """Retrieve cached JD Strategy for a company. Cached for 24h by default."""
+    version = get_company_version(company_id)
+    key = f"nextup:cache:company:{company_id}:jd_strategy:v{version}"
+    return get_cache(key)
+
+def set_jd_strategy_cache(company_id: UUID, strategy: dict) -> bool:
+    """Store company JD Strategy in cache for 24 hours."""
+    version = get_company_version(company_id)
+    key = f"nextup:cache:company:{company_id}:jd_strategy:v{version}"
+    return set_cache(key, strategy, expire_seconds=86400)
+
 
 # Versioning Helpers
 

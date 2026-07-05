@@ -495,132 +495,56 @@ Return ONLY the raw JSON object. No markdown. No explanation.
 """
 
 
-def ping_ollama(base_url: str, timeout: int = 10) -> bool:
+def parse_with_ai_gateway(context_text: str) -> Dict[str, Any]:
     """
-    Checks if the Ollama endpoint is alive by calling /api/tags.
-    HF Spaces sleep on free tier — this acts as a wake-up ping.
-    """
-    try:
-        resp = requests.get(f"{base_url}/api/tags", timeout=timeout)
-        return resp.status_code == 200
-    except Exception:
-        return False
+    Route email parsing through the centralized AIGateway.
 
+    The gateway owns provider ordering, per-provider retries with exponential
+    backoff, circuit breakers, and concurrency control.  The parser gateway
+    always includes the HuggingFace Router (Llama-3.3-70B-Instruct) as the
+    mandatory provider and optionally Ollama as a faster primary tier when
+    DISABLE_OLLAMA is not set.
 
-def parse_with_ollama(context_text: str) -> Dict[str, Any]:
+    Returns parsed dict on success.
+    Raises AIUnavailableError when all providers are exhausted so the
+    ingestion job can be retried rather than silently falling back to
+    low-quality regex output.
     """
-    Attempts to parse placement context using the Ollama endpoint
-    (can be local or a HuggingFace Space running Ollama).
-    """
-    if os.getenv("DISABLE_OLLAMA", "").lower() == "true":
-        logger.info("Ollama is disabled via DISABLE_OLLAMA env var. Skipping.")
-        return {}
+    from app.services.ai_provider import get_parser_gateway
 
-    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-    ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
     prompt = get_parser_prompt(context_text)
+    gateway = get_parser_gateway()
 
-    # Wake-up ping — HF free-tier spaces sleep after inactivity
-    if not ping_ollama(ollama_base_url, timeout=5):
-        logger.warning(f"Ollama endpoint at {ollama_base_url} is not responding (sleeping or offline). Skipping.")
-        return {}
-
-    try:
-        response = requests.post(
-            f"{ollama_base_url}/api/generate",
-            json={
-                "model": ollama_model,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-                "options": {
-                    "temperature": 0.1,
-                    "num_predict": 1200,
-                    "num_thread": 4,
-                    "num_ctx": 16384
-                }
-            },
-            timeout=300
-        )
-        if response.status_code == 200:
-            result = response.json()
-            response_text = result.get("response", "{}").strip()
-            logger.info(f"Ollama raw response: {response_text}")
-            parsed = repair_and_parse_json(response_text)
-            if "parser_metadata" in parsed:
-                parsed["parser_metadata"]["model_used"] = f"ollama-{ollama_model}"
-            logger.info(f"Ollama ({ollama_model}) parse succeeded.")
-            return parsed
-        else:
-            logger.warning(f"Ollama returned HTTP {response.status_code}: {response.text[:200]}")
-    except Exception as e:
-        logger.warning(f"Ollama ({ollama_model}) parsing/repair failed: {str(e)}")
-    return {}
-
-
-def parse_with_huggingface(context_text: str) -> Dict[str, Any]:
-    """
-    Escalates parsing to Hugging Face Inference API (OpenAI-compatible Messages format).
-    Uses Qwen2.5-72B-Instruct via the router endpoint.
-    """
-    hf_token = os.getenv("HF_API_TOKEN", "")
-    if not hf_token:
-        logger.warning("HF_API_TOKEN not set. Skipping HuggingFace escalation.")
-        return {}
-
-    model_id = "meta-llama/Llama-3.3-70B-Instruct"
-    # Use OpenAI-compatible Messages API (correct format for instruction models)
-    api_url = "https://router.huggingface.co/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {hf_token}",
-        "Content-Type": "application/json"
-    }
-    prompt = get_parser_prompt(context_text)
+    result = gateway.generate(
+        prompt,
+        system="You are a structured data extractor. Output only valid JSON. No markdown.",
+        max_tokens=1800,
+        temperature=0.1,
+        json_mode=True,
+        purpose="email_parser",
+    )
 
     try:
-        response = requests.post(
-            api_url,
-            headers=headers,
-            json={
-                "model": model_id,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are a structured data extractor. Output only valid JSON. No markdown."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                "max_tokens": 1500,
-                "temperature": 0.1,
-                "response_format": {"type": "json_object"}
-            },
-            timeout=120
-        )
-        if response.status_code == 200:
-            res_json = response.json()
-            generated_text = (
-                res_json.get("choices", [{}])[0]
-                .get("message", {})
-                .get("content", "")
-                .strip()
-            )
-            if not generated_text:
-                logger.warning("HuggingFace returned empty content.")
-                return {}
-
-            parsed = repair_and_parse_json(generated_text)
-            if "parser_metadata" in parsed:
-                parsed["parser_metadata"]["model_used"] = f"huggingface-{model_id}"
-            logger.info(f"HuggingFace ({model_id}) parse succeeded.")
-            return parsed
-        else:
-            logger.warning(f"HuggingFace API returned error ({response.status_code}): {response.text[:300]}")
+        parsed = result.parse_json()
     except Exception as e:
-        logger.warning(f"HuggingFace escalation parsing/repair failed: {str(e)}")
-    return {}
+        logger.warning(
+            "[email_parser] gateway response not valid JSON (provider=%s, err=%s). "
+            "Attempting json_repair...",
+            result.provider, str(e)[:200],
+        )
+        parsed = repair_and_parse_json(result.text)
+
+    if "parser_metadata" not in parsed:
+        parsed["parser_metadata"] = {}
+    parsed["parser_metadata"]["model_used"] = f"{result.provider}/{result.model}"
+    parsed["parser_metadata"]["latency_ms"] = result.latency_ms
+    parsed["parser_metadata"]["attempts"] = result.attempts
+
+    logger.info(
+        "[email_parser] gateway parse succeeded provider=%s latency_ms=%d attempts=%d",
+        result.provider, result.latency_ms, result.attempts,
+    )
+    return parsed
 
 
 def is_high_confidence(parsed: Dict[str, Any]) -> bool:
@@ -1763,36 +1687,39 @@ def parse_placement_email(
     email_timestamp=None
 ) -> Dict[str, Any]:
     """
-    Main entry point. Escalating LLM chain:
-      1. Ollama (HF Space or local) — primary
-      2. HuggingFace Serverless API (Qwen2.5-72B-Instruct) — if Ollama low/fails
-      3. Regex + spaCy fallback — if both fail
+    Main entry point for placement email parsing.
 
-    Attachments (PDF text, Excel preview) should already be extracted and
-    passed in as `attachment_text` before calling this function.
+    Delegates to the centralized AIGateway (HuggingFace Router — mandatory,
+    Ollama — optional faster tier) which owns retries, circuit breaking,
+    concurrency control, and structured logging.
+
+    After a successful AI parse, deterministic fact-grounding is applied
+    (ground_role_facts_in_source) to override fragile model outputs for
+    CTC, Stipend, and CGPA with values extracted directly from the email text.
+
+    Raises:
+        AIUnavailableError: when ALL providers exhaust their retries.
+            The ingestion job is then marked failed and retried on the next
+            cron cycle rather than silently producing low-quality regex output.
     """
-    # Build combined context
+    from app.services.ai_provider import AIUnavailableError
+
+    # Build combined context for the model
     context_text = f"Subject: {subject}\n\nBody:\n{email_body}"
     if attachment_text:
         context_text += f"\n\nAttachment Content:\n{attachment_text}"
 
-    logger.info("Starting email parsing — attempting Ollama...")
-    parsed = parse_with_ollama(context_text)
+    logger.info("[email_parser] Starting AI parse via gateway...")
+    parsed = parse_with_ai_gateway(context_text)
 
-    # Always trust and use Ollama's JSON response if it succeeded to parse
-    if parsed and isinstance(parsed, dict) and parsed.get("extracted_data"):
-        logger.info("Ollama parse succeeded. Using Ollama result.")
-        return ground_role_facts_in_source(parsed, email_body)
+    if not parsed or not isinstance(parsed, dict) or not parsed.get("extracted_data"):
+        # Gateway returned something but the JSON structure is unusable.
+        # Raise so the ingestion job is retried later.
+        raise AIUnavailableError(
+            "email_parser: gateway returned an empty or malformed result structure."
+        )
 
-    logger.info("Ollama parsing failed or returned empty. Escalating to HuggingFace...")
-    parsed_hf = parse_with_huggingface(context_text)
+    # Deterministic post-processing: override fragile model fields with
+    # source-grounded values (CTC, Stipend, CGPA) extracted directly from email.
+    return ground_role_facts_in_source(parsed, email_body)
 
-    if parsed_hf and parsed_hf.get("extracted_data"):
-        logger.info("HuggingFace parse succeeded. Using HF result.")
-        return ground_role_facts_in_source(parsed_hf, email_body)
-
-    logger.warning("Both LLM attempts failed. Falling back to Regex parser.")
-    fallback = build_regex_fallback_response(
-        email_body, subject, email_timestamp=email_timestamp
-    )
-    return ground_role_facts_in_source(fallback, email_body)

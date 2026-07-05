@@ -79,6 +79,25 @@ def encrypt_field(plaintext: str, key_hex: str) -> str:
 import hmac
 import hashlib
 
+
+def _server_key_hex(purpose: str) -> str:
+    """Derive a stable 32-byte server-side AES key from the PEPPER for a given purpose."""
+    digest = hashlib.sha256(f"{settings.PEPPER}:{purpose}".encode("utf-8")).hexdigest()
+    return digest  # 64 hex chars == 32 bytes
+
+
+def server_encrypt_field(plaintext: str, purpose: str = "ai-jobs") -> str:
+    """
+    Encrypt data at rest with a server-derived key (AES-GCM). Unlike the per-session
+    client key, this key survives restarts, so background workers can always decrypt.
+    """
+    return encrypt_field(plaintext, _server_key_hex(purpose))
+
+
+def server_decrypt_field(ciphertext_b64: str, purpose: str = "ai-jobs") -> str:
+    return decrypt_field(ciphertext_b64, _server_key_hex(purpose))
+
+
 def generate_blind_index(neo_id: str, pepper: str = None) -> str:
     """
     Generates a secure HMAC-SHA256 blind index from a normalized Neo ID.

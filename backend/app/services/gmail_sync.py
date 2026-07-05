@@ -521,6 +521,20 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
             
         process_event_attachments(db, event, attachments)
         log_execution_stage(db, job.id, "ATTACHMENTS_PROCESSED", "SUCCESS")
+
+        # Generate JD Strategy if not already generated
+        if not company.jd_text and body:
+            company.jd_text = body
+        if company.jd_text and (not company.jd_strategy or not isinstance(company.jd_strategy, dict) or not company.jd_strategy.get("required_skills")):
+            try:
+                logger.info(f"Reconciliation: Generating JD Strategy for company {company.name} (ID: {company.id})...")
+                from app.services.ai_service import generate_jd_strategy
+                strategy = generate_jd_strategy(company.jd_text)
+                if strategy and (strategy.get("required_skills") or strategy.get("role_summary")):
+                    company.jd_strategy = strategy
+                    logger.info(f"Reconciliation: Saved JD Strategy for company {company.name}.")
+            except Exception as e:
+                logger.error(f"Reconciliation: Failed to generate JD strategy for company {company.name} in job: {e}")
         
         update_recruitment_states(db, company, pe.event_type, email_timestamp, body)
         log_execution_stage(db, job.id, "APPLICATIONS_UPDATED", "SUCCESS")
@@ -1391,6 +1405,24 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             if has_attachments:
                 log_execution_stage(db, job.id, "ATTACHMENTS_PROCESSED", "SUCCESS")
                 
+        # Generate JD Strategy for companies if not already generated
+        for event in processed_events:
+            company = event.company
+            # If jd_text is not set, fall back to email body (for text-only announcements)
+            if not company.jd_text and body:
+                company.jd_text = body
+            
+            if company.jd_text and (not company.jd_strategy or not isinstance(company.jd_strategy, dict) or not company.jd_strategy.get("required_skills")):
+                try:
+                    logger.info(f"Generating JD Strategy for company {company.name} (ID: {company.id})...")
+                    from app.services.ai_service import generate_jd_strategy
+                    strategy = generate_jd_strategy(company.jd_text)
+                    if strategy and (strategy.get("required_skills") or strategy.get("role_summary")):
+                        company.jd_strategy = strategy
+                        logger.info(f"Successfully saved JD Strategy for company {company.name}.")
+                except Exception as e:
+                    logger.error(f"Failed to generate JD strategy for company {company.name} in job: {e}")
+
         # 7. Complete job successfully
         job.status = 'completed'
         job.processed_at = datetime.utcnow()

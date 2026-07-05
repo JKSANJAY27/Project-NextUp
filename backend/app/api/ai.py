@@ -86,76 +86,60 @@ def tailor_resume(
         }
     }
     
-    # If using cloud AI
+    # If using cloud AI, submit background job instead of synchronous call
     if req.request_source == "cloud":
-        # Check if resume JSON is set
-        resume_data_str = "{}"
-        if resume and resume.resume_json_enc:
-            # We can't decrypt on the server if they don't send x-client-key, but we can use session cached key!
-            from app.core.gmail_token_cache import get_session_key
-            derived_key = get_session_key(current_user.id)
-            if derived_key:
-                from app.core.security import decrypt_field
-                try:
-                    resume_data_str = decrypt_field(resume.resume_json_enc, derived_key)
-                except Exception:
-                    pass
+        from app.core.config import settings
+        from app.models.models import AiGenerationJob
+        from app.core.gmail_token_cache import get_session_key
+        from datetime import datetime, timedelta
+
+        # Check queue backlog limit
+        backlog_count = db.query(AiGenerationJob).filter(AiGenerationJob.status == "queued").count()
+        if backlog_count >= settings.RESUME_JOBS_MAX_BACKLOG:
+            raise HTTPException(
+                status_code=503,
+                detail="Server busy: The resume worker queue is currently full. Please try again later."
+            )
+
+        # Check Daily Limit
+        day_ago = datetime.utcnow() - timedelta(days=1)
+        daily_count = db.query(AiGenerationJob).filter(
+            AiGenerationJob.user_id == current_user.id,
+            AiGenerationJob.job_type == "resume_tailor",
+            AiGenerationJob.status == "completed",
+            AiGenerationJob.created_at >= day_ago
+        ).count()
+
+        if daily_count >= settings.RESUME_JOBS_DAILY_LIMIT_PER_USER:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded: You have reached your daily limit of {settings.RESUME_JOBS_DAILY_LIMIT_PER_USER} tailored resumes per day."
+            )
+
+        # Check session vault key
+        derived_key = get_session_key(current_user.id)
+        if not derived_key:
+            raise HTTPException(
+                status_code=400,
+                detail="Vault session key missing. Please log in again to authorize resume access."
+            )
+
+        # Create queued job
+        job = AiGenerationJob(
+            user_id=current_user.id,
+            company_id=req.company_id,
+            job_type="resume_tailor",
+            request_source="cloud",
+            custom_prompt=req.custom_prompt,
+            status="queued"
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        logger.info(f"Queued resume tailoring job {job.id} via /tailor endpoint.")
+        return {"status": "queued", "job_id": job.id}
         
-        prompt = f"""You are an expert ATS optimizer. Analyze the student's Resume JSON and the Job Description text.
-Generate a JSON output tailoring the resume to fit the JD perfectly.
-
-TRUTHFULNESS & GROUNDING RULES:
-1. ONLY modify text phrasing to better align with the JD; NEVER invent metrics, years of experience, certifications, or achievements.
-2. NEVER modify or invent candidate name, contact details, company names, job titles, institutions, degrees, or dates.
-3. Keep project titles exactly as they are in the original resume.
-4. Do NOT use buzzwords or fluff (e.g., spearheaded, synergized, revolutionized, best-in-class). Write simple, direct, metric-driven accomplishments.
-5. Emphasize matching skills and keywords from the Job Description where supported by candidate experience.
-
-Student Resume Data:
-{resume_data_str}
-
-Company JD Text:
-{company.jd_text or ""}
-
-Required Skills:
-{", ".join(jd_skills)}
-
-Return ONLY a valid JSON object matching this schema exactly (no markdown blocks, no prefix explanations):
-{{
-  "ats_score": 85,
-  "missing_keywords": ["Kubernetes", "Redis"],
-  "improvements": ["Highlight cloud project", "Move Python to core skills"],
-  "tailored_resume": {{
-    "optimized_skills": ["Python", "React", "Docker"],
-    "optimized_projects": [
-      {{
-        "title": "Project Title",
-        "description": "Optimized description highlighting matching keywords from the JD based on original text"
-      }}
-    ],
-    "optimized_summary": "Tailored professional profile summary matching the role requirements."
-  }}
-}}
-"""
-        try:
-            ai_text = call_huggingface_llm(prompt, str(current_user.id), "resume_tailor", "cloud", db)
-            # Try parsing JSON
-            try:
-                # Strip markdown code blocks if present
-                clean_text = ai_text.strip()
-                if clean_text.startswith("```"):
-                    clean_text = clean_text.split("```")[1]
-                    if clean_text.startswith("json"):
-                        clean_text = clean_text[4:]
-                parsed_res = json.loads(clean_text)
-                return sanitize_tailored_resume(parsed_res)
-            except Exception:
-                logger.warning("Failed to parse Cloud LLM response as JSON. Falling back to deterministic.")
-                return fallback_response
-        except Exception as e:
-            logger.error(f"Cloud AI Tailor failed: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
-            
     return fallback_response
 
 @router.post("/sop")
@@ -384,3 +368,34 @@ def get_latest_document(
         "content": latest[1],
         "created_at": latest[2]
     }
+
+
+@router.get("/jd-strategy/{company_id}")
+def get_company_jd_strategy(
+    company_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.core.redis import get_jd_strategy_cache, set_jd_strategy_cache
+    
+    # Try Redis cache first
+    cached = get_jd_strategy_cache(company_id)
+    if cached is not None:
+        logger.info(f"Loaded JD Strategy for company {company_id} from Redis cache.")
+        return cached
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company drive not found.")
+
+    strategy = company.jd_strategy
+    if not strategy or not isinstance(strategy, dict) or not strategy.get("required_skills"):
+        from app.services.ai_service import generate_jd_strategy
+        strategy = generate_jd_strategy(company.jd_text or "")
+        company.jd_strategy = strategy
+        db.commit()
+
+    # Save to Redis
+    set_jd_strategy_cache(company_id, strategy)
+    return strategy
+

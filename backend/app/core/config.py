@@ -33,6 +33,34 @@ class Settings(BaseSettings):
     INGEST_AUTH_TOKEN: str = ""
     SUPABASE_URL: str = "https://fgsmxbabgumryumcirfj.supabase.co"
 
+    # --- Centralized AI service (AIProvider gateway) ---
+    # Email parser inference (Ollama in this container, or a remote parser Space)
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "qwen2.5:1.5b"
+    # Dedicated resume-generation Hugging Face Space (independent deployment).
+    # Empty = resume gateway falls back to HF router / local Ollama.
+    RESUME_AI_BASE_URL: str = ""
+    RESUME_AI_MODEL: str = "qwen2.5:3b"
+    RESUME_AI_AUTH_TOKEN: str = ""
+    # HF router fallback model for resume generation / JD analysis
+    HF_FALLBACK_MODEL: str = "meta-llama/Llama-3.3-70B-Instruct"
+    # Gateway behaviour
+    AI_REQUEST_TIMEOUT_SECONDS: int = 180
+    AI_MAX_RETRIES: int = 2               # retries per provider (exponential backoff)
+    AI_RETRY_BASE_DELAY_SECONDS: float = 2.0
+    AI_CIRCUIT_FAILURE_THRESHOLD: int = 4  # consecutive failures before circuit opens
+    AI_CIRCUIT_COOLDOWN_SECONDS: int = 120
+    AI_MAX_CONCURRENT_REQUESTS: int = 4    # per-process cap across all AI calls
+
+    # --- Resume generation worker ---
+    RESUME_WORKER_ENABLED: bool = True
+    RESUME_WORKER_CONCURRENCY: int = 2
+    RESUME_WORKER_POLL_SECONDS: float = 4.0
+    RESUME_JOB_MAX_RETRIES: int = 2
+    RESUME_JOB_STALE_MINUTES: int = 20
+    RESUME_JOBS_DAILY_LIMIT_PER_USER: int = 10
+    RESUME_JOBS_MAX_BACKLOG: int = 300     # reject new jobs beyond this queue depth
+
     class Config:
         case_sensitive = True
         env_file = ".env"

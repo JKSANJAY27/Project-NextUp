@@ -472,3 +472,90 @@ def call_huggingface_llm(
             """), {"err": str(e), "id": job_id})
             db.commit()
         raise e
+
+
+def generate_jd_strategy(jd_text: str) -> dict:
+    """
+    Extracts a detailed JD Strategy JSON from job description text.
+    Uses get_parser_gateway() to invoke the LLM chain.
+    """
+    from app.services.ai_provider import get_parser_gateway
+
+    if not jd_text or not jd_text.strip():
+        return {
+            "required_skills": [],
+            "preferred_skills": [],
+            "ats_keywords": [],
+            "programming_languages": [],
+            "frameworks": [],
+            "tools": [],
+            "certifications": [],
+            "experience_expectations": "Not specified.",
+            "project_preferences": "General software engineering projects.",
+            "resume_strategy": "Highlight core development projects and skills.",
+            "interview_topics": ["Data Structures & Algorithms"],
+            "role_summary": "Software Engineering candidate."
+        }
+
+    prompt = f"""Analyze the following Job Description (JD) text and extract a comprehensive JD Strategy.
+Provide structured insights to guide resume tailoring and interview prep.
+
+Job Description:
+{jd_text}
+
+Return ONLY a valid JSON object matching this schema exactly (no markdown blocks, no prefix explanations):
+{{
+  "required_skills": ["skill1", "skill2"],
+  "preferred_skills": ["skillA", "skillB"],
+  "ats_keywords": ["keyword1", "keyword2"],
+  "programming_languages": ["Python", "Go"],
+  "frameworks": ["Django", "React"],
+  "tools": ["Git", "Docker"],
+  "certifications": ["AWS Solutions Architect"],
+  "experience_expectations": "Brief summary of experience level or expectations mentioned.",
+  "project_preferences": "What kinds of projects (e.g. web, system, AI) are relevant.",
+  "resume_strategy": "Actionable advice on what bullets or accomplishments to highlight.",
+  "interview_topics": ["Topic 1", "Topic 2"],
+  "role_summary": "One sentence summary of the role."
+}}
+"""
+    try:
+        gateway = get_parser_gateway()
+        result = gateway.generate(
+            prompt,
+            system="You are an expert recruitment strategist. Extract the JD strategy JSON.",
+            max_tokens=1500,
+            temperature=0.1,
+            json_mode=True,
+            purpose="jd_strategy"
+        )
+        parsed = result.parse_json()
+        
+        # Ensure it has all keys
+        keys = [
+            "required_skills", "preferred_skills", "ats_keywords",
+            "programming_languages", "frameworks", "tools", "certifications",
+            "experience_expectations", "project_preferences", "resume_strategy",
+            "interview_topics", "role_summary"
+        ]
+        for key in keys:
+            if key not in parsed:
+                parsed[key] = [] if "skills" in key or "keywords" in key or "languages" in key or "frameworks" in key or "tools" in key or "certifications" in key or "topics" in key else ""
+        return parsed
+    except Exception as e:
+        logger.error(f"Failed to generate JD strategy: {str(e)}")
+        return {
+            "required_skills": [],
+            "preferred_skills": [],
+            "ats_keywords": [],
+            "programming_languages": [],
+            "frameworks": [],
+            "tools": [],
+            "certifications": [],
+            "experience_expectations": "Not specified.",
+            "project_preferences": "General software engineering projects.",
+            "resume_strategy": "Highlight core development projects and skills.",
+            "interview_topics": ["Data Structures & Algorithms"],
+            "role_summary": "Software Engineering candidate."
+        }
+

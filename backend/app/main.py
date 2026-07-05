@@ -81,10 +81,14 @@ def on_startup():
         logging.info("PostgreSQL: skipping create_all — tables managed via migrations.")
 
     start_scheduler()
+    from app.services.resume_worker import worker as resume_worker
+    resume_worker.start()
 
 @app.on_event("shutdown")
 def on_shutdown():
     shutdown_scheduler()
+    from app.services.resume_worker import worker as resume_worker
+    resume_worker.stop()
 
 @app.get("/")
 def read_root():

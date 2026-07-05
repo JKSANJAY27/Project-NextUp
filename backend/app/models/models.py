@@ -90,6 +90,7 @@ class Company(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     requires_review = Column(Boolean, default=False)
     eligibility_raw_text = Column(String, nullable=True)
+    jd_strategy = Column(JSON, default=dict)
 
     applications = relationship("Application", back_populates="company", cascade="all, delete-orphan")
     events = relationship("CompanyEvent", back_populates="company", cascade="all, delete-orphan")
@@ -426,13 +427,17 @@ class AiGenerationJob(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=True)
     job_type = Column(String, nullable=False) # 'resume_tailor', 'sop', 'cover_letter', 'jd_intelligence', 'interview_prep'
     request_source = Column(String, default="cloud") # 'browser', 'cloud', 'fallback'
+    custom_prompt = Column(String, nullable=True)
     model_used = Column(String)
     input_hash = Column(String(64))
     tokens_generated = Column(Integer)
     error_message = Column(String)
     status = Column(String, default="processing")
+    result_json = Column(JSON, nullable=True)
+    retry_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime)
 
