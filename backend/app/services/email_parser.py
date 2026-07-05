@@ -544,6 +544,7 @@ def parse_with_ollama(context_text: str) -> Dict[str, Any]:
         if response.status_code == 200:
             result = response.json()
             response_text = result.get("response", "{}").strip()
+            logger.info(f"Ollama raw response: {response_text}")
             parsed = repair_and_parse_json(response_text)
             if "parser_metadata" in parsed:
                 parsed["parser_metadata"]["model_used"] = f"ollama-{ollama_model}"
