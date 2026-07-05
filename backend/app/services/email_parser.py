@@ -633,8 +633,19 @@ def is_high_confidence(parsed: Dict[str, Any]) -> bool:
     if not ext or not isinstance(ext, dict):
         return False
 
-    overall = parsed.get("overall_confidence", 0.0)
-    if overall < 0.75:
+    def get_conf(d, key, default=1.0):
+        if not isinstance(d, dict):
+            return 0.0
+        v = d.get(key)
+        if v is None:
+            return default
+        try:
+            return float(v)
+        except:
+            return default
+
+    overall = get_conf(parsed, "overall_confidence", default=0.8)
+    if overall < 0.50:
         return False
 
     category = ext.get("email_category")
@@ -648,7 +659,7 @@ def is_high_confidence(parsed: Dict[str, Any]) -> bool:
         title_data = ann.get("title")
         if not title_data or not isinstance(title_data, dict):
             return False
-        if title_data.get("confidence", 0.0) < 0.80:
+        if get_conf(title_data, "confidence", default=0.8) < 0.50:
             return False
         return True
 
@@ -656,12 +667,12 @@ def is_high_confidence(parsed: Dict[str, Any]) -> bool:
         field_data = ext.get(field)
         if not field_data or not isinstance(field_data, dict):
             return False
-        if field_data.get("confidence", 0.0) < 0.80:
+        if get_conf(field_data, "confidence", default=0.8) < 0.50:
             return False
 
     deadline = ext.get("deadline_iso")
     if deadline and isinstance(deadline, dict) and deadline.get("value"):
-        if deadline.get("confidence", 0.0) < 0.80:
+        if get_conf(deadline, "confidence", default=0.8) < 0.50:
             return False
 
     return True
