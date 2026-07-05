@@ -1,7 +1,7 @@
 FROM python:3.9-slim
 
-# Install curl to download Ollama binary
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# Install curl and zstd to download and extract Ollama binary
+RUN apt-get update && apt-get install -y curl zstd && rm -rf /var/lib/apt/lists/*
 
 # Install Ollama using official installer script
 RUN curl -fsSL https://ollama.com/install.sh | sh
