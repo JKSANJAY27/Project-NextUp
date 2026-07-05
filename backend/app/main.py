@@ -130,12 +130,13 @@ def admin_reset_circuits(request: Request):
     Admin endpoint: reset all AI gateway circuit breakers.
     Use this after a provider (e.g. the HF Space) recovers from failures
     without needing to restart the Render server.
-    Secured by the INGEST_AUTH_TOKEN bearer token.
+    When INGEST_AUTH_TOKEN is configured, requires 'Authorization: Bearer <token>'.
     """
-    auth_header = request.headers.get("Authorization", "")
-    expected = f"Bearer {settings.INGEST_AUTH_TOKEN}"
-    if not settings.INGEST_AUTH_TOKEN or auth_header != expected:
-        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+    if settings.INGEST_AUTH_TOKEN:
+        auth_header = request.headers.get("Authorization", "")
+        expected = f"Bearer {settings.INGEST_AUTH_TOKEN}"
+        if auth_header != expected:
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
     from app.services.ai_provider import reset_all_circuits
     reset_all_circuits()
     return {"status": "ok", "message": "All AI circuit breakers have been reset to closed state."}
@@ -145,12 +146,13 @@ def admin_reset_circuits(request: Request):
 def admin_ai_health(request: Request):
     """
     Admin endpoint: inspect AI gateway health and circuit breaker states.
-    Secured by the INGEST_AUTH_TOKEN bearer token.
+    When INGEST_AUTH_TOKEN is configured, requires 'Authorization: Bearer <token>'.
     """
-    auth_header = request.headers.get("Authorization", "")
-    expected = f"Bearer {settings.INGEST_AUTH_TOKEN}"
-    if not settings.INGEST_AUTH_TOKEN or auth_header != expected:
-        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+    if settings.INGEST_AUTH_TOKEN:
+        auth_header = request.headers.get("Authorization", "")
+        expected = f"Bearer {settings.INGEST_AUTH_TOKEN}"
+        if auth_header != expected:
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
     from app.services.ai_provider import get_parser_gateway, get_resume_gateway
     return {
         "parser": get_parser_gateway().health(),
