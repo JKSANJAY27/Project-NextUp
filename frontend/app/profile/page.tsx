@@ -169,9 +169,14 @@ export default function ProfilePage() {
       setHasArrears(user.has_arrears || false);
 
       // Decrypt sensitive Neo ID field
-      const dNeoId = user.neo_id_enc && user.neo_id_enc !== "UNSET" 
-        ? await decryptData(user.neo_id_enc, encryptionKey) 
-        : "";
+      let dNeoId = "";
+      try {
+        if (user.neo_id_enc && user.neo_id_enc !== "UNSET") {
+          dNeoId = await decryptData(user.neo_id_enc, encryptionKey);
+        }
+      } catch (decErr) {
+        console.error("Failed to decrypt Neo ID (key mismatch), resetting field:", decErr);
+      }
 
       setNeoId(dNeoId);
       setUnlocked(true);
@@ -258,9 +263,17 @@ export default function ProfilePage() {
       const key = await deriveKey(unlockPassword, emailSalt);
       const keyHex = await exportKeyToHex(key);
 
-      // Verify key is correct by attempting to decrypt neo_id_enc (if it exists)
+      // Attempt to verify key by decrypting neo_id_enc, but don't block unlock
+      // if it fails — the field may have been encrypted with an older password.
+      // In that case, the field will simply be cleared so the user can re-enter it.
       if (user.neo_id_enc && user.neo_id_enc !== "UNSET") {
-        await decryptData(user.neo_id_enc, key);
+        try {
+          await decryptData(user.neo_id_enc, key);
+        } catch {
+          // Key mismatch for this specific field — stale encrypted data.
+          // Accept the unlock anyway; decryptProfile will reset the field to "".
+          console.warn("neo_id_enc could not be decrypted with current key — field will be cleared.");
+        }
       }
 
       setEncryptionKey(key, keyHex);
