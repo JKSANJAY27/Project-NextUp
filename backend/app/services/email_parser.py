@@ -1777,11 +1777,12 @@ def parse_placement_email(
     logger.info("Starting email parsing — attempting Ollama...")
     parsed = parse_with_ollama(context_text)
 
-    if is_high_confidence(parsed):
-        logger.info("Ollama returned HIGH confidence. Using Ollama result.")
+    # Always trust and use Ollama's JSON response if it succeeded to parse
+    if parsed and isinstance(parsed, dict) and parsed.get("extracted_data"):
+        logger.info("Ollama parse succeeded. Using Ollama result.")
         return ground_role_facts_in_source(parsed, email_body)
 
-    logger.info("Ollama low confidence or failed. Escalating to HuggingFace...")
+    logger.info("Ollama parsing failed or returned empty. Escalating to HuggingFace...")
     parsed_hf = parse_with_huggingface(context_text)
 
     if parsed_hf and parsed_hf.get("extracted_data"):
