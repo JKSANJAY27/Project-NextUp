@@ -1,0 +1,44 @@
+name: Sync to Hugging Face Spaces
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'backend/**'
+
+jobs:
+  sync-to-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Push Backend to Space Root
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          # Configure Git
+          git config --global user.name "github-actions-bot"
+          git config --global user.email "support+actions@github.com"
+          
+          # Clone the Hugging Face space repository
+          git clone https://SanjayJK:$HF_TOKEN@huggingface.co/spaces/SanjayJK/nextup hf_space
+          
+          # Clean existing files in the space clone except .git
+          find hf_space -mindepth 1 -maxdepth 1 ! -name ".git" -exec rm -rf {} +
+          
+          # Copy the backend folder contents to the space root
+          cp -r backend/* hf_space/
+          
+          # Commit and push
+          cd hf_space
+          git add -A
+          # Check if there are changes before committing
+          if git diff-index --quiet HEAD --; then
+            echo "No changes to sync"
+          else
+            git commit -m "Auto-sync backend updates from GitHub Actions"
+            git push origin main --force
+          fi
