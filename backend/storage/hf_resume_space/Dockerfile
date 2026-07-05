@@ -3,8 +3,8 @@ FROM python:3.9-slim
 # Install curl to download Ollama binary
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
-# Download and install Ollama linux binary
-RUN curl -L https://ollama.com/download/ollama-linux-amd64 -o /usr/bin/ollama && chmod +x /usr/bin/ollama
+# Install Ollama using official installer script
+RUN curl -fsSL https://ollama.com/install.sh | sh
 
 WORKDIR /code
 
