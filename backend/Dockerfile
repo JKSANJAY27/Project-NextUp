@@ -1,20 +1,40 @@
 FROM python:3.11-slim
 
-WORKDIR /app
-
-# Install system dependencies (including compiler for native packages if needed, and curl)
+# Install system dependencies, curl, procps (for pkill), tesseract-ocr, etc.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
+    procps \
     libpq-dev \
     tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Ollama
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
+# Configure Ollama models to reside inside a writable project subfolder
+ENV OLLAMA_MODELS=/app/ollama/models
+
+WORKDIR /app
+
+# Copy and install python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy all backend files
 COPY . .
 
+# Run Ollama briefly during build time, pull model, and clean up processes so it's baked into the image
+RUN ollama serve & \
+    sleep 5 && \
+    ollama pull qwen2.5:1.5b && \
+    pkill ollama
+
+# Expose port 8000 (standard backend port, can be overridden by HF Space $PORT)
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Add executable permissions to start script
+RUN chmod +x /app/start.sh
+
+CMD ["/app/start.sh"]
+
