@@ -302,7 +302,7 @@ def repair_and_parse_json(raw_str: str) -> Dict[str, Any]:
 
 
 def get_parser_prompt(context_text: str) -> str:
-    """You are a structured data extractor and classifier for university placement emails.
+    return f"""You are a structured data extractor and classifier for university placement emails.
 Analyze the following email (subject, body, and any attachment text) and extract the required fields.
 Output ONLY a valid raw JSON object — no markdown, no explanation, no code fences.
 
@@ -538,7 +538,7 @@ def parse_with_ollama(context_text: str) -> Dict[str, Any]:
                     "num_predict": 1200
                 }
             },
-            timeout=10
+            timeout=120
         )
         if response.status_code == 200:
             result = response.json()
