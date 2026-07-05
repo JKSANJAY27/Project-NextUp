@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "qwen2.5:1.5b"
     # Dedicated resume-generation Hugging Face Space (independent deployment).
     # Empty = resume gateway falls back to HF router / local Ollama.
-    RESUME_AI_BASE_URL: str = ""
+    RESUME_AI_BASE_URL: str = os.getenv("HUGGINGFACE_RESUME_SPACE_URL", "")
     RESUME_AI_MODEL: str = "qwen2.5:3b"
     RESUME_AI_AUTH_TOKEN: str = ""
     # HF router fallback model for resume generation / JD analysis
