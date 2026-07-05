@@ -30,39 +30,20 @@ def generate(req: GenerateRequest):
         # Mock payload if token is missing
         return {"text": '{"optimized_summary": "Tailored summary from mock space.", "optimized_skills": [], "optimized_projects": []}'}
 
-    import requests
+    from huggingface_hub import InferenceClient
     model_id = req.model or "Qwen/Qwen2.5-7B-Instruct"
-    api_url = f"https://api-inference.huggingface.co/models/{model_id}"
-    headers = {"Authorization": f"Bearer {hf_token}"}
     
     # Compile prompt with system instruction
     full_prompt = f"{req.system}\n\n{req.prompt}" if req.system else req.prompt
 
     try:
-        response = requests.post(
-            api_url,
-            headers=headers,
-            json={
-                "inputs": full_prompt,
-                "parameters": {
-                    "max_new_tokens": req.max_tokens,
-                    "temperature": req.temperature,
-                    "return_full_text": False
-                }
-            },
-            timeout=30
+        client = InferenceClient(token=hf_token)
+        generated_text = client.text_generation(
+            prompt=full_prompt,
+            model=model_id,
+            max_new_tokens=req.max_tokens or 1024,
+            temperature=req.temperature or 0.2,
         )
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-            
-        res_json = response.json()
-        if isinstance(res_json, list) and len(res_json) > 0:
-            generated_text = res_json[0].get("generated_text", "").strip()
-        elif isinstance(res_json, dict):
-            generated_text = res_json.get("generated_text", "").strip()
-        else:
-            generated_text = str(res_json).strip()
-            
-        return {"text": generated_text}
+        return {"text": generated_text.strip()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
