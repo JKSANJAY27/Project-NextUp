@@ -122,3 +122,37 @@ def on_shutdown():
 @app.get("/")
 def read_root():
     return {"message": f"Welcome to {settings.PROJECT_NAME} API. Access docs at /docs."}
+
+
+@app.post("/api/admin/reset-circuits")
+def admin_reset_circuits(request: Request):
+    """
+    Admin endpoint: reset all AI gateway circuit breakers.
+    Use this after a provider (e.g. the HF Space) recovers from failures
+    without needing to restart the Render server.
+    Secured by the INGEST_AUTH_TOKEN bearer token.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    expected = f"Bearer {settings.INGEST_AUTH_TOKEN}"
+    if not settings.INGEST_AUTH_TOKEN or auth_header != expected:
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+    from app.services.ai_provider import reset_all_circuits
+    reset_all_circuits()
+    return {"status": "ok", "message": "All AI circuit breakers have been reset to closed state."}
+
+
+@app.get("/api/admin/ai-health")
+def admin_ai_health(request: Request):
+    """
+    Admin endpoint: inspect AI gateway health and circuit breaker states.
+    Secured by the INGEST_AUTH_TOKEN bearer token.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    expected = f"Bearer {settings.INGEST_AUTH_TOKEN}"
+    if not settings.INGEST_AUTH_TOKEN or auth_header != expected:
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+    from app.services.ai_provider import get_parser_gateway, get_resume_gateway
+    return {
+        "parser": get_parser_gateway().health(),
+        "resume": get_resume_gateway().health(),
+    }

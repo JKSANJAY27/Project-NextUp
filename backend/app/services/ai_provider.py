@@ -410,6 +410,14 @@ class AIGateway:
         with self._lock:
             return self._metrics.snapshot()
 
+    def reset_circuits(self):
+        """Reset all circuit breakers to closed state (e.g. after a provider recovers)."""
+        with self._lock:
+            for state in self._circuits.values():
+                state.consecutive_failures = 0
+                state.opened_at = 0.0
+        logger.info("[ai:%s] all circuit breakers reset", self.name)
+
     def health(self) -> Dict[str, Any]:
         return {
             "gateway": self.name,
@@ -475,23 +483,58 @@ def get_parser_gateway() -> AIGateway:
 def get_resume_gateway() -> AIGateway:
     """
     Resume generation chain: dedicated resume Space -> HF router -> local Ollama.
-    The local Ollama tier is last so resume work only lands on the parser
-    container when both dedicated tiers are unreachable.
+
+    Provider order:
+      1. RemoteSpaceProvider (dedicated HF Space) — primary, free, unlimited.
+         Only added when HUGGINGFACE_RESUME_SPACE_URL / RESUME_AI_BASE_URL is set.
+      2. HFRouterProvider — escalation fallback (uses HF API credits).
+      3. OllamaProvider — last resort; only added when DISABLE_OLLAMA != 'true'
+         AND OLLAMA_BASE_URL is a real local endpoint (not a remote HF Space URL).
     """
+    import os
     global _resume_gateway
     with _gateway_lock:
         if _resume_gateway is None:
             providers: List[AIProvider] = []
+
+            # Tier 1: dedicated resume HF Space (free, unlimited, preferred)
             if settings.RESUME_AI_BASE_URL:
                 providers.append(RemoteSpaceProvider(
                     settings.RESUME_AI_BASE_URL, settings.RESUME_AI_MODEL,
                     settings.RESUME_AI_AUTH_TOKEN, name="resume-space",
                 ))
+
+            # Tier 2: HF router (uses HF API credits — escalation only)
             providers.append(HFRouterProvider(
                 settings.HF_FALLBACK_MODEL, settings.HF_API_TOKEN, name="resume-hf-router",
             ))
-            providers.append(OllamaProvider(
-                settings.OLLAMA_BASE_URL, settings.OLLAMA_MODEL, name="resume-local-ollama",
-            ))
+
+            # Tier 3: local Ollama — only when it is actually a local process.
+            # DISABLE_OLLAMA=true skips it entirely (same guard as the parser gateway).
+            # We also skip it when OLLAMA_BASE_URL points to a remote HF Space URL
+            # because OllamaProvider speaks the /api/tags + /api/generate protocol
+            # which remote HF Spaces do not expose.
+            disable_ollama = os.getenv("DISABLE_OLLAMA", "").lower() == "true"
+            ollama_url = settings.OLLAMA_BASE_URL or ""
+            is_local_ollama = ollama_url.startswith(("http://localhost", "http://127.0.0.1"))
+            if not disable_ollama and is_local_ollama:
+                providers.append(OllamaProvider(
+                    ollama_url, settings.OLLAMA_MODEL, name="resume-local-ollama",
+                ))
+
             _resume_gateway = AIGateway(providers, name="resume")
+            logger.info(
+                "[resume-gateway] initialised with providers: %s",
+                [p.name for p in providers],
+            )
         return _resume_gateway
+
+
+def reset_all_circuits():
+    """Reset circuit breakers for all instantiated gateways (call after provider recovery)."""
+    with _gateway_lock:
+        if _parser_gateway is not None:
+            _parser_gateway.reset_circuits()
+        if _resume_gateway is not None:
+            _resume_gateway.reset_circuits()
+    logger.info("All AI gateway circuits have been reset.")
