@@ -17,8 +17,6 @@ latex_jinja_env = jinja2.Environment(
     variable_end_string='}',
     comment_start_string='\comment{',
     comment_end_string='}',
-    line_statement_prefix='%%',
-    line_comment_prefix='%#',
     trim_blocks=True,
     autoescape=False,
     loader=jinja2.FileSystemLoader(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "storage", "latex_templates"))
@@ -146,7 +144,7 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
     linkedin = personal.get("linkedin", "")
     
     # 1. Header (Centered Name & Contact Info)
-    page.insert_text((margin, y), name, fontsize=16, fontname="helv-bold", color=(0.1, 0.1, 0.1))
+    page.insert_text((margin, y), name, fontsize=16, fontname="hebo", color=(0.1, 0.1, 0.1))
     y += 24
     
     contact_details = []
@@ -160,18 +158,20 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
     # Draw horizontal divider
     shape = page.new_shape()
     shape.draw_line(fitz.Point(margin, y), fitz.Point(595 - margin, y))
-    shape.commit(color=(0.8, 0.8, 0.8), width=1)
+    shape.finish(color=(0.8, 0.8, 0.8), width=1)
+    shape.commit()
     y += 18
     
     # Helper to insert section title
     def add_section_header(title):
         nonlocal y
         y += 10
-        page.insert_text((margin, y), title.upper(), fontsize=11, fontname="helv-bold", color=(0.2, 0.2, 0.5))
+        page.insert_text((margin, y), title.upper(), fontsize=11, fontname="hebo", color=(0.2, 0.2, 0.5))
         y += 14
         shape = page.new_shape()
         shape.draw_line(fitz.Point(margin, y - 6), fitz.Point(180, y - 6))
-        shape.commit(color=(0.2, 0.2, 0.5), width=1.5)
+        shape.finish(color=(0.2, 0.2, 0.5), width=1.5)
+        shape.commit()
         
     # 2. Professional Summary
     summary = content_json.get("summary", "")
@@ -193,9 +193,9 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
             gpa = edu.get("gpa", "")
             
             edu_str = f"{deg} - {inst} ({dates})"
-            page.insert_text((margin, y), edu_str, fontsize=9.5, fontname="helv-bold", color=(0.1, 0.1, 0.1))
+            page.insert_text((margin, y), edu_str, fontsize=9.5, fontname="hebo", color=(0.1, 0.1, 0.1))
             if gpa:
-                page.insert_text((595 - margin - 80, y), f"GPA: {gpa}", fontsize=9.5, fontname="helv-bold", color=(0.1, 0.1, 0.1))
+                page.insert_text((595 - margin - 80, y), f"GPA: {gpa}", fontsize=9.5, fontname="hebo", color=(0.1, 0.1, 0.1))
             y += 16
             
     # 4. Skills
@@ -225,7 +225,7 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
             desc = exp.get("description", "")
             
             exp_header = f"{role} at {comp} ({dates})"
-            page.insert_text((margin, y), exp_header, fontsize=9.5, fontname="helv-bold", color=(0.1, 0.1, 0.1))
+            page.insert_text((margin, y), exp_header, fontsize=9.5, fontname="hebo", color=(0.1, 0.1, 0.1))
             y += 14
             
             if desc:
@@ -247,7 +247,7 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
             title = proj.get("title", "")
             desc = proj.get("description", "")
             
-            page.insert_text((margin, y), title, fontsize=9.5, fontname="helv-bold", color=(0.1, 0.1, 0.1))
+            page.insert_text((margin, y), title, fontsize=9.5, fontname="hebo", color=(0.1, 0.1, 0.1))
             y += 14
             
             if desc:
