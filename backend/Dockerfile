@@ -1,12 +1,13 @@
 FROM python:3.11-slim
 
-# Install system dependencies, curl, procps (for pkill), tesseract-ocr, etc.
+# Install system dependencies, curl, procps (for pkill), tesseract-ocr, zstd, etc.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     procps \
     libpq-dev \
     tesseract-ocr \
+    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Ollama
