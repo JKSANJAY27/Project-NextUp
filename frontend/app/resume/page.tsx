@@ -17,7 +17,6 @@ import {
   RefreshCw,
   Download
 } from "lucide-react";
-import { useAppStore } from "@/lib/store";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -42,7 +41,6 @@ type PageView = "configure" | "progress" | "review" | "done";
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function ResumePage() {
-  const encryptionKey = useAppStore((state) => state.encryptionKey);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   // Saved resume state
   const [savedResume, setSavedResume] = useState<ResumeData | null>(null);
@@ -51,9 +49,13 @@ export default function ResumePage() {
   const [loadingResume, setLoadingResume] = useState(true);
   const [resumeError, setResumeError] = useState("");
 
-  // Company selection
+  // Company selection — preselected via /resume?company=<id> deep link
+  // (used by the drive workspace's "Create Tailored Resume" action)
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("company") || "";
+  });
   const [loadingCompanies, setLoadingCompanies] = useState(true);
   const [customPrompt, setCustomPrompt] = useState("");
 
@@ -68,6 +70,8 @@ export default function ResumePage() {
   const [jobResult, setJobResult] = useState<Record<string, unknown> | null>(null);
   const [startingJob, setStartingJob] = useState(false);
   const [startError, setStartError] = useState("");
+  // Tailored output returned by accept-changes (master resume is untouched)
+  const [tailoredPdf, setTailoredPdf] = useState<{ pdf_base64?: string; pdf_filename?: string } | null>(null);
 
   // ─── Loaders ─────────────────────────────────────────────────────────────
 
@@ -232,48 +236,37 @@ export default function ResumePage() {
   };
 
   const handleDownloadPDF = async () => {
-    if (!encryptionKey) {
-      alert("Encryption key missing. Please log in again to unlock your Vault.");
+    if (!tailoredPdf?.pdf_base64) {
+      alert("The PDF could not be compiled on the server. Your tailored resume JSON was still saved to this drive's workspace.");
       return;
     }
     setDownloadingPdf(true);
     try {
-      const res = await api.get("/resumes/me");
-      const { pdf_file_enc, pdf_filename_enc } = res.data;
-      if (!pdf_file_enc) {
-        alert("No compiled PDF found. Try re-saving your resume.");
-        setDownloadingPdf(false);
-        return;
-      }
-      
-      const { decryptData } = await import("@/lib/crypto");
-      const decryptedBase64 = await decryptData(pdf_file_enc, encryptionKey);
-      const filename = pdf_filename_enc ? await decryptData(pdf_filename_enc, encryptionKey) : "tailored_resume.pdf";
-      
       // Convert base64 string to Blob
-      const byteCharacters = atob(decryptedBase64);
+      const byteCharacters = atob(tailoredPdf.pdf_base64);
       const byteNumbers = new Array(byteCharacters.length);
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i);
       }
       const byteArray = new Uint8Array(byteNumbers);
       const blob = new Blob([byteArray], { type: "application/pdf" });
-      
+
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = filename;
+      link.download = tailoredPdf.pdf_filename || "tailored_resume.pdf";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
     } catch (err) {
       console.error("Failed to download PDF:", err);
-      alert("Failed to decrypt and download compiled PDF.");
+      alert("Failed to download the compiled PDF.");
     } finally {
       setDownloadingPdf(false);
     }
   };
 
-  const handleChangesAccepted = () => {
+  const handleChangesAccepted = (result: { pdf_base64?: string; pdf_filename?: string }) => {
+    setTailoredPdf(result);
     setView("done");
   };
 
@@ -320,7 +313,7 @@ export default function ResumePage() {
               REVIEW OPTIMIZATIONS
             </h1>
             <p className="text-xs text-muted-foreground mt-1">
-              Accept or discard each AI suggestion before merging into your master resume.
+              Accept or discard each AI suggestion — accepted changes go into a company-specific copy.
             </p>
           </div>
           <div className="border border-border rounded-2xl bg-card/30 backdrop-blur p-6">
@@ -349,11 +342,12 @@ export default function ResumePage() {
           </div>
           <div className="space-y-2">
             <h2 className="text-xl font-mono font-bold tracking-tighter">
-              RESUME UPDATED
+              TAILORED RESUME READY
             </h2>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              Your master resume has been merged with the accepted AI suggestions and compiled to PDF.
-              The updated version is securely stored in your vault.
+              A company-specific copy was compiled with your accepted suggestions and saved to this
+              drive&apos;s workspace. Your master resume stays untouched, so you can tailor it again
+              for every other drive.
             </p>
           </div>
           <div className="flex gap-3 justify-center">

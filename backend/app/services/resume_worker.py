@@ -70,6 +70,7 @@ class ResumeWorker:
                 if job:
                     # Lock and set status to processing
                     job.status = "processing"
+                    job.locked_at = datetime.utcnow()
                     db.commit()
                     job_id = job.id
                     logger.info(f"Picked up resume generation job {job_id} for processing.")
@@ -88,9 +89,12 @@ class ResumeWorker:
 
     def _recover_stale_jobs(self, db: Session):
         stale_limit = datetime.utcnow() - timedelta(minutes=settings.RESUME_JOB_STALE_MINUTES)
+        # Stale = claimed by a worker (locked_at) longer than the limit ago.
+        # Jobs from before the locked_at column fall back to created_at.
         stale_jobs = db.query(AiGenerationJob).filter(
             AiGenerationJob.status == "processing",
-            AiGenerationJob.created_at < stale_limit
+            (AiGenerationJob.locked_at < stale_limit) |
+            ((AiGenerationJob.locked_at.is_(None)) & (AiGenerationJob.created_at < stale_limit))
         ).all()
 
         if stale_jobs:

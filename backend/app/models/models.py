@@ -438,6 +438,12 @@ class AiGenerationJob(Base):
     status = Column(String, default="processing")
     result_json = Column(JSON, nullable=True)
     retry_count = Column(Integer, default=0)
+    # Snapshot of the decrypted inputs (resume + profile), server-key encrypted.
+    # Taken at submission while the user's session key is guaranteed present,
+    # so the background worker never depends on the in-memory session cache.
+    input_payload_enc = Column(String, nullable=True)
+    # Set when a worker claims the job; used for stale-job recovery.
+    locked_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime)
 

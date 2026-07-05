@@ -87,9 +87,17 @@ scheduler = BackgroundScheduler()
 
 def start_scheduler():
     if not scheduler.running:
-        scheduler.add_job(process_queued_jobs_cron, "interval", minutes=5, id="queue_processor_job", replace_existing=True)
-        scheduler.add_job(refresh_views_cron, "interval", minutes=30, id="view_refresher_job", replace_existing=True)
-        scheduler.add_job(opportunity_lifecycle_cron, "interval", hours=6, id="opportunity_lifecycle_job", replace_existing=True)
+        # coalesce + misfire_grace_time: if a tick is delayed because a long
+        # LLM parse is still running (max_instances=1), run ONE catch-up tick
+        # instead of silently skipping — a skipped tick was how the queue
+        # froze for days with 18 pending emails.
+        scheduler.add_job(
+            process_queued_jobs_cron, "interval", minutes=5,
+            id="queue_processor_job", replace_existing=True,
+            coalesce=True, misfire_grace_time=600, max_instances=1,
+        )
+        scheduler.add_job(refresh_views_cron, "interval", minutes=30, id="view_refresher_job", replace_existing=True, coalesce=True, misfire_grace_time=600)
+        scheduler.add_job(opportunity_lifecycle_cron, "interval", hours=6, id="opportunity_lifecycle_job", replace_existing=True, coalesce=True, misfire_grace_time=3600)
         scheduler.start()
         logger.info("Background queue processor, view refresher, and opportunity lifecycle scheduler started.")
         # Run opportunity lifecycle check once on startup immediately
@@ -150,6 +158,37 @@ def recover_stale_jobs(db: Session):
     except Exception as e:
         db.rollback()
         logger.error(f"Error recovering stale jobs: {str(e)}")
+
+    # Auto-retry failed parses. Previously 'failed' jobs were stranded forever
+    # (the queue only selects 'pending'), so a transient AI outage — e.g. the
+    # HF router returning 402 — permanently dropped those emails (Groww,
+    # Valuelabs, ...). Re-queue them with a time backoff; after
+    # PARSER_MAX_AI_RETRIES attempts the processor falls back to regex, and
+    # after 5 attempts jobs still go to dead_letter.
+    try:
+        backoff_minutes = settings.PARSER_FAILED_RETRY_MINUTES
+        if is_sqlite:
+            result = db.execute(text(f"""
+                UPDATE raw_ingestion_jobs
+                SET status = 'pending'
+                WHERE status = 'failed'
+                  AND retry_count < 5
+                  AND (locked_at IS NULL OR locked_at < datetime('now', '-{backoff_minutes} minutes'))
+            """))
+        else:
+            result = db.execute(text(f"""
+                UPDATE raw_ingestion_jobs
+                SET status = 'pending'
+                WHERE status = 'failed'
+                  AND retry_count < 5
+                  AND (locked_at IS NULL OR locked_at < NOW() - INTERVAL '{backoff_minutes} minutes')
+            """))
+        db.commit()
+        if result.rowcount > 0:
+            logger.info(f"Re-queued {result.rowcount} failed raw_ingestion_jobs for retry.")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error re-queueing failed jobs: {str(e)}")
 
 def refresh_materialized_views(db: Session):
     """
@@ -365,8 +404,11 @@ def process_event_attachments(db: Session, event: CompanyEvent, attachments: lis
                 jd_info = parse_job_description(file_bytes)
                 jd_text = jd_info.get("jd_text", "")
                 required_skills = jd_info.get("skills", [])
-                
-                company.jd_text = jd_text
+
+                # PDF JD is the richest source — but never clobber existing
+                # JD text with an empty extraction (e.g. scanned-image PDFs).
+                if jd_text:
+                    company.jd_text = jd_text
                 company.jd_required_skills = required_skills
                 company.jd_ats_keywords = jd_info.get("ats_keywords", [])
                 
@@ -529,7 +571,9 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
             try:
                 logger.info(f"Reconciliation: Generating JD Strategy for company {company.name} (ID: {company.id})...")
                 from app.services.ai_service import generate_jd_strategy
-                strategy = generate_jd_strategy(company.jd_text)
+                strategy = generate_jd_strategy(
+                    company.jd_text, role=company.role, company_name=company.name
+                )
                 if strategy and (strategy.get("required_skills") or strategy.get("role_summary")):
                     company.jd_strategy = strategy
                     logger.info(f"Reconciliation: Saved JD Strategy for company {company.name}.")
@@ -557,10 +601,18 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
         process_notification_jobs(db)
 
 def process_queued_jobs_cron():
-    """Wrapper function for cron trigger (uses own session)."""
+    """Cron tick: drain up to PARSER_JOBS_PER_TICK pending emails.
+
+    One-per-tick meant a burst of N emails took N*5 minutes to ingest and the
+    queue could never catch up after an outage. In-container parses take
+    ~2-3 minutes each, so a small batch per tick keeps CPU pressure bounded
+    while still draining backlogs.
+    """
     db = SessionLocal()
     try:
-        process_queued_jobs(db)
+        for _ in range(max(1, settings.PARSER_JOBS_PER_TICK)):
+            if not process_queued_jobs(db):
+                break  # queue empty
     finally:
         db.close()
 
@@ -658,8 +710,12 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
         
         email_timestamp = datetime.fromisoformat(email_timestamp_str.replace("Z", "+00:00")) if email_timestamp_str else datetime.utcnow()
         
-        # 3. Pre-extract attachment text to provide full context to LLM
+        # 3. Pre-extract attachment text to provide full context to LLM.
+        # jd_pdf_full_text keeps the (much longer) untruncated JD text so it
+        # can be stored on the company for JD-strategy generation and resume
+        # tailoring — the parser prompt itself only gets a capped excerpt.
         attachment_texts = []
+        jd_pdf_full_text = ""
         for att in attachments:
             filename = att.get("filename", "")
             base64_data = att.get("base64_data", "")
@@ -673,7 +729,9 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                     from app.services.pdf_extractor import extract_text_from_pdf
                     txt = extract_text_from_pdf(file_bytes)
                     if txt:
-                        attachment_texts.append(f"--- ATTACHMENT (PDF): {filename} ---\n{txt[:1200]}")
+                        attachment_texts.append(f"--- ATTACHMENT (PDF): {filename} ---\n{txt[:4000]}")
+                        if len(txt) > len(jd_pdf_full_text):
+                            jd_pdf_full_text = txt[:20000]
                 except Exception as e:
                     logger.warning(f"Failed to extract PDF text from {filename}: {str(e)}")
 
@@ -692,8 +750,25 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
 
         attachment_text = "\n\n".join(attachment_texts)
 
-        # 4. Parse Email Body with Escalating LLM chain
-        raw_parsed_info = parse_placement_email(body, subject, attachment_text, email_timestamp=email_timestamp)
+        # 4. Parse Email Body via the AI gateway. The LLM gets
+        # PARSER_MAX_AI_RETRIES attempts (spread across cron cycles via the
+        # failed-job re-queue); after that the regex fallback guarantees the
+        # email is still ingested — an AI outage must never lose emails.
+        from app.services.ai_provider import AIUnavailableError
+        try:
+            raw_parsed_info = parse_placement_email(body, subject, attachment_text, email_timestamp=email_timestamp)
+        except AIUnavailableError as ai_err:
+            if (job.retry_count or 0) < settings.PARSER_MAX_AI_RETRIES:
+                raise  # marked failed; auto-retried on a later cron tick
+            logger.warning(
+                f"Job {job.id}: AI providers exhausted after {job.retry_count} retries "
+                f"({str(ai_err)[:200]}). Falling back to regex parser."
+            )
+            from app.services.email_parser import ground_role_facts_in_source
+            raw_parsed_info = ground_role_facts_in_source(
+                build_regex_fallback_response(body, subject, email_timestamp=email_timestamp),
+                body,
+            )
         
         # Save raw parsed response into DB
         job.parsed_output = raw_parsed_info
@@ -1405,23 +1480,45 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             if has_attachments:
                 log_execution_stage(db, job.id, "ATTACHMENTS_PROCESSED", "SUCCESS")
                 
-        # Generate JD Strategy for companies if not already generated
+        # Store JD text + generate the reusable JD Strategy (once per drive).
+        # Preference order for JD text: attached JD PDF (richest) > email body.
+        # The strategy JSON is cached on the company and reused by every
+        # student's resume-tailoring request — it is never regenerated unless
+        # the JD text itself changes (jd_hash comparison).
+        import hashlib as _hashlib
         for event in processed_events:
             company = event.company
-            # If jd_text is not set, fall back to email body (for text-only announcements)
-            if not company.jd_text and body:
-                company.jd_text = body
-            
-            if company.jd_text and (not company.jd_strategy or not isinstance(company.jd_strategy, dict) or not company.jd_strategy.get("required_skills")):
-                try:
-                    logger.info(f"Generating JD Strategy for company {company.name} (ID: {company.id})...")
-                    from app.services.ai_service import generate_jd_strategy
-                    strategy = generate_jd_strategy(company.jd_text)
-                    if strategy and (strategy.get("required_skills") or strategy.get("role_summary")):
-                        company.jd_strategy = strategy
-                        logger.info(f"Successfully saved JD Strategy for company {company.name}.")
-                except Exception as e:
-                    logger.error(f"Failed to generate JD strategy for company {company.name} in job: {e}")
+
+            best_jd_text = jd_pdf_full_text or company.jd_text or body or ""
+            if best_jd_text and best_jd_text != (company.jd_text or ""):
+                # Upgrade stored JD when we found a richer source (e.g. PDF)
+                if not company.jd_text or len(best_jd_text) > len(company.jd_text):
+                    company.jd_text = best_jd_text
+
+            if not company.jd_text:
+                continue
+
+            jd_hash = _hashlib.sha256(company.jd_text.encode("utf-8")).hexdigest()[:16]
+            existing = company.jd_strategy if isinstance(company.jd_strategy, dict) else {}
+            strategy_is_current = (
+                existing.get("required_skills")
+                and existing.get("jd_hash") == jd_hash
+            )
+            if strategy_is_current:
+                continue
+
+            try:
+                logger.info(f"Generating JD Strategy for company {company.name} (ID: {company.id})...")
+                from app.services.ai_service import generate_jd_strategy
+                strategy = generate_jd_strategy(
+                    company.jd_text, role=company.role, company_name=company.name
+                )
+                if strategy and (strategy.get("required_skills") or strategy.get("role_summary")):
+                    strategy["jd_hash"] = jd_hash
+                    company.jd_strategy = strategy
+                    logger.info(f"Successfully saved JD Strategy for company {company.name}.")
+            except Exception as e:
+                logger.error(f"Failed to generate JD strategy for company {company.name} in job: {e}")
 
         # 7. Complete job successfully
         job.status = 'completed'

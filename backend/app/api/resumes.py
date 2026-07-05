@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models.models import User, Resume
-from app.core.security import encrypt_field, decrypt_field
+from app.core.security import encrypt_field, decrypt_field, server_encrypt_field
 from app.core.gmail_token_cache import get_session_key
 from app.services.resume_parser import parse_resume_pdf
 from app.core.redis import get_cache, set_cache, get_user_version, bump_user_version
@@ -164,7 +164,7 @@ def update_user_resume(
 
 from pydantic import BaseModel
 from typing import Optional
-from app.models.models import AiGenerationJob, Company
+from app.models.models import AiGenerationJob, Company, Application
 from app.services.latex_renderer import render_resume_to_pdf
 
 class ResumeGenerateRequest(BaseModel):
@@ -212,13 +212,30 @@ def start_resume_tailoring_job(
     if not company:
         raise HTTPException(status_code=404, detail="Company drive not found.")
 
-    # 4. Check if student has a vault session key (required to decrypt resume on worker)
+    # 4. Decrypt the master resume NOW, while the session key is guaranteed
+    # present, and snapshot it into the job (re-encrypted with a server-derived
+    # key). The background worker then never depends on the in-memory session
+    # cache — this was the cause of "Session vault key is missing" failures
+    # whenever the backend restarted between submission and processing.
     derived_key = get_session_key(current_user.id)
     if not derived_key:
         raise HTTPException(
             status_code=400,
             detail="Vault session key missing. Please log in again to authorize resume access."
         )
+
+    resume = db.query(Resume).filter(Resume.user_id == current_user.id).first()
+    if not resume or not resume.resume_json_enc:
+        raise HTTPException(status_code=400, detail="Upload your master resume before tailoring.")
+
+    try:
+        resume_data = json.loads(decrypt_field(resume.resume_json_enc, derived_key))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to decrypt your master resume.")
+
+    input_payload_enc = server_encrypt_field(json.dumps({"resume_data": resume_data}))
 
     # 5. Create queued job
     job = AiGenerationJob(
@@ -227,7 +244,8 @@ def start_resume_tailoring_job(
         job_type="resume_tailor",
         request_source="cloud",
         custom_prompt=req.custom_prompt,
-        status="queued"
+        status="queued",
+        input_payload_enc=input_payload_enc
     )
     db.add(job)
     db.commit()
@@ -316,21 +334,25 @@ def accept_resume_changes(
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to decrypt secure resume database records.")
 
-    # 4. Apply accepted changes to resume JSON
+    # 4. Build the TAILORED copy by applying accepted changes.
+    # IMPORTANT: the master resume is never modified — tailoring is
+    # company-specific and overwriting the master would corrupt the source
+    # used for every future drive (and previously also destroyed the
+    # student's original uploaded PDF).
+    tailored_data = json.loads(json.dumps(current_data))  # deep copy
     result = job.result_json
-    
-    if req.accept_summary and "optimized_summary" in result:
-        current_data["summary"] = result["optimized_summary"]
-        
-    if req.accept_skills and "optimized_skills" in result:
-        # Merge skills or replace
-        current_data["skills"] = result["optimized_skills"]
 
-    if req.accept_projects and "optimized_projects" in result:
+    if req.accept_summary and result.get("optimized_summary"):
+        tailored_data["summary"] = result["optimized_summary"]
+
+    if req.accept_skills and result.get("optimized_skills"):
+        tailored_data["skills"] = result["optimized_skills"]
+
+    if req.accept_projects and result.get("optimized_projects"):
         # Match projects by title and update descriptions
         opt_projects = result["optimized_projects"]
-        master_projects = current_data.get("projects", [])
-        
+        master_projects = tailored_data.get("projects", [])
+
         for op in opt_projects:
             title = op.get("title", "").strip().lower()
             desc = op.get("description", "")
@@ -339,28 +361,54 @@ def accept_resume_changes(
                     mp["description"] = desc
                     break
 
-    # 5. Encrypt and save updated resume JSON
-    try:
-        encrypted_json = encrypt_field(json.dumps(current_data), derived_key)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to encrypt secure resume database records.")
-    
-    resume.resume_json_enc = encrypted_json
+    # 5. Render the tailored PDF
+    company = db.query(Company).filter(Company.id == job.company_id).first() if job.company_id else None
+    company_slug = (company.name if company else "company").strip().replace(" ", "_")[:40]
+    pdf_filename = f"resume_{company_slug}.pdf"
 
-    # 6. Pre-render LaTeX/PDF and encrypt pdf_file_enc
+    pdf_base64 = None
     try:
-        pdf_bytes = render_resume_to_pdf(resume.latex_template or "Classic", current_data)
-        # Encrypt the PDF bytes (convert to base64 string first to fit in text field)
+        pdf_bytes = render_resume_to_pdf(resume.latex_template or "Classic", tailored_data)
         pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
-        encrypted_pdf = encrypt_field(pdf_base64, derived_key)
-        resume.pdf_file_enc = encrypted_pdf
-        resume.pdf_filename_enc = encrypt_field("tailored_resume.pdf", derived_key)
     except Exception as pdf_err:
-        logger.error(f"Failed to compile and cache PDF during accept-changes: {pdf_err}")
-        # Non-blocking: we still want to save the JSON changes even if PDF rendering had a glitch
+        logger.error(f"Failed to compile PDF during accept-changes: {pdf_err}")
+        # Non-blocking: the tailored JSON is still stored below
+
+    # 6. Persist the tailored copy on the student's application for this drive
+    # (encrypted with the session key, like other per-user documents).
+    if job.company_id:
+        application = db.query(Application).filter(
+            Application.user_id == current_user.id,
+            Application.company_id == job.company_id
+        ).first()
+        if not application:
+            application = Application(
+                user_id=current_user.id,
+                company_id=job.company_id,
+                status="Applied",
+                user_decision="tracking"
+            )
+            db.add(application)
+        try:
+            tailored_blob = json.dumps({
+                "resume_data": tailored_data,
+                "pdf_base64": pdf_base64,
+                "pdf_filename": pdf_filename,
+                "job_id": str(job.id),
+                "generated_at": datetime.utcnow().isoformat()
+            })
+            application.tailored_resume_enc = encrypt_field(tailored_blob, derived_key)
+        except Exception as enc_err:
+            logger.error(f"Failed to encrypt tailored resume copy: {enc_err}")
 
     db.commit()
     bump_user_version(current_user.id)
 
-    return {"status": "success", "message": "Resume updated and compiled successfully."}
+    return {
+        "status": "success",
+        "message": "Tailored resume generated. Your master resume is unchanged.",
+        "pdf_base64": pdf_base64,
+        "pdf_filename": pdf_filename,
+        "tailored_resume": tailored_data
+    }
 

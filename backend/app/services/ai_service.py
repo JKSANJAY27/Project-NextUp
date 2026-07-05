@@ -474,88 +474,164 @@ def call_huggingface_llm(
         raise e
 
 
-def generate_jd_strategy(jd_text: str) -> dict:
-    """
-    Extracts a detailed JD Strategy JSON from job description text.
-    Uses get_parser_gateway() to invoke the LLM chain.
-    """
-    from app.services.ai_provider import get_parser_gateway
+_JD_STRATEGY_LIST_KEYS = [
+    "required_skills", "preferred_skills", "ats_keywords",
+    "programming_languages", "frameworks", "tools", "certifications",
+    "interview_topics",
+]
+_JD_STRATEGY_TEXT_KEYS = [
+    "experience_expectations", "project_preferences", "resume_strategy",
+    "role_summary",
+]
 
+# Cap JD text fed to the model: free-tier CPUs evaluate ~10-20 prompt
+# tokens/sec, so a full 10-page JD would take minutes before generating.
+_JD_PROMPT_CHAR_CAP = 6000
+
+
+def extract_jd_keywords_deterministic(jd_text: str) -> Dict[str, List[str]]:
+    """Regex/dictionary keyword extraction from JD text — no AI involved.
+
+    Scans the 130-skill vocabulary (skills_dictionary.json, same source the
+    JD-PDF parser uses) plus the alias map. Used to (a) seed the strategy when
+    the LLM is unavailable and (b) merge into the LLM output so ATS keywords
+    are never empty or hallucinated-only.
+    """
+    from app.services.pdf_extractor import SKILLS_LIST
+
+    found_skills: List[str] = []
+    seen = set()
+    lowered = (jd_text or "").lower()
+
+    def _scan(term: str, canonical: str):
+        if len(term) < 2:
+            return
+        # Dedup on the normalized form so 'PostgreSQL' and its alias
+        # 'postgres' don't both end up in the keyword list.
+        if canonical.lower() in seen or normalize_skill(canonical) in seen:
+            return
+        # 'C' and similar single-letter names need exact word boundaries;
+        # the lookarounds also stop 'go' matching inside 'google'.
+        if re.search(rf"(?<![a-z0-9+#.]){re.escape(term.lower())}(?![a-z0-9+#])", lowered):
+            found_skills.append(canonical)
+            seen.add(canonical.lower())
+            seen.add(normalize_skill(canonical))
+
+    for skill in SKILLS_LIST:            # canonical vocabulary (Python, SQL, ...)
+        _scan(str(skill), str(skill))
+    for alias in NORMALIZED_SKILLS_DICT: # alias forms (react.js -> react, ...)
+        _scan(alias, normalize_skill(alias))
+
+    intel = precompute_jd_intelligence_deterministic(jd_text or "", [s.lower() for s in found_skills])
+    return {
+        "skills": found_skills,
+        "preferred_skills": intel.get("preferred_skills", []),
+        "interview_topics": intel.get("interview_topics", []),
+    }
+
+
+def _deterministic_jd_strategy(jd_text: str, role: str = "", company_name: str = "") -> dict:
+    kw = extract_jd_keywords_deterministic(jd_text)
+    return {
+        "required_skills": kw["skills"][:20],
+        "preferred_skills": kw["preferred_skills"][:10],
+        "ats_keywords": kw["skills"][:25],
+        "programming_languages": [],
+        "frameworks": [],
+        "tools": [],
+        "certifications": [],
+        "experience_expectations": "Not specified.",
+        "project_preferences": "Projects demonstrating the required skills.",
+        "resume_strategy": "Front-load the JD-matching skills and quantify project impact.",
+        "interview_topics": kw["interview_topics"][:8],
+        "role_summary": f"{role or 'Software Engineering'} role"
+                        + (f" at {company_name}" if company_name else "") + ".",
+        "strategy_source": "deterministic",
+    }
+
+
+def generate_jd_strategy(jd_text: str, gateway=None, role: str = "",
+                         company_name: str = "") -> dict:
+    """
+    Extract a reusable JD Strategy JSON from job description text.
+
+    Runs the LLM once per drive (results are cached on companies.jd_strategy)
+    and merges deterministic keyword extraction into the output so the
+    strategy is grounded in the actual JD text and never empty. Falls back to
+    the pure-deterministic strategy when no AI provider is reachable.
+    """
     if not jd_text or not jd_text.strip():
-        return {
-            "required_skills": [],
-            "preferred_skills": [],
-            "ats_keywords": [],
-            "programming_languages": [],
-            "frameworks": [],
-            "tools": [],
-            "certifications": [],
-            "experience_expectations": "Not specified.",
-            "project_preferences": "General software engineering projects.",
-            "resume_strategy": "Highlight core development projects and skills.",
-            "interview_topics": ["Data Structures & Algorithms"],
-            "role_summary": "Software Engineering candidate."
-        }
+        return _deterministic_jd_strategy(jd_text, role, company_name)
 
-    prompt = f"""Analyze the following Job Description (JD) text and extract a comprehensive JD Strategy.
-Provide structured insights to guide resume tailoring and interview prep.
+    deterministic = _deterministic_jd_strategy(jd_text, role, company_name)
+
+    if gateway is None:
+        from app.services.ai_provider import get_parser_gateway
+        gateway = get_parser_gateway()
+
+    prompt = f"""Analyze this Job Description and produce a resume-tailoring strategy.
+{f"Role: {role}" if role else ""}{f" | Company: {company_name}" if company_name else ""}
 
 Job Description:
-{jd_text}
+{jd_text[:_JD_PROMPT_CHAR_CAP]}
 
-Return ONLY a valid JSON object matching this schema exactly (no markdown blocks, no prefix explanations):
+Return ONLY a valid JSON object matching this schema exactly (no markdown, no explanations):
 {{
   "required_skills": ["skill1", "skill2"],
   "preferred_skills": ["skillA", "skillB"],
   "ats_keywords": ["keyword1", "keyword2"],
-  "programming_languages": ["Python", "Go"],
-  "frameworks": ["Django", "React"],
+  "programming_languages": ["Python"],
+  "frameworks": ["React"],
   "tools": ["Git", "Docker"],
-  "certifications": ["AWS Solutions Architect"],
-  "experience_expectations": "Brief summary of experience level or expectations mentioned.",
-  "project_preferences": "What kinds of projects (e.g. web, system, AI) are relevant.",
-  "resume_strategy": "Actionable advice on what bullets or accomplishments to highlight.",
+  "certifications": [],
+  "experience_expectations": "Experience level or expectations mentioned.",
+  "project_preferences": "What kinds of projects are most relevant.",
+  "resume_strategy": "Actionable advice on what to highlight.",
   "interview_topics": ["Topic 1", "Topic 2"],
   "role_summary": "One sentence summary of the role."
 }}
-"""
+Only list skills/keywords that actually appear in or are directly implied by the JD text."""
+
     try:
-        gateway = get_parser_gateway()
         result = gateway.generate(
             prompt,
             system="You are an expert recruitment strategist. Extract the JD strategy JSON.",
-            max_tokens=1500,
+            max_tokens=900,
             temperature=0.1,
             json_mode=True,
-            purpose="jd_strategy"
+            purpose="jd_strategy",
         )
         parsed = result.parse_json()
-        
-        # Ensure it has all keys
-        keys = [
-            "required_skills", "preferred_skills", "ats_keywords",
-            "programming_languages", "frameworks", "tools", "certifications",
-            "experience_expectations", "project_preferences", "resume_strategy",
-            "interview_topics", "role_summary"
-        ]
-        for key in keys:
-            if key not in parsed:
-                parsed[key] = [] if "skills" in key or "keywords" in key or "languages" in key or "frameworks" in key or "tools" in key or "certifications" in key or "topics" in key else ""
+        if not isinstance(parsed, dict):
+            raise ValueError("JD strategy result is not a JSON object")
+
+        # Normalize shapes
+        for key in _JD_STRATEGY_LIST_KEYS:
+            val = parsed.get(key)
+            parsed[key] = [str(v) for v in val if v] if isinstance(val, list) else []
+        for key in _JD_STRATEGY_TEXT_KEYS:
+            val = parsed.get(key)
+            parsed[key] = str(val) if val else deterministic[key]
+
+        # Merge deterministic keywords so grounded JD terms are never lost —
+        # union preserving LLM ordering first.
+        for key, det_vals in (
+            ("required_skills", deterministic["required_skills"]),
+            ("ats_keywords", deterministic["ats_keywords"]),
+            ("preferred_skills", deterministic["preferred_skills"]),
+            ("interview_topics", deterministic["interview_topics"]),
+        ):
+            seen = {v.strip().lower() for v in parsed[key]}
+            for v in det_vals:
+                if v.strip().lower() not in seen:
+                    parsed[key].append(v)
+                    seen.add(v.strip().lower())
+
+        parsed["strategy_source"] = f"{result.provider}/{result.model}"
+        parsed["generated_at"] = datetime.utcnow().isoformat()
+        parsed["jd_hash"] = hashlib.sha256(jd_text.encode("utf-8")).hexdigest()[:16]
         return parsed
     except Exception as e:
-        logger.error(f"Failed to generate JD strategy: {str(e)}")
-        return {
-            "required_skills": [],
-            "preferred_skills": [],
-            "ats_keywords": [],
-            "programming_languages": [],
-            "frameworks": [],
-            "tools": [],
-            "certifications": [],
-            "experience_expectations": "Not specified.",
-            "project_preferences": "General software engineering projects.",
-            "resume_strategy": "Highlight core development projects and skills.",
-            "interview_topics": ["Data Structures & Algorithms"],
-            "role_summary": "Software Engineering candidate."
-        }
+        logger.error(f"Failed to generate JD strategy via AI, using deterministic fallback: {str(e)}")
+        return deterministic
 

@@ -77,6 +77,8 @@ def on_startup():
     migrations = [
         "ALTER TABLE companies ADD COLUMN IF NOT EXISTS jd_strategy JSONB;" if not is_sqlite else "ALTER TABLE companies ADD COLUMN IF NOT EXISTS jd_strategy TEXT;",
         "ALTER TABLE ai_generation_jobs ADD COLUMN IF NOT EXISTS result_json JSONB;" if not is_sqlite else "ALTER TABLE ai_generation_jobs ADD COLUMN IF NOT EXISTS result_json TEXT;",
+        "ALTER TABLE ai_generation_jobs ADD COLUMN IF NOT EXISTS input_payload_enc TEXT;",
+        "ALTER TABLE ai_generation_jobs ADD COLUMN IF NOT EXISTS locked_at TIMESTAMP;" if is_sqlite else "ALTER TABLE ai_generation_jobs ADD COLUMN IF NOT EXISTS locked_at TIMESTAMP WITH TIME ZONE;",
         "CREATE INDEX IF NOT EXISTS idx_ai_generation_jobs_status_created ON ai_generation_jobs(status, created_at);"
     ]
     
@@ -140,6 +142,90 @@ def admin_reset_circuits(request: Request):
     from app.services.ai_provider import reset_all_circuits
     reset_all_circuits()
     return {"status": "ok", "message": "All AI circuit breakers have been reset to closed state."}
+
+
+@app.post("/api/admin/backfill-jd-strategies")
+def admin_backfill_jd_strategies(request: Request):
+    """
+    Admin endpoint: for every company missing a JD strategy, backfill
+    companies.jd_text (from the attached JD PDF if present, else the latest
+    announcement email body) and generate the reusable JD Strategy JSON.
+    Runs in a background thread — each strategy takes minutes on free-tier CPU.
+    When INGEST_AUTH_TOKEN is configured, requires 'Authorization: Bearer <token>'.
+    """
+    if settings.INGEST_AUTH_TOKEN:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header != f"Bearer {settings.INGEST_AUTH_TOKEN}":
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+
+    import threading
+
+    def _backfill():
+        from app.core.database import SessionLocal
+        from app.models.models import Company, CompanyEvent, AttachmentMetadata
+        from app.services.ai_service import generate_jd_strategy
+        from app.services.pdf_extractor import extract_text_from_pdf
+
+        db = SessionLocal()
+        try:
+            companies = db.query(Company).all()
+            done = 0
+            for company in companies:
+                existing = company.jd_strategy if isinstance(company.jd_strategy, dict) else {}
+                if existing.get("required_skills"):
+                    continue
+                try:
+                    # Best JD text: attached JD PDF > stored jd_text > latest event body
+                    jd_text = company.jd_text or ""
+                    pdf_att = (
+                        db.query(AttachmentMetadata)
+                        .join(CompanyEvent, AttachmentMetadata.company_event_id == CompanyEvent.id)
+                        .filter(CompanyEvent.company_id == company.id,
+                                AttachmentMetadata.file_type == "JD_PDF")
+                        .order_by(AttachmentMetadata.uploaded_at.desc())
+                        .first()
+                    )
+                    if pdf_att and pdf_att.file_data:
+                        try:
+                            pdf_text = extract_text_from_pdf(pdf_att.file_data)
+                            if pdf_text and len(pdf_text) > len(jd_text):
+                                jd_text = pdf_text[:20000]
+                        except Exception:
+                            pass
+                    if not jd_text:
+                        latest_event = (
+                            db.query(CompanyEvent)
+                            .filter(CompanyEvent.company_id == company.id,
+                                    CompanyEvent.body.isnot(None))
+                            .order_by(CompanyEvent.timestamp.asc())
+                            .first()
+                        )
+                        if latest_event and latest_event.body:
+                            jd_text = latest_event.body
+
+                    if not jd_text:
+                        logging.info(f"[jd-backfill] {company.name}: no JD text found, skipping")
+                        continue
+
+                    company.jd_text = jd_text
+                    strategy = generate_jd_strategy(
+                        jd_text, role=company.role, company_name=company.name
+                    )
+                    if strategy:
+                        company.jd_strategy = strategy
+                        db.commit()
+                        done += 1
+                        logging.info(f"[jd-backfill] {company.name} — strategy saved "
+                                     f"(source={strategy.get('strategy_source')})")
+                except Exception as e:
+                    db.rollback()
+                    logging.error(f"[jd-backfill] {company.name} failed: {e}")
+            logging.info(f"[jd-backfill] complete — {done} strategies generated.")
+        finally:
+            db.close()
+
+    threading.Thread(target=_backfill, name="jd-backfill", daemon=True).start()
+    return {"status": "started", "message": "JD strategy backfill running in background. Watch logs for progress."}
 
 
 @app.get("/api/admin/ai-health")

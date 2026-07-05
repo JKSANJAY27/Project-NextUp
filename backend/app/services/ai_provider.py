@@ -31,7 +31,20 @@ logger = logging.getLogger("nextup.ai")
 
 
 class AIProviderError(Exception):
-    """Raised when a provider fails to produce a completion."""
+    """Raised when a provider fails to produce a completion.
+
+    retryable=False marks permanent failures (auth/quota/bad-request such as
+    HTTP 401/402/403/404/422) where retrying the same provider is pointless —
+    the gateway moves straight to the next provider instead of burning time.
+    """
+
+    def __init__(self, message: str, retryable: bool = True):
+        super().__init__(message)
+        self.retryable = retryable
+
+
+# HTTP statuses that will not succeed on retry (quota, auth, bad request)
+NON_RETRYABLE_HTTP = {400, 401, 402, 403, 404, 422}
 
 
 class AIUnavailableError(Exception):
@@ -132,7 +145,10 @@ class OllamaProvider(AIProvider):
         except requests.RequestException as e:
             raise AIProviderError(f"{self.name}: request failed: {e}") from e
         if resp.status_code != 200:
-            raise AIProviderError(f"{self.name}: HTTP {resp.status_code}: {resp.text[:200]}")
+            raise AIProviderError(
+                f"{self.name}: HTTP {resp.status_code}: {resp.text[:200]}",
+                retryable=resp.status_code not in NON_RETRYABLE_HTTP,
+            )
         text = (resp.json().get("response") or "").strip()
         if not text:
             raise AIProviderError(f"{self.name}: empty completion")
@@ -184,12 +200,22 @@ class RemoteSpaceProvider(AIProvider):
                 },
                 timeout=timeout or settings.AI_REQUEST_TIMEOUT_SECONDS,
             )
+        except requests.Timeout as e:
+            # A read timeout means the Space is still generating — retrying
+            # immediately with the same payload would just queue another
+            # multi-minute generation behind it.  Move to the next provider.
+            raise AIProviderError(
+                f"{self.name}: request failed: {e}", retryable=False
+            ) from e
         except requests.RequestException as e:
             raise AIProviderError(f"{self.name}: request failed: {e}") from e
         if resp.status_code == 503:
             raise AIProviderError(f"{self.name}: space busy/loading (503)")
         if resp.status_code != 200:
-            raise AIProviderError(f"{self.name}: HTTP {resp.status_code}: {resp.text[:200]}")
+            raise AIProviderError(
+                f"{self.name}: HTTP {resp.status_code}: {resp.text[:200]}",
+                retryable=resp.status_code not in NON_RETRYABLE_HTTP,
+            )
         text = (resp.json().get("text") or "").strip()
         if not text:
             raise AIProviderError(f"{self.name}: empty completion")
@@ -245,7 +271,10 @@ class HFRouterProvider(AIProvider):
         except requests.RequestException as e:
             raise AIProviderError(f"{self.name}: request failed: {e}") from e
         if resp.status_code != 200:
-            raise AIProviderError(f"{self.name}: HTTP {resp.status_code}: {resp.text[:300]}")
+            raise AIProviderError(
+                f"{self.name}: HTTP {resp.status_code}: {resp.text[:300]}",
+                retryable=resp.status_code not in NON_RETRYABLE_HTTP,
+            )
         text = (
             resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
         ).strip()
@@ -367,9 +396,12 @@ class AIGateway:
                         self._record(provider.name, success=False)
                         errors.append(str(e))
                         logger.warning(
-                            "[ai:%s] failure provider=%s purpose=%s attempt=%d err=%s",
-                            self.name, provider.name, purpose, attempts, str(e)[:300],
+                            "[ai:%s] failure provider=%s purpose=%s attempt=%d retryable=%s err=%s",
+                            self.name, provider.name, purpose, attempts,
+                            getattr(e, "retryable", True), str(e)[:300],
                         )
+                        if not getattr(e, "retryable", True):
+                            break  # permanent error (quota/auth/timeout) — next provider
                         if circuit.is_open():
                             break  # stop hammering a dead provider
                         if attempt < settings.AI_MAX_RETRIES:

@@ -894,10 +894,10 @@ export default function CompanyWorkspaceModal({
                   
                   <div>
                     <Link
-                      href={`/ai-toolkit?companyId=${selectedCompany.id}&tab=ats`}
+                      href={`/resume?company=${selectedCompany.id}`}
                       className="flex items-center justify-between border border-border p-4 bg-muted/15 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase w-full"
                     >
-                      <span className="text-xs font-black tracking-wider">Tailor & Optimize Resume</span>
+                      <span className="text-xs font-black tracking-wider">Create Tailored Resume for this Drive</span>
                       <ArrowRight size={14} />
                     </Link>
                   </div>

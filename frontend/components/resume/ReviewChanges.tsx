@@ -21,7 +21,7 @@ interface ReviewChangesProps {
     skills?: string[];
     projects?: Array<{ title: string; description: string }>;
   };
-  onSuccess: () => void;
+  onSuccess: (result: { pdf_base64?: string; pdf_filename?: string }) => void;
   onCancel: () => void;
 }
 
@@ -42,17 +42,17 @@ export default function ReviewChanges({
     try {
       setApplying(true);
       setErrorMsg("");
-      await api.post("/resumes/accept-changes", {
+      const res = await api.post("/resumes/accept-changes", {
         job_id: jobId,
         accept_summary: acceptSummary,
         accept_skills: acceptSkills,
         accept_projects: acceptProjects
       });
-      onSuccess();
+      onSuccess(res.data || {});
     } catch (err: unknown) {
       console.error("Failed to apply resume changes:", err);
       const apiErr = err as { response?: { data?: { detail?: string } } };
-      setErrorMsg(apiErr.response?.data?.detail || "Failed to apply changes to your master resume.");
+      setErrorMsg(apiErr.response?.data?.detail || "Failed to generate the tailored resume.");
       setApplying(false);
     }
   };
@@ -64,7 +64,8 @@ export default function ReviewChanges({
           Review Optimization Suggestions
         </h3>
         <p className="text-xs text-muted-foreground">
-          Compare the AI&apos;s proposed enhancements with your master resume. Select which updates you want to adopt and merge.
+          Compare the AI&apos;s proposed enhancements with your master resume. Accepted changes go into a
+          company-specific copy — your master resume is never modified.
         </p>
       </div>
 
