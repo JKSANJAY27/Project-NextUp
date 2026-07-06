@@ -114,12 +114,17 @@ serve(async (req) => {
         .eq("id", sourceId);
     }
 
-    // 6. Fire webhook to trigger the Python parsing worker asynchronously
+    // 6. Fire webhook to trigger the Python parsing worker asynchronously.
+    // The backend requires the shared INGEST_AUTH_TOKEN on its trigger
+    // endpoints (they start multi-minute LLM parses).
     const workerTriggerUrl = Deno.env.get("PYTHON_WORKER_TRIGGER_URL");
     if (workerTriggerUrl) {
       fetch(workerTriggerUrl, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${systemAuthToken}`,
+        },
         body: JSON.stringify({ job_id: job.id })
       }).catch(err => console.warn("Failed to fire async worker trigger webhook:", err));
     }

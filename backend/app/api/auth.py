@@ -113,6 +113,9 @@ def get_current_user(request: Request, token: str = Depends(oauth2_scheme), db: 
             detail="Database temporarily unavailable. Please retry.",
         )
     
+    # Expose the user id for per-user rate limiting (see app.core.ratelimit)
+    request.state.rate_user_id = str(user.id)
+
     # Store X-Client-Key in-memory active cache if present in headers
     client_key = request.headers.get("X-Client-Key")
     if client_key:

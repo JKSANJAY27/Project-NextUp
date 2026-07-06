@@ -17,6 +17,7 @@ from app.services.pdf_extractor import parse_job_description
 from app.services.excel_parser import extract_neo_ids_from_excel
 from app.services.match_scorer import calculate_match_score
 from app.core.security import decrypt_field, encrypt_field
+from app.core.ratelimit import rate_limit
 from app.core.redis import (
     get_cache, set_cache, get_companies_list_version, bump_companies_list_version,
     get_company_version, bump_company_version, get_user_version, bump_user_version
@@ -140,18 +141,24 @@ async def import_placement_file(
     background_tasks: BackgroundTasks = None,
     x_client_key: Optional[str] = Header(None, alias="X-Client-Key"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _rl: None = Depends(rate_limit("company_import", 10, 600)),
 ):
     file_bytes = await file.read()
-    
+    if len(file_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File exceeds the 10MB limit.")
+
     if import_type == "email":
         # Parse email text
         try:
             email_text = file_bytes.decode("utf-8")
         except UnicodeDecodeError:
             email_text = file_bytes.decode("latin-1")
-            
-        raw_parsed = parse_placement_email(email_text)
+
+        # The parse can take minutes (in-container LLM) — never run it inline
+        # on the event loop of the single uvicorn worker.
+        from fastapi.concurrency import run_in_threadpool
+        raw_parsed = await run_in_threadpool(parse_placement_email, email_text)
         from app.services.validator import validate_and_normalize_parsed_data
         validated = validate_and_normalize_parsed_data(raw_parsed, db)
         ext_data = validated.get("extracted_data", {})

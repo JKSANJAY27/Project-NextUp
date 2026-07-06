@@ -28,14 +28,19 @@ async def db_operational_error_handler(request: Request, exc: SAOperationalError
         content={"detail": "Database temporarily unavailable. Please retry."},
     )
 
-# Middleware to log headers
+# Global per-IP flood guard: generous enough for normal dashboard polling
+# (a few requests/second) but stops a single client from monopolising the
+# 40-thread pool / 15-connection DB pool of the single worker.
+from app.core.ratelimit import check_rate
+
 @app.middleware("http")
-async def log_requests(request: Request, call_next):
-    auth_header = request.headers.get("Authorization")
-    logging.warning(f"DEBUG: Request {request.method} {request.url.path} - Auth Header: {auth_header[:20] if auth_header else 'None'}...")
-    response = await call_next(request)
-    logging.warning(f"DEBUG: Response status: {response.status_code}")
-    return response
+async def global_rate_limit(request: Request, call_next):
+    fwd = request.headers.get("X-Forwarded-For", "")
+    ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "unknown")
+    if not check_rate("global_ip", ip, 300, 60):
+        return JSONResponse(status_code=429,
+                            content={"detail": "Too many requests. Please slow down."})
+    return await call_next(request)
 
 # Add GZip Middleware for compression
 app.add_middleware(GZipMiddleware, minimum_size=1000)

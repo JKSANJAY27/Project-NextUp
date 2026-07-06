@@ -12,8 +12,11 @@ from app.api.auth import get_current_user
 from app.models.models import User, Resume
 from app.core.security import encrypt_field, decrypt_field, server_encrypt_field
 from app.core.gmail_token_cache import get_session_key
+from app.core.ratelimit import rate_limit
+from app.core.sanitize import sanitize_user_prompt
 from app.services.resume_parser import parse_resume_pdf
 from app.core.redis import get_cache, set_cache, get_user_version, bump_user_version
+from fastapi.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/resumes", tags=["resumes"])
@@ -21,7 +24,8 @@ router = APIRouter(prefix="/resumes", tags=["resumes"])
 @router.post("/parse")
 async def parse_uploaded_resume(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _rl: None = Depends(rate_limit("resume_parse", 6, 3600)),
 ):
     """
     Accepts resume PDF, extracts metrics on-the-fly, and returns structured Candidate Profile data.
@@ -29,11 +33,18 @@ async def parse_uploaded_resume(
     """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF resumes are supported.")
-        
+
     try:
         contents = await file.read()
-        parsed_data = parse_resume_pdf(contents)
+        if len(contents) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="PDF exceeds the 5MB limit.")
+        # PDF extraction/OCR is CPU-heavy and the parser may call the LLM —
+        # running it inline in this async endpoint froze the single-worker
+        # event loop (EVERY request, all users) for the whole parse.
+        parsed_data = await run_in_threadpool(parse_resume_pdf, contents)
         return parsed_data
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to parse uploaded resume: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Resume parsing failure: {str(e)}")
@@ -182,7 +193,8 @@ class AcceptChangesRequest(BaseModel):
 def start_resume_tailoring_job(
     req: ResumeGenerateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _rl: None = Depends(rate_limit("resume_generate", 3, 600)),
 ):
     # 1. Enforce queue backlog limit
     backlog_count = db.query(AiGenerationJob).filter(AiGenerationJob.status == "queued").count()
@@ -237,13 +249,14 @@ def start_resume_tailoring_job(
 
     input_payload_enc = server_encrypt_field(json.dumps({"resume_data": resume_data}))
 
-    # 5. Create queued job
+    # 5. Create queued job. custom_prompt is user free-text destined for the
+    # LLM prompt — sanitize against prompt injection before persisting.
     job = AiGenerationJob(
         user_id=current_user.id,
         company_id=req.company_id,
         job_type="resume_tailor",
         request_source="cloud",
-        custom_prompt=req.custom_prompt,
+        custom_prompt=sanitize_user_prompt(req.custom_prompt) if req.custom_prompt else None,
         status="queued",
         input_payload_enc=input_payload_enc
     )
@@ -308,7 +321,8 @@ def cancel_queued_job(
 def accept_resume_changes(
     req: AcceptChangesRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _rl: None = Depends(rate_limit("resume_accept", 12, 600)),
 ):
     # 1. Fetch job and verify ownership
     job = db.query(AiGenerationJob).filter(

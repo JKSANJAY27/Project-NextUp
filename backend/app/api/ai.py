@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.core.database import get_db
+from app.core.ratelimit import rate_limit
+from app.core.sanitize import sanitize_user_prompt
 from app.api.auth import get_current_user
 from app.models.models import User, Company, StudentProfile, Resume
 from app.services.ai_service import (
@@ -39,7 +41,8 @@ class DocumentSaveRequest(BaseModel):
 def tailor_resume(
     req: AIRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _rl: None = Depends(rate_limit("ai_tailor", 5, 600))
 ):
     profile = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
     company = db.query(Company).filter(Company.id == req.company_id).first()
@@ -130,7 +133,7 @@ def tailor_resume(
             company_id=req.company_id,
             job_type="resume_tailor",
             request_source="cloud",
-            custom_prompt=req.custom_prompt,
+            custom_prompt=sanitize_user_prompt(req.custom_prompt) if req.custom_prompt else None,
             status="queued"
         )
         db.add(job)
@@ -146,7 +149,8 @@ def tailor_resume(
 def generate_sop(
     req: AIRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _rl: None = Depends(rate_limit("ai_sop", 5, 600))
 ):
     profile = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
     company = db.query(Company).filter(Company.id == req.company_id).first()
@@ -184,7 +188,8 @@ The SOP should be professional, company-aware, and tell a compelling story. Retu
 def generate_cover_letter(
     req: AIRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _rl: None = Depends(rate_limit("ai_cover", 5, 600))
 ):
     profile = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
     company = db.query(Company).filter(Company.id == req.company_id).first()
@@ -222,7 +227,8 @@ Return ONLY the raw Cover Letter text (no intro, no explanations, no JSON, just 
 def generate_interview_prep(
     req: AIRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _rl: None = Depends(rate_limit("ai_prep", 5, 600))
 ):
     profile = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
     company = db.query(Company).filter(Company.id == req.company_id).first()
