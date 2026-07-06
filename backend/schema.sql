@@ -327,20 +327,30 @@ CREATE POLICY "Admin/Coordinators can manage company events"
     ON company_events FOR ALL 
     USING (auth.jwt() ->> 'role' IN ('admin', 'coordinator'));
 
--- 17. AI Generation Jobs Tracking (Auditing & Cloud rate limiting)
+-- 17. AI Generation Jobs (async resume-tailoring queue + audit log)
+-- NOTE: existing databases are upgraded automatically by the startup
+-- migrations in app/main.py (new columns + widened status CHECK).
 CREATE TABLE IF NOT EXISTS ai_generation_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
     job_type VARCHAR(100) NOT NULL, -- 'resume_tailor', 'sop', 'cover_letter', 'jd_intelligence', 'interview_prep'
     request_source VARCHAR(50) DEFAULT 'cloud' CHECK (request_source IN ('browser', 'cloud', 'fallback')),
+    custom_prompt TEXT,
     model_used VARCHAR(100),
     input_hash VARCHAR(64),
     tokens_generated INT,
     error_message TEXT,
-    status VARCHAR(50) DEFAULT 'processing' CHECK (status IN ('processing', 'completed', 'failed')),
+    status VARCHAR(50) DEFAULT 'processing' CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'cancelled')),
+    result_json JSONB,
+    retry_count INT DEFAULT 0,
+    input_payload_enc TEXT,        -- server-key-encrypted snapshot of decrypted inputs
+    locked_at TIMESTAMP WITH TIME ZONE, -- set when a worker claims the job
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP WITH TIME ZONE
 );
+
+CREATE INDEX IF NOT EXISTS idx_ai_generation_jobs_status_created ON ai_generation_jobs(status, created_at);
 
 ALTER TABLE ai_generation_jobs ENABLE ROW LEVEL SECURITY;
 

@@ -359,6 +359,16 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
         'ACHIEVEMENTS': 'achievements',
         'ACHIEVEMENTS & LEADERSHIP': 'achievements',
         'AWARDS': 'achievements',
+        'AWARDS & RECOGNITION': 'achievements',
+        'RECOGNITION': 'achievements',
+        'ACCOMPLISHMENTS': 'achievements',
+        'HACKATHONS': 'achievements',
+        'HACKATHONS & LEADERSHIP': 'achievements',
+        'LEADERSHIP': 'achievements',
+        'EXTRACURRICULAR': 'achievements',
+        'CERTIFICATIONS': 'certifications',
+        'CERTIFICATES': 'certifications',
+        'COURSES & CERTIFICATIONS': 'certifications',
     }
     
     for line in lines:
@@ -368,7 +378,10 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
         line_upper = line_strip.upper().rstrip(':').strip()
         if line_upper in headings:
             current_section = headings[line_upper]
-            sections[current_section] = []
+            # setdefault: two headings can map to the same bucket (e.g.
+            # RECOGNITION and HACKATHONS & LEADERSHIP -> achievements) —
+            # resetting here used to wipe the earlier section's lines.
+            sections.setdefault(current_section, [])
             continue
         sections[current_section].append(line_strip)
         
@@ -418,7 +431,7 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
             parts = [p.strip() for p in re.split(r'\s*[\u2014\u2013|,\t]\s*|\s+-\s+', clean_line) if p.strip()]
 
             # Determine degree and institution from parts
-            degree = "Degree / Course"
+            degree = ""
             institution = clean_line
 
             if len(parts) >= 2:
@@ -553,6 +566,8 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
             role = re.sub(r'\s*[-–—|()]\s*$', '', role).strip()
             company = re.sub(r'\s*[-–—|()]\s*$', '', company).strip()
             company = re.sub(r'\s*\([^)]*\)\s*$', '', company).strip()
+            # Unbalanced trailing paren left by splitting, e.g. "Valsco (Remote"
+            company = re.sub(r'\s*\([^)]*$', '', company).strip()
             
             current_exp = {
                 "role": role,
@@ -624,6 +639,11 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
                 if is_tech_only_line(right_side):
                     title = parts[0].strip()
                     tech = ", ".join(p.strip() for p in parts[1:])
+                elif is_tech_only_line(parts[-1].strip()):
+                    # "Name — Subtitle — Python, React": last segment is the
+                    # tech stack, everything before it is the title
+                    title = " — ".join(p.strip() for p in parts[:-1])
+                    tech = parts[-1].strip()
                 else:
                     title = line.strip()
                     tech = ""
@@ -671,6 +691,32 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     if current_proj:
         project_entries.append(current_proj)
         
+    # Process Skills section: capture "Category: a, b, c" lines verbatim
+    # (e.g. "AI / ML: LLM Pipelines, RAG, ..." / "Languages: Python, C++").
+    skills_categories = {}
+    section_skills = []
+    for line in sections.get('skills', []):
+        cat_match = re.match(r'^([A-Za-z][A-Za-z0-9 /&+.-]{1,40}?)\s*:\s*(.+)$', line)
+        if cat_match:
+            category = cat_match.group(1).strip()
+            items = [s.strip() for s in re.split(r'[,;]', cat_match.group(2)) if s.strip()]
+            if items:
+                skills_categories[category] = items
+                section_skills.extend(items)
+        else:
+            # Plain comma/pipe-separated skills line
+            for s in re.split(r'[,;|•]', line):
+                s = s.strip(' \t-–—')
+                if s and len(s) <= 45:
+                    section_skills.append(s)
+
+    # Process Certifications
+    certifications = []
+    for line in sections.get('certifications', []):
+        clean_text = re.sub(r'^[•\*\-\s▪]+', '', line.strip()).strip()
+        if clean_text:
+            certifications.append(clean_text)
+
     # Process Patents
     patents = []
     patent_lines = sections.get('patents', [])
@@ -722,6 +768,15 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
                 website_link = u
                 break
 
+    # Skills = verbatim section skills first (preserves the student's own
+    # phrasing/ordering), then dictionary-scanned skills not already covered.
+    merged_skills = list(dict.fromkeys(section_skills))
+    seen_lower = {s.lower() for s in merged_skills}
+    for s in extract_skills_from_text(text):
+        if s.lower() not in seen_lower:
+            merged_skills.append(s)
+            seen_lower.add(s.lower())
+
     # Build resume_data structure
     data["resume_data"] = {
         "personal": {
@@ -738,41 +793,106 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
         "education": education_entries,
         "experience": experience_entries,
         "projects": project_entries,
-        "skills": extract_skills_from_text(text),
-        "certifications": [],
+        "skills": merged_skills,
+        "skills_categories": skills_categories,
+        "certifications": certifications,
         "languages": [],
+        "patents": patents,
+        "achievements": achievements,
         "awards": patents + achievements
     }
-    
+
     return data
+
+def _merge_llm_into_regex(regex_parsed: Dict[str, Any], llm_parsed: Dict[str, Any]) -> Dict[str, Any]:
+    """Fill gaps in the deterministic parse with LLM output.
+
+    The regex parse is the base (verbatim content); an LLM value is only used
+    where the regex value is missing/default, or where the LLM found strictly
+    more entries for a list section.
+    """
+    import json as _json
+    merged = dict(regex_parsed)
+
+    # Profile scalars — take LLM value when regex hit its default
+    scalar_defaults = {
+        "full_name": ("Student Candidate", ""),
+        "cgpa": (0.0, 0, None),
+        "branch": ("",),
+        "batch_year": (0, None),
+        "tenth_marks": (0.0, 0, None),
+        "twelfth_marks": (0.0, 0, None),
+    }
+    for key, defaults in scalar_defaults.items():
+        if merged.get(key) in defaults and llm_parsed.get(key) not in defaults and llm_parsed.get(key) is not None:
+            merged[key] = llm_parsed[key]
+
+    rd = dict(merged.get("resume_data") or {})
+    rd_llm = llm_parsed.get("resume_data") or {}
+    if isinstance(rd_llm, dict):
+        # Summary: keep verbatim regex summary when substantial
+        if len(str(rd.get("summary") or "")) < 30 and len(str(rd_llm.get("summary") or "")) >= 30:
+            rd["summary"] = rd_llm["summary"]
+
+        # List sections: prefer the richer extraction (regex wins ties)
+        for key in ("education", "experience", "projects", "certifications"):
+            cur, alt = rd.get(key) or [], rd_llm.get(key) or []
+            if isinstance(alt, list) and len(_json.dumps(alt)) > len(_json.dumps(cur)) * 1.5:
+                rd[key] = alt
+
+        # Skills: only when regex found nothing
+        if not rd.get("skills") and isinstance(rd_llm.get("skills"), list):
+            rd["skills"] = rd_llm["skills"]
+
+        # Personal: fill empty fields only
+        pers = dict(rd.get("personal") or {})
+        for k, v in (rd_llm.get("personal") or {}).items():
+            if v and not pers.get(k):
+                pers[k] = v
+        rd["personal"] = pers
+
+    merged["resume_data"] = rd
+    return merged
+
 
 def parse_resume_pdf(file_bytes: bytes) -> Dict[str, Any]:
     """
-    Complete resume parsing pipeline: text extraction -> LLM escalation -> Regex/spaCy fallback -> Skills.
+    Complete resume parsing pipeline: text extraction -> deterministic parse
+    (verbatim) -> optional LLM gap-filling -> normalization.
     """
     # 1. Extract text from PDF
     text = extract_text_from_pdf(file_bytes)
     
-    # 2. Try LLM parsing first
-    parsed = {}
-    logger.info("Attempting resume parsing with Ollama...")
-    parsed = parse_resume_with_ollama(text)
+    # 2. Deterministic-first: the regex parser copies the resume VERBATIM
+    # (summary, bullets, skills, sections). Small LLMs paraphrase, compress
+    # and truncate — a previous master resume ended up with an AI-invented
+    # summary and skills=["data structures"]. The LLM is now only used to
+    # FILL GAPS when the deterministic parse is weak, never to replace
+    # verbatim content.
+    parsed = parse_resume_text_regex(text)
 
-    # 3. Escalate to HuggingFace if critical fields missing or parse failed
-    if not parsed or not parsed.get("full_name") or not parsed.get("resume_data"):
-        logger.info("Ollama failed or returned incomplete resume data. Escalating to HuggingFace...")
-        parsed_hf = parse_resume_with_huggingface(text)
-        if parsed_hf:
-            parsed = parsed_hf
+    rd_regex = parsed.get("resume_data", {})
+    regex_is_strong = (
+        len(rd_regex.get("summary", "")) >= 30
+        and len(rd_regex.get("skills", [])) >= 3
+        and len(rd_regex.get("projects", [])) >= 1
+        and any(p.get("description") for p in rd_regex.get("projects", []))
+        and len(rd_regex.get("education", [])) >= 1
+    )
 
-    # 4. Fallback to Regex and spaCy if LLM failed
-    if not parsed or not isinstance(parsed, dict):
-        logger.info("LLM parsing failed completely. Using Regex/spaCy fallback for resume...")
-        parsed = parse_resume_text_regex(text)
-        
+    if regex_is_strong:
+        logger.info("Deterministic resume parse is strong — skipping LLM enrichment.")
+    else:
+        logger.info("Deterministic resume parse is weak — using LLM to fill gaps...")
+        llm_parsed = parse_resume_with_ollama(text)
+        if not llm_parsed or not llm_parsed.get("resume_data"):
+            llm_parsed = parse_resume_with_huggingface(text)
+        if llm_parsed and isinstance(llm_parsed, dict):
+            parsed = _merge_llm_into_regex(parsed, llm_parsed)
+
         # spaCy name extraction fallback
         nlp_obj = get_nlp()
-        if "full_name" not in parsed and nlp_obj:
+        if (not parsed.get("full_name") or parsed["full_name"] == "Student Candidate") and nlp_obj:
             doc = nlp_obj(text[:1000])
             for ent in doc.ents:
                 if ent.label_ == "PERSON" and len(ent.text.strip()) > 3:

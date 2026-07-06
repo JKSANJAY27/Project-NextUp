@@ -11,11 +11,11 @@ logger = logging.getLogger("nextup.latex_renderer")
 
 # Set up jinja2 environment with alternate delimiters to avoid conflict with LaTeX curly braces
 latex_jinja_env = jinja2.Environment(
-    block_start_string='\block{',
+    block_start_string=r'\block{',
     block_end_string='}',
-    variable_start_string='\var{',
+    variable_start_string=r'\var{',
     variable_end_string='}',
-    comment_start_string='\comment{',
+    comment_start_string=r'\comment{',
     comment_end_string='}',
     trim_blocks=True,
     autoescape=False,
@@ -125,138 +125,244 @@ def _escape_dict_recursive(data: Any) -> Any:
         return data
 
 def _render_fallback_pdf(content_json: dict) -> bytes:
-    """Fallback compiler using PyMuPDF (fitz) to draw a clean resume preview."""
+    """PDF renderer using PyMuPDF (the production path — no TeX on the Space).
+
+    Renders EVERY section of the resume JSON with proper word-wrapping and
+    automatic page breaks. The previous version drew single-line text capped
+    at 90 chars on one page, which truncated every bullet and silently
+    dropped links, patents, recognition and anything past ~750pt.
+    """
     import fitz
-    logger.info("Generating beautifully styled fallback PDF using PyMuPDF.")
-    
+    logger.info("Generating resume PDF using PyMuPDF renderer.")
+
+    PAGE_W, PAGE_H = 595, 842  # A4
+    MARGIN = 50
+    BOTTOM = PAGE_H - 50
+
+    INK = (0.1, 0.1, 0.1)
+    BODY = (0.2, 0.2, 0.2)
+    MUTED = (0.4, 0.4, 0.4)
+    ACCENT = (0.2, 0.2, 0.5)
+
     doc = fitz.open()
-    page = doc.new_page(width=595, height=842) # A4 dimensions
-    
-    # Define text colors and margins
-    margin = 54
-    y = 54
-    width = 595 - (2 * margin)
-    
-    personal = content_json.get("personal", {})
-    name = personal.get("name", "Student Resume").upper()
-    email = personal.get("email", "")
-    phone = personal.get("phone", "")
-    linkedin = personal.get("linkedin", "")
-    
-    # 1. Header (Centered Name & Contact Info)
-    page.insert_text((margin, y), name, fontsize=16, fontname="hebo", color=(0.1, 0.1, 0.1))
-    y += 24
-    
-    contact_details = []
-    if email: contact_details.append(email)
-    if phone: contact_details.append(phone)
-    if linkedin: contact_details.append(linkedin)
-    contact_str = "  |  ".join(contact_details)
-    page.insert_text((margin, y), contact_str, fontsize=9, fontname="helv", color=(0.4, 0.4, 0.4))
-    y += 18
-    
-    # Draw horizontal divider
-    shape = page.new_shape()
-    shape.draw_line(fitz.Point(margin, y), fitz.Point(595 - margin, y))
+    state = {"page": doc.new_page(width=PAGE_W, height=PAGE_H), "y": MARGIN}
+
+    def ensure_space(needed: float):
+        if state["y"] + needed > BOTTOM:
+            state["page"] = doc.new_page(width=PAGE_W, height=PAGE_H)
+            state["y"] = MARGIN
+
+    def wrap(text_val: str, fontsize: float, fontname: str, width: float):
+        """Greedy word-wrap using real glyph metrics."""
+        words = str(text_val).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if fitz.get_text_length(candidate, fontname=fontname, fontsize=fontsize) <= width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines or [""]
+
+    def draw_wrapped(text_val: str, *, x: float = MARGIN, fontsize: float = 9.5,
+                     fontname: str = "helv", color=BODY, width: float = None,
+                     line_height: float = None, link_uri: str = None):
+        width = width or (PAGE_W - MARGIN - x)
+        line_height = line_height or (fontsize + 3)
+        for line in wrap(text_val, fontsize, fontname, width):
+            ensure_space(line_height)
+            state["page"].insert_text((x, state["y"]), line, fontsize=fontsize,
+                                      fontname=fontname, color=color)
+            if link_uri:
+                text_w = fitz.get_text_length(line, fontname=fontname, fontsize=fontsize)
+                state["page"].insert_link({
+                    "kind": fitz.LINK_URI, "uri": link_uri,
+                    "from": fitz.Rect(x, state["y"] - fontsize, x + text_w, state["y"] + 2),
+                })
+            state["y"] += line_height
+
+    def draw_bullets(desc, indent: float = 12):
+        """desc may be a newline-joined string or a list of bullet strings."""
+        if isinstance(desc, list):
+            bullets = [str(b) for b in desc]
+        else:
+            bullets = str(desc).split("\n")
+        for b in bullets:
+            b_clean = b.strip().lstrip("-*•▪").strip()
+            if b_clean:
+                draw_wrapped(f"•  {b_clean}", x=MARGIN + indent, fontsize=9,
+                             line_height=12)
+
+    def section_header(title: str):
+        ensure_space(34)
+        state["y"] += 10
+        state["page"].insert_text((MARGIN, state["y"]), title.upper(), fontsize=11,
+                                  fontname="hebo", color=ACCENT)
+        state["y"] += 8
+        shape = state["page"].new_shape()
+        shape.draw_line(fitz.Point(MARGIN, state["y"]), fitz.Point(MARGIN + 130, state["y"]))
+        shape.finish(color=ACCENT, width=1.5)
+        shape.commit()
+        state["y"] += 12
+
+    def first_of(d: dict, *keys) -> str:
+        for k in keys:
+            v = d.get(k)
+            if v:
+                return str(v)
+        return ""
+
+    # ── 1. Header: name + contact + links ─────────────────────────────
+    personal = content_json.get("personal", {}) or {}
+    name = str(personal.get("name") or "Student Resume").upper()
+    ensure_space(24)
+    state["page"].insert_text((MARGIN, state["y"] + 12), name, fontsize=16,
+                              fontname="hebo", color=INK)
+    state["y"] += 30
+
+    contact_parts = [p for p in (personal.get("email"), personal.get("phone"),
+                                 personal.get("location")) if p]
+    if contact_parts:
+        draw_wrapped("  |  ".join(str(p) for p in contact_parts),
+                     fontsize=9, color=MUTED, line_height=13)
+
+    # Profile links — clickable, one line
+    links = []
+    for label, key in (("Portfolio", "website"), ("LinkedIn", "linkedin"), ("GitHub", "github")):
+        url = str(personal.get(key) or "").strip()
+        if url:
+            full_url = url if url.startswith("http") else f"https://{url}"
+            links.append((f"{label}: {url}", full_url))
+    if links:
+        x = MARGIN
+        ensure_space(13)
+        for i, (label_text, uri) in enumerate(links):
+            display = label_text + ("   " if i < len(links) - 1 else "")
+            text_w = fitz.get_text_length(display, fontname="helv", fontsize=8.5)
+            if x + text_w > PAGE_W - MARGIN:  # wrap link row if needed
+                state["y"] += 12
+                ensure_space(13)
+                x = MARGIN
+            state["page"].insert_text((x, state["y"]), display, fontsize=8.5,
+                                      fontname="helv", color=(0.1, 0.3, 0.6))
+            state["page"].insert_link({
+                "kind": fitz.LINK_URI, "uri": uri,
+                "from": fitz.Rect(x, state["y"] - 8.5, x + text_w, state["y"] + 2),
+            })
+            x += text_w
+        state["y"] += 13
+
+    state["y"] += 4
+    shape = state["page"].new_shape()
+    shape.draw_line(fitz.Point(MARGIN, state["y"]), fitz.Point(PAGE_W - MARGIN, state["y"]))
     shape.finish(color=(0.8, 0.8, 0.8), width=1)
     shape.commit()
-    y += 18
-    
-    # Helper to insert section title
-    def add_section_header(title):
-        nonlocal y
-        y += 10
-        page.insert_text((margin, y), title.upper(), fontsize=11, fontname="hebo", color=(0.2, 0.2, 0.5))
-        y += 14
-        shape = page.new_shape()
-        shape.draw_line(fitz.Point(margin, y - 6), fitz.Point(180, y - 6))
-        shape.finish(color=(0.2, 0.2, 0.5), width=1.5)
-        shape.commit()
-        
-    # 2. Professional Summary
+    state["y"] += 6
+
+    # ── 2. Summary ─────────────────────────────────────────────────────
     summary = content_json.get("summary", "")
     if summary:
-        add_section_header("Summary")
-        rect = fitz.Rect(margin, y, 595 - margin, y + 45)
-        page.insert_textbox(rect, summary, fontsize=9.5, fontname="helv", color=(0.2, 0.2, 0.2))
-        y += 50
-        
-    # 3. Education
-    education = content_json.get("education", [])
-    if education:
-        add_section_header("Education")
-        for edu in education:
-            if y > 750: break
-            inst = edu.get("institution", "")
-            deg = edu.get("degree", "")
-            dates = edu.get("dates", "")
-            gpa = edu.get("gpa", "")
-            
-            edu_str = f"{deg} - {inst} ({dates})"
-            page.insert_text((margin, y), edu_str, fontsize=9.5, fontname="hebo", color=(0.1, 0.1, 0.1))
-            if gpa:
-                page.insert_text((595 - margin - 80, y), f"GPA: {gpa}", fontsize=9.5, fontname="hebo", color=(0.1, 0.1, 0.1))
-            y += 16
-            
-    # 4. Skills
+        section_header("Summary")
+        draw_wrapped(summary)
+
+    # ── 3. Skills (categorized when available) ─────────────────────────
     skills = content_json.get("skills", [])
-    if skills:
-        add_section_header("Skills")
-        if isinstance(skills, list):
-            skills_str = ", ".join(skills)
+    skills_categories = content_json.get("skills_categories") or {}
+    if skills_categories or skills:
+        section_header("Skills")
+        if isinstance(skills_categories, dict) and skills_categories:
+            for category, items in skills_categories.items():
+                if isinstance(items, list) and items:
+                    draw_wrapped(f"{category}: {', '.join(str(i) for i in items)}",
+                                 fontsize=9, line_height=12.5)
         elif isinstance(skills, dict):
-            skills_str = " | ".join(f"{k}: {', '.join(v)}" for k, v in skills.items())
-        else:
-            skills_str = str(skills)
-            
-        rect = fitz.Rect(margin, y, 595 - margin, y + 35)
-        page.insert_textbox(rect, skills_str, fontsize=9.5, fontname="helv", color=(0.2, 0.2, 0.2))
-        y += 40
-        
-    # 5. Experience
+            for category, items in skills.items():
+                draw_wrapped(f"{category}: {', '.join(str(i) for i in items)}",
+                             fontsize=9, line_height=12.5)
+        elif isinstance(skills, list) and skills:
+            draw_wrapped(", ".join(str(s) for s in skills))
+
+    # ── 4. Experience ──────────────────────────────────────────────────
     experience = content_json.get("experience", [])
     if experience:
-        add_section_header("Experience")
+        section_header("Experience")
         for exp in experience:
-            if y > 750: break
-            comp = exp.get("company", "")
-            role = exp.get("role", "")
-            dates = exp.get("dates", "")
-            desc = exp.get("description", "")
-            
-            exp_header = f"{role} at {comp} ({dates})"
-            page.insert_text((margin, y), exp_header, fontsize=9.5, fontname="hebo", color=(0.1, 0.1, 0.1))
-            y += 14
-            
+            if not isinstance(exp, dict):
+                continue
+            role = first_of(exp, "role", "title")
+            comp = first_of(exp, "company", "organization")
+            dates = first_of(exp, "dates", "period", "duration", "year")
+            header = " — ".join(p for p in (role, comp) if p)
+            if dates:
+                header += f"  ({dates})"
+            ensure_space(16)
+            draw_wrapped(header, fontname="hebo", line_height=14)
+            desc = exp.get("description") or exp.get("bullets") or ""
             if desc:
-                # Split description bullet points
-                bullets = desc.split("\n") if "\n" in desc else [desc]
-                for b in bullets:
-                    b_clean = b.strip().lstrip("-*•").strip()
-                    if b_clean:
-                        page.insert_text((margin + 12, y), f"•  {b_clean[:90]}", fontsize=9, fontname="helv", color=(0.2, 0.2, 0.2))
-                        y += 12
-            y += 6
+                draw_bullets(desc)
+            state["y"] += 4
 
-    # 6. Projects
+    # ── 5. Projects ────────────────────────────────────────────────────
     projects = content_json.get("projects", [])
     if projects:
-        add_section_header("Projects")
+        section_header("Projects")
         for proj in projects:
-            if y > 750: break
-            title = proj.get("title", "")
-            desc = proj.get("description", "")
-            
-            page.insert_text((margin, y), title, fontsize=9.5, fontname="hebo", color=(0.1, 0.1, 0.1))
-            y += 14
-            
+            if not isinstance(proj, dict):
+                continue
+            title = first_of(proj, "title", "name")
+            tech = first_of(proj, "tech", "stack", "technologies")
+            header = title + (f"  [{tech}]" if tech else "")
+            ensure_space(16)
+            draw_wrapped(header, fontname="hebo", line_height=14)
+            desc = proj.get("description") or proj.get("bullets") or ""
             if desc:
-                bullets = desc.split("\n") if "\n" in desc else [desc]
-                for b in bullets:
-                    b_clean = b.strip().lstrip("-*•").strip()
-                    if b_clean:
-                        page.insert_text((margin + 12, y), f"•  {b_clean[:90]}", fontsize=9, fontname="helv", color=(0.2, 0.2, 0.2))
-                        y += 12
-            y += 6
+                draw_bullets(desc)
+            state["y"] += 4
+
+    # ── 6. Education ───────────────────────────────────────────────────
+    education = content_json.get("education", [])
+    if education:
+        section_header("Education")
+        for edu in education:
+            if not isinstance(edu, dict):
+                continue
+            inst = first_of(edu, "institution", "school", "university")
+            deg = first_of(edu, "degree", "course")
+            dates = first_of(edu, "dates", "year", "years", "period")
+            score = first_of(edu, "gpa", "cgpa", "score", "percentage")
+            line = " — ".join(p for p in (deg, inst) if p)
+            if dates:
+                line += f"  ({dates})"
+            draw_wrapped(line, fontname="hebo", line_height=14)
+            if score:
+                score_str = score if any(c.isalpha() for c in score) else f"Score: {score}"
+                draw_wrapped(score_str, x=MARGIN + 12, fontsize=9, line_height=12)
+            state["y"] += 2
+
+    # ── 7. Extra sections: patents, achievements, certifications, awards ─
+    extra_sections = [
+        ("Patents", content_json.get("patents")),
+        ("Certifications", content_json.get("certifications")),
+        ("Achievements & Recognition", content_json.get("achievements")),
+    ]
+    # 'awards' historically duplicates patents+achievements — only render it
+    # when the dedicated keys are absent.
+    if not content_json.get("patents") and not content_json.get("achievements"):
+        extra_sections.append(("Awards & Recognition", content_json.get("awards")))
+
+    for title, items in extra_sections:
+        if isinstance(items, list) and any(str(i).strip() for i in items):
+            section_header(title)
+            draw_bullets([str(i) for i in items if str(i).strip()])
+
+    # Custom sections: [{"title": ..., "items": [...]}]
+    for custom in content_json.get("custom_sections") or []:
+        if isinstance(custom, dict) and custom.get("items"):
+            section_header(str(custom.get("title", "Additional")))
+            draw_bullets([str(i) for i in custom["items"]])
 
     return doc.write()
