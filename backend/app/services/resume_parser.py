@@ -243,6 +243,100 @@ def is_tech_only_line(line: str) -> bool:
     tech_count = sum(1 for w in words if w in tech_words)
     return (tech_count / len(words)) >= 0.65
 
+def classify_profile_links(urls: list) -> Dict[str, str]:
+    """Classify a list of URLs into profile links.
+
+    - github: prefers a PROFILE URL (github.com/<user>, single path segment);
+      when only repository URLs exist, derives the profile from the repo owner
+      (previously the first repo link was stored as the "GitHub profile").
+    - linkedin: prefers linkedin.com/in/... over company/school pages.
+    - website: first URL that isn't a code-host/social/doc link (portfolio).
+    """
+    github_profile = ""
+    github_repo_owner = ""
+    linkedin = ""
+    website = ""
+    NON_PORTFOLIO_DOMAINS = (
+        "github.com", "linkedin.com", "docs.google", "forms.gle",
+        "drive.google", "goo.gl", "bit.ly", "vit.ac.in", "leetcode.com",
+        "hackerrank.com", "codechef.com", "credly.com", "coursera.org",
+    )
+    for raw in urls or []:
+        u = str(raw).strip().rstrip('.,;:)')
+        if not u:
+            continue
+        low = u.lower()
+        if low.startswith("mailto:"):
+            continue
+        if "linkedin.com" in low:
+            if "/in/" in low and "/in/" not in linkedin.lower():
+                linkedin = u
+            elif not linkedin:
+                linkedin = u
+        elif "github.com" in low:
+            path = re.sub(r"^(https?://)?(www\.)?github\.com/?", "", u, flags=re.IGNORECASE).strip("/")
+            segs = [s for s in path.split("/") if s]
+            if len(segs) == 1:
+                if not github_profile:
+                    github_profile = u
+            elif segs and not github_repo_owner:
+                github_repo_owner = segs[0]
+        else:
+            if not website and not any(d in low for d in NON_PORTFOLIO_DOMAINS):
+                website = u
+    if not github_profile and github_repo_owner:
+        github_profile = f"https://github.com/{github_repo_owner}"
+    return {"github": github_profile, "linkedin": linkedin, "website": website}
+
+
+def extract_school_marks(text: str) -> Dict[str, float]:
+    """Extract Class 10 / Class 12 percentages.
+
+    Labeled patterns win ("10th: 95%", "Class XII - 93.5%"). The fallback only
+    scans lines that mention a school/board — a naive whole-text scan
+    previously picked up "Cut page load time by 20%" from an experience
+    bullet as the 12th-standard marks.
+    """
+    def _labeled(label_pat: str) -> float:
+        m = re.search(
+            rf"(?:{label_pat})[^%\n]{{0,50}}?(\d{{2,3}}(?:\.\d+)?)\s*%",
+            text, re.IGNORECASE,
+        )
+        if m:
+            try:
+                val = float(m.group(1))
+                if 35.0 <= val <= 100.0:
+                    return val
+            except ValueError:
+                pass
+        return 0.0
+
+    tenth = _labeled(r"10\s*th|class\s*10|x\s*std|sslc|secondary\s+school|matriculation")
+    twelfth = _labeled(r"12\s*th|class\s*12|xii|hsc|intermediate|senior\s+secondary|higher\s+secondary|\+2")
+
+    if not tenth or not twelfth:
+        school_words = ("school", "board", "cbse", "icse", "state board",
+                        "sslc", "hsc", "intermediate", "matric", "puc")
+        edu_scores = []
+        for line in text.split("\n"):
+            low = line.lower()
+            if any(w in low for w in school_words):
+                for m in re.findall(r"(\d{2,3}(?:\.\d+)?)\s*%", line):
+                    try:
+                        val = float(m)
+                        if 35.0 <= val <= 100.0:
+                            edu_scores.append(val)
+                    except ValueError:
+                        pass
+        # Resumes list education reverse-chronologically: 12th before 10th
+        if not twelfth and edu_scores:
+            twelfth = edu_scores[0]
+        if not tenth and len(edu_scores) >= 2:
+            tenth = edu_scores[1]
+
+    return {"tenth_marks": tenth, "twelfth_marks": twelfth}
+
+
 def parse_resume_text_regex(text: str) -> Dict[str, Any]:
     data = {}
     lines = [line.strip() for line in text.split("\n") if line.strip()]
@@ -291,24 +385,10 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
             break
     data["branch"] = found_branch
 
-    # 4. Tenth & Twelfth Marks Extraction
-    tenth_marks = 0.0
-    twelfth_marks = 0.0
-    marks_matches = re.findall(r"(\d{2}(?:\.\d+)?)\s*%", text)
-    if len(marks_matches) >= 2:
-        try:
-            vals = [float(v) for v in marks_matches]
-            twelfth_marks = vals[0]
-            tenth_marks = vals[1]
-        except ValueError:
-            pass
-    elif len(marks_matches) == 1:
-        try:
-            twelfth_marks = float(marks_matches[0])
-        except ValueError:
-            pass
-    data["tenth_marks"] = tenth_marks
-    data["twelfth_marks"] = twelfth_marks
+    # 4. Tenth & Twelfth Marks Extraction (labeled-first, education-scoped)
+    marks = extract_school_marks(text)
+    data["tenth_marks"] = marks["tenth_marks"]
+    data["twelfth_marks"] = marks["twelfth_marks"]
 
     # 5. Batch Year Extraction
     batch_year = 2026
@@ -745,28 +825,21 @@ def parse_resume_text_regex(text: str) -> Dict[str, Any]:
         else:
             achievements[-1] += " " + clean_text
 
-    # Extract personal links
-    github_link = ""
-    linkedin_link = ""
-    website_link = ""
-    
-    github_match = re.search(r'(https?://)?(www\.)?github\.com/[\w\.-]+(/?[\w\.-]+)*', text, re.IGNORECASE)
-    if github_match:
-        github_link = github_match.group(0).strip()
-        
-    linkedin_match = re.search(r'(https?://)?(www\.)?linkedin\.com/in/[\w\.-]+', text, re.IGNORECASE)
-    if linkedin_match:
-        linkedin_link = linkedin_match.group(0).strip()
-        
+    # Extract personal links: collect EVERY URL in the text and classify —
+    # first-match extraction used to grab a project repo URL as the "GitHub
+    # profile" and miss LinkedIn/portfolio entirely.
+    all_urls = re.findall(r'(?:https?://|www\.)[^\s|()<>"\']+', text)
+    # Bare-domain mentions like "github.com/user" without a scheme
+    all_urls += re.findall(r'\b(?:github\.com|linkedin\.com)/[^\s|()<>"\']+', text)
+    links = classify_profile_links(all_urls)
+    github_link = links["github"]
+    linkedin_link = links["linkedin"]
+    website_link = links["website"]
+
+    # A "Portfolio: <url>" label wins for the website field
     portfolio_match = re.search(r'portfolio\s*(?:\([^)]*\))?\s*[:\-–\s]*\s*(https?://[^\s|()]+)', text, re.IGNORECASE)
     if portfolio_match:
-        website_link = portfolio_match.group(1).strip()
-    else:
-        urls = re.findall(r'https?://[^\s|()]+', text)
-        for u in urls:
-            if "github.com" not in u and "linkedin.com" not in u:
-                website_link = u
-                break
+        website_link = portfolio_match.group(1).strip().rstrip('.,;:)')
 
     # Skills = verbatim section skills first (preserves the student's own
     # phrasing/ordering), then dictionary-scanned skills not already covered.
@@ -954,6 +1027,20 @@ def parse_resume_pdf(file_bytes: bytes) -> Dict[str, Any]:
         if "awards" not in rd or not isinstance(rd["awards"], list):
             rd["awards"] = []
 
+    # Profile links from PDF link ANNOTATIONS (clickable "LinkedIn"/"GitHub"/
+    # "Portfolio" words whose URLs never appear in the extracted text).
+    # Annotations are the ground truth — they override text-derived guesses.
+    try:
+        from app.services.pdf_extractor import extract_link_annotations
+        annotation_links = classify_profile_links(extract_link_annotations(file_bytes))
+        pers = parsed["resume_data"].get("personal", {})
+        for key in ("github", "linkedin", "website"):
+            if annotation_links.get(key):
+                pers[key] = annotation_links[key]
+        parsed["resume_data"]["personal"] = pers
+    except Exception as e:
+        logger.warning(f"Link annotation extraction failed (non-critical): {e}")
+
     # Add raw text for encryption and client-side storage
     parsed["raw_text"] = text
 
@@ -988,27 +1075,15 @@ def post_process_parsed_links(parsed: Dict[str, Any], text: str) -> Dict[str, An
     rd = parsed["resume_data"]
     pers = rd.get("personal", {})
     
-    # 1. Fill in personal links from text if missing
-    if not pers.get("github"):
-        github_match = re.search(r'(https?://)?(www\.)?github\.com/[\w\.-]+(/?[\w\.-]+)*', text, re.IGNORECASE)
-        if github_match:
-            pers["github"] = github_match.group(0).strip()
-            
-    if not pers.get("linkedin"):
-        linkedin_match = re.search(r'(https?://)?(www\.)?linkedin\.com/in/[\w\.-]+', text, re.IGNORECASE)
-        if linkedin_match:
-            pers["linkedin"] = linkedin_match.group(0).strip()
-            
-    if not pers.get("website"):
-        portfolio_match = re.search(r'portfolio\s*(?:\([^)]*\))?\s*[:\-–\s]*\s*(https?://[^\s|()]+)', text, re.IGNORECASE)
-        if portfolio_match:
-            pers["website"] = portfolio_match.group(1).strip()
-        else:
-            urls = re.findall(r'https?://[^\s|()]+', text)
-            for u in urls:
-                if "github.com" not in u and "linkedin.com" not in u:
-                    pers["website"] = u
-                    break
+    # 1. Fill in personal links from text if missing (classified, so a project
+    # repo URL is never mistaken for the GitHub profile)
+    if not pers.get("github") or not pers.get("linkedin") or not pers.get("website"):
+        all_urls = re.findall(r'(?:https?://|www\.)[^\s|()<>"\']+', text)
+        all_urls += re.findall(r'\b(?:github\.com|linkedin\.com)/[^\s|()<>"\']+', text)
+        classified = classify_profile_links(all_urls)
+        for key in ("github", "linkedin", "website"):
+            if not pers.get(key) and classified.get(key):
+                pers[key] = classified[key]
 
     # 2. Match GitHub project repository URLs and clean URL pollution from tech/description fields
     all_github_urls = list(set(re.findall(r'https?://github\.com/[^\s|()]+', text)))

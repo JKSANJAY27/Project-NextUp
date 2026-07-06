@@ -21,6 +21,28 @@ except Exception as e:
     logger.error(f"Failed to load skills dictionary from {SKILLS_FILE}: {str(e)}")
     SKILLS_LIST = []
 
+def extract_link_annotations(file_bytes: bytes) -> List[str]:
+    """Return every hyperlink URI embedded in the PDF (link annotations).
+
+    Resume links (LinkedIn / GitHub / portfolio) are often attached to words
+    like "LinkedIn" as clickable annotations and never appear in the extracted
+    plain text — this reads them directly from the PDF structure.
+    """
+    urls: List[str] = []
+    seen = set()
+    try:
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        for page in doc:
+            for link in page.get_links():
+                uri = (link.get("uri") or "").strip()
+                if uri and not uri.lower().startswith("mailto:") and uri not in seen:
+                    seen.add(uri)
+                    urls.append(uri)
+    except Exception as e:
+        logger.warning(f"Failed to extract link annotations: {str(e)}")
+    return urls
+
+
 def extract_text_with_links_fitz(file_bytes: bytes) -> str:
     text = ""
     try:
