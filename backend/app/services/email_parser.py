@@ -307,7 +307,8 @@ Analyze the following email (subject, body, and any attachment text) and extract
 Output ONLY a valid raw JSON object — no markdown, no explanation, no code fences.
 
 CRITICAL — Company Name Rules (READ FIRST):
-- The company name must be the ACTUAL, CANONICAL BRAND NAME (e.g. "Groww", "Google", "JPMorgan Chase", "Ericsson", "Schneider Electric").
+- The company name must be the ACTUAL, CANONICAL BRAND NAME (e.g. "Google", "JPMorgan Chase", "Ericsson", "Schneider Electric").
+- Extract values ONLY from the email content below. NEVER copy any value from the example JSON in this prompt — the example is fake. If a field is not present in the email, use null.
 - NEVER use placement categories, drive types, or subject headings as the company name. 
   BANNED values include: "Super Dream Placement", "Dream Internship", "Super Dream Internship / Placement", "Dream", "Super Dream", "Regular", "Congratulations", "Next Round of Selection", "Registration Open", "CDC Drive", "Campus Recruitment", "Unknown Company".
 - Locate the company name from labels like "Name of the Company:", "Company Name:", "Organisation:", or the email's signature/branding.
@@ -323,7 +324,7 @@ Required JSON Output Format:
   "extracted_data": {{
     "email_category": "NEW_DRIVE",
     "company": {{
-      "value": "Groww",
+      "value": "ExampleCorp Fintech",
       "confidence": 0.99
     }},
     "event_type": {{
@@ -1719,7 +1720,77 @@ def parse_placement_email(
             "email_parser: gateway returned an empty or malformed result structure."
         )
 
+    # Deterministic grounding: the company name must actually appear in the
+    # email. Small models copy the few-shot example values when the real
+    # value is absent — a company-less "test link" thread reply was once
+    # parsed as company="Groww" (the old prompt example) with the example's
+    # registration deadline, creating a fake drive.
+    parsed = ground_company_in_source(parsed, subject, email_body, attachment_text)
+
     # Deterministic post-processing: override fragile model fields with
     # source-grounded values (CTC, Stipend, CGPA) extracted directly from email.
     return ground_role_facts_in_source(parsed, email_body)
+
+
+def _company_appears_in_text(company_name: str, haystack_lower: str) -> bool:
+    """True when at least one significant token of the name occurs in the text."""
+    if not company_name:
+        return False
+    GENERIC_TOKENS = {
+        "technologies", "technology", "solutions", "systems", "software",
+        "services", "labs", "ltd", "limited", "pvt", "private", "inc", "llp",
+        "corp", "corporation", "company", "group", "india", "global", "the",
+    }
+    tokens = [t for t in re.split(r"[^a-z0-9]+", company_name.lower())
+              if len(t) >= 3 and t not in GENERIC_TOKENS]
+    if not tokens:
+        # Name made only of generic/short tokens — fall back to full-phrase check
+        return company_name.lower() in haystack_lower
+    return any(t in haystack_lower for t in tokens)
+
+
+def ground_company_in_source(
+    parsed: Dict[str, Any], subject: str, email_body: str, attachment_text: str = ""
+) -> Dict[str, Any]:
+    """Reject hallucinated company names that don't occur anywhere in the email.
+
+    If the model's company is ungrounded, retry with the deterministic
+    subject-line extraction; if that is also ungrounded, null the company so
+    the pipeline routes the job to UNKNOWN_COMPANY handling instead of
+    creating a fake drive.
+    """
+    ext = parsed.get("extracted_data") if isinstance(parsed, dict) else None
+    if not isinstance(ext, dict):
+        return parsed
+    company_field = ext.get("company")
+    if not isinstance(company_field, dict):
+        return parsed
+    company_name = company_field.get("value")
+    if not company_name:
+        return parsed
+
+    haystack = f"{subject}\n{email_body}\n{attachment_text}".lower()
+    if _company_appears_in_text(str(company_name), haystack):
+        return parsed
+
+    logger.warning(
+        "[email_parser] Model company %r not found in email text — rejecting "
+        "as hallucination. Subject: %r", company_name, subject[:80],
+    )
+    # The fallback comes FROM the subject, so grounding against the haystack
+    # is trivially true — the generic-name filter is the real gate here
+    # (rejects phrases like "Final Year Students" or "Kind Attention").
+    fallback_name = extract_company_from_subject(subject)
+    _STUDENT_PHRASES = re.compile(
+        r"\b(students?|batch|final\s+year|placement|registration|all\s+the\s+best)\b",
+        re.IGNORECASE,
+    )
+    if (fallback_name and fallback_name != "Unknown Company"
+            and not is_generic_company_name(fallback_name)
+            and not _STUDENT_PHRASES.search(fallback_name)):
+        ext["company"] = {"value": fallback_name, "confidence": 0.5}
+        logger.info("[email_parser] Recovered company from subject: %r", fallback_name)
+    else:
+        ext["company"] = {"value": None, "confidence": 0.0}
+    return parsed
 

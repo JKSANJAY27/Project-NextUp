@@ -235,56 +235,84 @@ def clean_job_payload(job: RawIngestionJob):
     except Exception as e:
         logger.warning(f"Failed to clean job payload for {job.id}: {e}")
 
-def process_shortlist_excel_batched(db: Session, company: Company, event: Optional[CompanyEvent], filename: str, file_bytes: bytes, att_meta: AttachmentMetadata):
+def extract_neo_ids_from_text(text_val: str) -> list:
+    """Extract Neo-ID-shaped tokens from free text (shortlists pasted into the
+    email body instead of an Excel attachment)."""
+    if not text_val:
+        return []
+    core = settings.NEO_ID_REGEX.strip("^$")
+    matches = re.findall(rf"(?<![A-Za-z0-9])({core})(?![A-Za-z0-9])", text_val)
+    seen, out = set(), []
+    for m in matches:
+        nid = (m if isinstance(m, str) else m[0]).strip().upper()
+        if nid and nid not in seen:
+            seen.add(nid)
+            out.append(nid)
+    return out
+
+
+# Human wording for shortlist notifications, by the round the email announces
+_SHORTLIST_STAGE_WORDING = {
+    "OA_RESULT": "cleared the online assessment",
+    "INTERVIEW_RESULT": "cleared the interview round",
+    "OFFER_RELEASED": "been placed on the final selection list",
+    "OFFER": "been placed on the final selection list",
+}
+
+
+def apply_shortlist_matches(db: Session, company: Company, event: Optional[CompanyEvent],
+                            neo_ids: list, source: str = "excel",
+                            event_type_hint: str = "") -> int:
+    """Core shortlist matching, shared by the Excel-attachment and email-body
+    paths. Matches Neo IDs against registered students via blind-index hashes,
+    advances their applications, and notifies BOTH outcomes:
+
+      - matched  -> "you are shortlisted / cleared round X"
+      - unmatched active applicants -> "not on the list; verify the original
+        email and archive this workspace if you were not selected"
+
+    Returns the number of matched system students.
     """
-    Batches database operations to parse CDC shortlist Excel files efficiently.
-    Reduces O(N) database query storms to O(1) bulk operations.
-    """
-    try:
-        neo_ids = extract_neo_ids_from_excel(file_bytes)
-        att_meta.parsed_meta = {"extracted_count": len(neo_ids)}
-        
-        if not neo_ids:
-            logger.info(f"No Neo IDs extracted from shortlist Excel: {filename}")
-            return
-            
-        shortlist_hashes = set()
-        for nid in neo_ids:
-            nid_hash = generate_blind_index(nid, settings.PEPPER)
-            shortlist_hashes.add(nid_hash)
-            
-        # 1. Bulk query StudentProfiles
-        profiles = db.query(StudentProfile).filter(StudentProfile.neo_id_hash.in_(list(shortlist_hashes))).all()
-        if not profiles:
-            logger.info(f"No matching system students found for shortlist: {filename}")
-            return
-            
-        matched_user_ids = {p.user_id for p in profiles}
-        
-        # 2. Bulk query existing Applications
+    if not neo_ids:
+        return 0
+
+    shortlist_hashes = set()
+    for nid in neo_ids:
+        shortlist_hashes.add(generate_blind_index(nid, settings.PEPPER))
+
+    # Dedup notifications per event across all users (the unique constraint
+    # (user_id, company_event_id) makes duplicates a commit-time error).
+    notified_user_ids = set()
+    if event:
+        existing_notifs = db.query(Notification).filter(
+            Notification.company_event_id == event.id
+        ).all()
+        notified_user_ids = {n.user_id for n in existing_notifs}
+
+    # 1. Bulk query matched StudentProfiles
+    profiles = db.query(StudentProfile).filter(
+        StudentProfile.neo_id_hash.in_(list(shortlist_hashes))
+    ).all()
+    matched_user_ids = {p.user_id for p in profiles}
+
+    matched_count = 0
+    if profiles:
         existing_apps = db.query(Application).filter(
             Application.company_id == company.id,
             Application.user_id.in_(list(matched_user_ids))
         ).all()
         apps_by_user_id = {app.user_id: app for app in existing_apps}
-        
-        # 3. Bulk query existing OpportunityStates
+
         existing_opp_states = db.query(OpportunityState).filter(
             OpportunityState.company_id == company.id,
             OpportunityState.user_id.in_(list(matched_user_ids))
         ).all()
         opp_states_by_user_id = {os.user_id: os for os in existing_opp_states}
-        
-        # 4. Bulk query existing Notifications for this event
-        notifs_by_user_id = set()
-        if event:
-            existing_notifs = db.query(Notification).filter(
-                Notification.company_event_id == event.id,
-                Notification.user_id.in_(list(matched_user_ids))
-            ).all()
-            notifs_by_user_id = {n.user_id for n in existing_notifs}
-        
-        matched_count = 0
+
+        stage_wording = _SHORTLIST_STAGE_WORDING.get(
+            event_type_hint, "been shortlisted for the next round"
+        )
+
         for profile in profiles:
             # Application status logic
             app = apps_by_user_id.get(profile.user_id)
@@ -304,7 +332,7 @@ def process_shortlist_excel_batched(db: Session, company: Company, event: Option
                     app.recruitment_state = 'Shortlisted'
                     app.current_round = 'Shortlisted'
                     app.user_decision = 'tracking'
-                    
+
             # OpportunityState logic
             opp_state = opp_states_by_user_id.get(profile.user_id)
             if not opp_state:
@@ -321,10 +349,12 @@ def process_shortlist_excel_batched(db: Session, company: Company, event: Option
                 opp_state.archive_reason = None
                 opp_state.archived_at = None
                 opp_state.updated_at = datetime.utcnow()
-                
+
             # Notification logic
-            if event and profile.user_id not in notifs_by_user_id:
-                notif_msg = f"🎉 Congratulations! You are shortlisted in the {company.name} drive for the {company.role} role."
+            if event and profile.user_id not in notified_user_ids:
+                notif_msg = (f"🎉 Congratulations! You have {stage_wording} in the "
+                             f"{company.name} drive ({company.role}). Check the workspace "
+                             f"for next-round details.")
                 db.add(Notification(
                     user_id=profile.user_id,
                     company_event_id=event.id,
@@ -332,27 +362,62 @@ def process_shortlist_excel_batched(db: Session, company: Company, event: Option
                     notification_type='shortlist',
                     severity=4,
                 ))
+                notified_user_ids.add(profile.user_id)
             matched_count += 1
-            
-        # 5. Process Likely Rejected students
-        active_apps = db.query(Application).filter(
-            Application.company_id == company.id,
-            Application.status.in_(('Applied', 'Shortlisted', 'OA', 'Interview'))
+
+    # 2. Students actively tracking this drive who are NOT on the list:
+    # mark Likely Rejected and ask them to verify + archive.
+    active_apps = db.query(Application).filter(
+        Application.company_id == company.id,
+        Application.status.in_(('Applied', 'Shortlisted', 'OA', 'Interview'))
+    ).all()
+
+    unmatched_active_apps = [app for app in active_apps if app.user_id not in matched_user_ids]
+    if unmatched_active_apps:
+        unmatched_user_ids = {app.user_id for app in unmatched_active_apps}
+        unmatched_profiles = db.query(StudentProfile).filter(
+            StudentProfile.user_id.in_(list(unmatched_user_ids))
         ).all()
-        
-        unmatched_active_apps = [app for app in active_apps if app.user_id not in matched_user_ids]
-        if unmatched_active_apps:
-            unmatched_user_ids = {app.user_id for app in unmatched_active_apps}
-            unmatched_profiles = db.query(StudentProfile).filter(StudentProfile.user_id.in_(list(unmatched_user_ids))).all()
-            unmatched_profiles_by_user_id = {p.user_id: p for p in unmatched_profiles}
-            
-            for app in unmatched_active_apps:
-                profile = unmatched_profiles_by_user_id.get(app.user_id)
-                if profile and profile.neo_id_hash not in shortlist_hashes:
-                    app.status = 'Likely Rejected'
-                    logger.info(f"Student {app.user_id} marked as Likely Rejected for company {company.name}")
-                    
-        logger.info(f"Processed Shortlist Excel attachment: {filename}. Matched {matched_count} system students.")
+        unmatched_profiles_by_user_id = {p.user_id: p for p in unmatched_profiles}
+
+        for app in unmatched_active_apps:
+            profile = unmatched_profiles_by_user_id.get(app.user_id)
+            if profile and profile.neo_id_hash not in shortlist_hashes:
+                app.status = 'Likely Rejected'
+                logger.info(f"Student {app.user_id} marked as Likely Rejected for company {company.name}")
+                if event and app.user_id not in notified_user_ids:
+                    db.add(Notification(
+                        user_id=app.user_id,
+                        company_event_id=event.id,
+                        message=(f"⚠ Your Neo ID was not found on the {company.name} "
+                                 f"({company.role}) shortlist. Please verify against the "
+                                 f"original CDC email — if you were not selected, archive "
+                                 f"this workspace from the tracker."),
+                        notification_type='shortlist',
+                        severity=3,
+                    ))
+                    notified_user_ids.add(app.user_id)
+
+    logger.info(f"Shortlist ({source}): matched {matched_count} students, "
+                f"{len(unmatched_active_apps)} active applicants not on the list "
+                f"for {company.name}.")
+    return matched_count
+
+
+def process_shortlist_excel_batched(db: Session, company: Company, event: Optional[CompanyEvent], filename: str, file_bytes: bytes, att_meta: AttachmentMetadata):
+    """Parse a CDC shortlist Excel attachment and apply matches in bulk."""
+    try:
+        neo_ids = extract_neo_ids_from_excel(file_bytes)
+        att_meta.parsed_meta = {"extracted_count": len(neo_ids)}
+
+        if not neo_ids:
+            logger.info(f"No Neo IDs extracted from shortlist Excel: {filename}")
+            return
+
+        event_type_hint = event.event_type if event else ""
+        apply_shortlist_matches(db, company, event, neo_ids,
+                                source=f"excel:{filename}",
+                                event_type_hint=event_type_hint)
     except Exception as e:
         logger.error(f"Failed to process Shortlist Excel {filename}: {str(e)}", exc_info=True)
 
@@ -905,10 +970,20 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
             "OA", "OA_RESULT", "SHORTLIST", "INTERVIEW", "INTERVIEW_RESULT",
             "OFFER", "REJECTION", "DEADLINE_EXTENSION", "GENERAL_UPDATE"
         }
+        # Thread replies (Re:/Fwd:) are always updates to an existing drive —
+        # a first announcement is never a reply. Without this, a misclassified
+        # reply ("Re: <Company> - Online test ...") could create a fake drive.
+        is_thread_reply = bool(re.match(r"^\s*(re|fwd|fw)\s*:", subject or "", re.IGNORECASE))
+
         is_announcement = (
             email_category == "NEW_DRIVE"
             and event_type not in UPDATE_ONLY_EVENT_TYPES
+            and not is_thread_reply
         )
+        if is_thread_reply and email_category == "NEW_DRIVE":
+            logger.info(f"Job {job.id}: subject is a thread reply — downgrading NEW_DRIVE to update routing.")
+            if event_type == "NEW_DRIVE":
+                event_type = "GENERAL_UPDATE"
         
         # Set final classification on the raw ingestion job
         job.final_classification = "NEW_DRIVE" if is_announcement else event_type
@@ -1399,6 +1474,7 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                                 ))
 
         # 6. Parse and store attachments for each processed event
+        excel_shortlist_processed = False
         for event in processed_events:
             company = event.company
             has_attachments = False
@@ -1476,10 +1552,33 @@ def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
                  # Process Shortlist Excel
                 elif filename.lower().endswith((".xls", ".xlsx")):
                     process_shortlist_excel_batched(db, company, event, filename, file_bytes, att_meta)
-            
+                    excel_shortlist_processed = True
+
             if has_attachments:
                 log_execution_stage(db, job.id, "ATTACHMENTS_PROCESSED", "SUCCESS")
-                
+
+        # Shortlists pasted directly into the email body (no Excel attached):
+        # extract Neo-ID tokens from the body and run the same matching +
+        # notification flow as the Excel path. Skipped when an Excel shortlist
+        # was already processed for this email to avoid double notifications.
+        SHORTLIST_BODY_EVENT_TYPES = {
+            "SHORTLIST_RELEASED", "OA_RESULT", "INTERVIEW_RESULT",
+            "OFFER_RELEASED", "SHORTLIST", "OFFER",
+        }
+        if (event_type in SHORTLIST_BODY_EVENT_TYPES
+                and not excel_shortlist_processed and body and processed_events):
+            try:
+                body_neo_ids = extract_neo_ids_from_text(body)
+                if body_neo_ids:
+                    logger.info(f"Job {job.id}: found {len(body_neo_ids)} Neo IDs in email body — applying shortlist matches.")
+                    for event in processed_events:
+                        apply_shortlist_matches(
+                            db, event.company, event, body_neo_ids,
+                            source="email-body", event_type_hint=event_type,
+                        )
+            except Exception as e:
+                logger.error(f"Job {job.id}: body shortlist processing failed: {e}", exc_info=True)
+
         # Store JD text + generate the reusable JD Strategy (once per drive).
         # Preference order for JD text: attached JD PDF (richest) > email body.
         # The strategy JSON is cached on the company and reused by every
