@@ -137,6 +137,43 @@ export default function CompanyWorkspaceModal({
     };
   }, [jdPdfAttachment]);
 
+  const [openingAttachmentId, setOpeningAttachmentId] = useState<string | null>(null);
+
+  // View/download any update's attachment (JD PDF, shortlist Excel, ...)
+  // directly from the workspace: PDFs open inline in a new tab, everything
+  // else downloads with its original filename.
+  const handleOpenAttachment = async (att: { id: string; file_name?: string }) => {
+    if (openingAttachmentId) return;
+    setOpeningAttachmentId(att.id);
+    try {
+      const response = await api.get(`/announcements/attachment/${att.id}`, {
+        responseType: "blob",
+      });
+      const fileName = att.file_name || "attachment";
+      const isPdf = fileName.toLowerCase().endsWith(".pdf");
+      const blob = new Blob([response.data], {
+        type: isPdf ? "application/pdf" : "application/octet-stream",
+      });
+      const url = URL.createObjectURL(blob);
+      if (isPdf) {
+        window.open(url, "_blank", "noopener");
+      } else {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error("Failed to open attachment:", err);
+      alert("Failed to load the attachment. Please try again.");
+    } finally {
+      setOpeningAttachmentId(null);
+    }
+  };
+
   const handleUpdateApplication = async (companyId: string, updates: any) => {
     try {
       if (selectedApp) {
@@ -596,6 +633,23 @@ export default function CompanyWorkspaceModal({
                               >
                                 {field.toUpperCase()}: {Math.round(score * 100)}% CONFIDENCE
                               </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {evt.attachments && evt.attachments.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5">
+                            {evt.attachments.map((att: any) => (
+                              <button
+                                key={att.id}
+                                onClick={() => handleOpenAttachment(att)}
+                                className="text-[9px] font-mono font-bold px-2 py-1 border border-border bg-muted/20 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase flex items-center gap-1.5"
+                                title={att.file_name}
+                              >
+                                {att.file_type === 'JD_PDF' || att.file_name?.toLowerCase().endsWith('.pdf') ? '📄' : '📊'}
+                                {att.file_name?.length > 34 ? att.file_name.slice(0, 32) + '…' : att.file_name}
+                                {openingAttachmentId === att.id ? ' ⏳' : ''}
+                              </button>
                             ))}
                           </div>
                         )}

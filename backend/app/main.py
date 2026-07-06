@@ -228,6 +228,90 @@ def admin_backfill_jd_strategies(request: Request):
     return {"status": "started", "message": "JD strategy backfill running in background. Watch logs for progress."}
 
 
+@app.post("/api/admin/reset-and-reparse")
+def admin_reset_and_reparse(request: Request, since: str = "2026-06-29"):
+    """
+    Admin endpoint: wipe ALL drives (companies + their events, applications,
+    states, attachments, notifications) and re-parse the email queue from a
+    given date onward. Emails before `since` are marked dead_letter (ignored),
+    so update mails whose parent drive predates the window simply park as
+    pending events and never surface.
+
+    The normal 5-minute cron then drains the re-queued emails with the current
+    parser (grounding guards, thread-reply routing, shortlist processing).
+    When INGEST_AUTH_TOKEN is configured, requires 'Authorization: Bearer <token>'.
+    """
+    if settings.INGEST_AUTH_TOKEN:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header != f"Bearer {settings.INGEST_AUTH_TOKEN}":
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+
+    import re as _re
+    if not _re.match(r"^\d{4}-\d{2}-\d{2}$", since):
+        return JSONResponse(status_code=400,
+                            content={"detail": "since must be YYYY-MM-DD"})
+
+    from sqlalchemy import text as _text
+    from app.core.database import SessionLocal
+
+    is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+    # Postgres: prefer the email's own timestamp from the payload; fall back
+    # to the ingestion row's created_at when absent/malformed.
+    ts_expr = (
+        "CASE WHEN payload->>'timestamp' ~ '^\\d{4}-\\d{2}-\\d{2}' "
+        "THEN (payload->>'timestamp')::timestamptz ELSE created_at END"
+        if not is_sqlite else "created_at"
+    )
+
+    db = SessionLocal()
+    try:
+        counts = {}
+        counts["pending_company_events_deleted"] = db.execute(
+            _text("DELETE FROM pending_company_events")).rowcount
+        counts["companies_deleted"] = db.execute(
+            _text("DELETE FROM companies")).rowcount
+
+        counts["jobs_requeued"] = db.execute(_text(f"""
+            UPDATE raw_ingestion_jobs
+            SET status='pending', retry_count=0, parsed_output=NULL,
+                validated_output=NULL, error_message=NULL, locked_at=NULL,
+                locked_by=NULL, final_classification=NULL, processed_at=NULL
+            WHERE {ts_expr} >= :since
+        """), {"since": since}).rowcount
+
+        counts["jobs_ignored_pre_window"] = db.execute(_text(f"""
+            UPDATE raw_ingestion_jobs
+            SET status='dead_letter',
+                error_message='Ignored: email predates the reparse window ({since}).'
+            WHERE {ts_expr} < :since AND status != 'dead_letter'
+        """), {"since": since}).rowcount
+
+        db.commit()
+
+        try:
+            from app.core.redis import bump_companies_list_version, bump_announcements_version
+            bump_companies_list_version()
+            bump_announcements_version()
+        except Exception:
+            pass
+
+        logging.warning(f"[reset-and-reparse] since={since} -> {counts}")
+        return {
+            "status": "ok",
+            "since": since,
+            **counts,
+            "message": "All drives wiped. The queue processor will re-parse the "
+                       "window over the next hours (~2-3 min per email). Trigger "
+                       "POST /api/gmail/reprocess_all to drain continuously.",
+        }
+    except Exception as e:
+        db.rollback()
+        logging.error(f"[reset-and-reparse] failed: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"detail": str(e)})
+    finally:
+        db.close()
+
+
 @app.get("/api/admin/ai-health")
 def admin_ai_health(request: Request):
     """

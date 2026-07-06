@@ -629,6 +629,22 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
         process_event_attachments(db, event, attachments)
         log_execution_stage(db, job.id, "ATTACHMENTS_PROCESSED", "SUCCESS")
 
+        # Shortlist pasted in the body (no Excel): same handling as the main
+        # path, applied when the parked update finally attaches to its drive.
+        has_excel = any(str(a.get("filename", "")).lower().endswith((".xls", ".xlsx"))
+                        for a in attachments)
+        if (pe.event_type in ("SHORTLIST_RELEASED", "OA_RESULT", "INTERVIEW_RESULT",
+                              "OFFER_RELEASED", "SHORTLIST", "OFFER")
+                and not has_excel and body):
+            try:
+                body_neo_ids = extract_neo_ids_from_text(body)
+                if body_neo_ids:
+                    apply_shortlist_matches(db, company, event, body_neo_ids,
+                                            source="email-body(reconciled)",
+                                            event_type_hint=pe.event_type)
+            except Exception as e:
+                logger.error(f"Reconciliation body-shortlist failed: {e}", exc_info=True)
+
         # Generate JD Strategy if not already generated
         if not company.jd_text and body:
             company.jd_text = body
