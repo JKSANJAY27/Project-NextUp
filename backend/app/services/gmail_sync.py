@@ -748,6 +748,46 @@ import threading
 _PROCESS_LOCK = threading.Lock()
 
 
+def _generate_jd_strategy_async(company_id: str, company_name: str, role: str,
+                                jd_text: str):
+    """Generate and cache JD strategy in background (non-blocking).
+
+    The email job completes immediately (company appears in opportunities),
+    while this runs asynchronously to populate jd_strategy with required
+    skills, ATS keywords, analysis. Exceptions are logged but don't fail
+    the email parsing.
+    """
+    from app.services.ai_service import generate_jd_strategy
+    from app.services.ai_provider import get_parser_gateway
+
+    db = None
+    try:
+        db = SessionLocal()
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if not company or company.jd_strategy:
+            logger.debug(f"JD strategy already cached for company {company_id}; skipping.")
+            return
+
+        logger.info(f"Generating JD strategy in background for {company_name}...")
+        strategy = generate_jd_strategy(
+            jd_text,
+            gateway=get_parser_gateway(),
+            role=role,
+            company_name=company_name,
+        )
+        company.jd_strategy = strategy
+        db.commit()
+        logger.info(f"JD strategy cached for company {company_id}")
+    except Exception as e:
+        logger.warning(
+            f"Background JD strategy generation failed for {company_name} "
+            f"(non-fatal; will generate lazily on first resume): {e}"
+        )
+    finally:
+        if db:
+            db.close()
+
+
 def process_queued_jobs(db: Session, job_id: Optional[str] = None,
                         wait_for_lock: bool = False) -> bool:
     """
@@ -1642,27 +1682,8 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             if not company.jd_text:
                 continue
 
-            jd_hash = _hashlib.sha256(company.jd_text.encode("utf-8")).hexdigest()[:16]
-            existing = company.jd_strategy if isinstance(company.jd_strategy, dict) else {}
-            strategy_is_current = (
-                existing.get("required_skills")
-                and existing.get("jd_hash") == jd_hash
-            )
-            if strategy_is_current:
-                continue
-
-            try:
-                logger.info(f"Generating JD Strategy for company {company.name} (ID: {company.id})...")
-                from app.services.ai_service import generate_jd_strategy
-                strategy = generate_jd_strategy(
-                    company.jd_text, role=company.role, company_name=company.name
-                )
-                if strategy and (strategy.get("required_skills") or strategy.get("role_summary")):
-                    strategy["jd_hash"] = jd_hash
-                    company.jd_strategy = strategy
-                    logger.info(f"Successfully saved JD Strategy for company {company.name}.")
-            except Exception as e:
-                logger.error(f"Failed to generate JD strategy for company {company.name} in job: {e}")
+            # JD strategy generation moved to async background (see below)
+            # so email parsing is not blocked by AI inference.
 
         # 7. Complete job successfully
         job.status = 'completed'
@@ -1674,6 +1695,41 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
         db.commit()
         log_execution_stage(db, job.id, "COMPLETED", "SUCCESS", "Processed placement ingestion job successfully.")
         logger.info(f"Job {job.id} processed successfully.")
+
+        # 8. Trigger background JD strategy generation for companies in processed events
+        # (non-blocking; email already shows in opportunities). Each event references
+        # a company that was created or updated by this job.
+        if processed_events:
+            seen_companies = set()
+            for event in processed_events:
+                company = event.company
+                if not company or company.id in seen_companies:
+                    continue
+                seen_companies.add(company.id)
+
+                if company.jd_text and not company.jd_strategy:
+                    # No strategy yet; generate it
+                    thread = threading.Thread(
+                        target=_generate_jd_strategy_async,
+                        args=(str(company.id), company.name, company.role, company.jd_text),
+                        daemon=True,
+                        name=f"jd-gen-{company.id}"
+                    )
+                    thread.start()
+                    logger.info(f"Spawned background JD strategy thread for {company.name}")
+                elif company.jd_text and company.jd_strategy:
+                    # Strategy cached; check if JD text was upgraded and needs regeneration
+                    jd_hash = _hashlib.sha256(company.jd_text.encode("utf-8")).hexdigest()[:16]
+                    cached_hash = company.jd_strategy.get("jd_hash") if isinstance(company.jd_strategy, dict) else None
+                    if cached_hash != jd_hash:
+                        thread = threading.Thread(
+                            target=_generate_jd_strategy_async,
+                            args=(str(company.id), company.name, company.role, company.jd_text),
+                            daemon=True,
+                            name=f"jd-gen-{company.id}"
+                        )
+                        thread.start()
+                        logger.info(f"JD text upgraded for {company.name}; regenerating strategy in background")
 
         # 8a. Bump Redis cache versions so next page load reflects new data.
         # Always bump companies list since company data may have been created/updated.
