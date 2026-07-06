@@ -704,7 +704,7 @@ def process_all_jobs_loop():
     try:
         count = 0
         while True:
-            success = process_queued_jobs(db)
+            success = process_queued_jobs(db, wait_for_lock=True)
             if not success:
                 logger.info("Batch reprocessing complete. No more pending jobs.")
                 break
@@ -738,14 +738,43 @@ def is_placeholder_or_empty(val) -> bool:
         return True
     return False
 
-def process_queued_jobs(db: Session, job_id: Optional[str] = None) -> bool:
+import threading
+
+# One email parse at a time per process. The cron tick, the /gmail/process
+# webhook and the reprocess_all loop used to run concurrently — 2+ parallel
+# generations on a 2-vCPU Ollama each ran >2x slower, blew the client timeout,
+# and the abandoned generations kept computing server-side, queueing every
+# retry behind them (a death spiral where NOTHING ever completed).
+_PROCESS_LOCK = threading.Lock()
+
+
+def process_queued_jobs(db: Session, job_id: Optional[str] = None,
+                        wait_for_lock: bool = False) -> bool:
     """
     Iterates through pending raw ingestion jobs, acquires lock on them,
     parses emails and attachments, and records structured data.
+
+    Serialized per process via _PROCESS_LOCK. When the lock is busy:
+    wait_for_lock=False returns False immediately (webhook/cron callers);
+    wait_for_lock=True blocks (the reprocess_all drain loop).
     """
+    if wait_for_lock:
+        acquired = _PROCESS_LOCK.acquire(timeout=1800)
+    else:
+        acquired = _PROCESS_LOCK.acquire(blocking=False)
+    if not acquired:
+        logger.info("process_queued_jobs: another parse is in flight — skipping this trigger.")
+        return False
+    try:
+        return _process_queued_jobs_locked(db, job_id)
+    finally:
+        _PROCESS_LOCK.release()
+
+
+def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bool:
     # 1. Recover stale jobs first
     recover_stale_jobs(db)
-    
+
     worker_id = f"worker-{os.getpid()}"
     
     # 2. Acquire a job lock

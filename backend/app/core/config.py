@@ -50,7 +50,11 @@ class Settings(BaseSettings):
     # when depleted) — it is a fallback tier only, never the primary.
     HF_FALLBACK_MODEL: str = "meta-llama/Llama-3.3-70B-Instruct"
     # Gateway behaviour
-    AI_REQUEST_TIMEOUT_SECONDS: int = 300  # in-container 1.5b parses average ~150s
+    # In-container 1.5b parses average ~150s but can exceed 300s on a cold or
+    # slow Space host. Ollama does NOT cancel a generation when the client
+    # times out, so a too-low ceiling creates a death spiral: the retry queues
+    # behind the abandoned generation, waits, times out too, and so on.
+    AI_REQUEST_TIMEOUT_SECONDS: int = 600
     AI_MAX_RETRIES: int = 1               # retries per provider (exponential backoff)
     AI_RETRY_BASE_DELAY_SECONDS: float = 2.0
     AI_CIRCUIT_FAILURE_THRESHOLD: int = 4  # consecutive failures before circuit opens
