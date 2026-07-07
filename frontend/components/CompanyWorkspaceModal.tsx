@@ -231,10 +231,39 @@ export default function CompanyWorkspaceModal({
       return new Date(a.date).getTime() - new Date(b.date).getTime();
     });
 
-  // Email trail = all events that have a subject (i.e., came from a real email)
-  // Milestone-only events (created synthetically) have no subject and are excluded.
-  const emailTrailEvents = companyEvents
+  // Email trail = one entry per SOURCE EMAIL. A single email produces one
+  // main event (with body) plus several milestone events (body=null) that all
+  // share the same subject + timestamp — group them so the trail doesn't show
+  // 4 duplicate body-less entries, and surface whichever sibling has the
+  // body / attachments / confidence scores.
+  const emailGroups = new Map<string, any>();
+  companyEvents
     .filter((e: any) => e.subject)
+    .forEach((e: any) => {
+      const key = `${e.subject}|${e.timestamp}`;
+      const existing = emailGroups.get(key);
+      if (!existing) {
+        emailGroups.set(key, { ...e, attachments: [...(e.attachments || [])] });
+        return;
+      }
+      // Prefer the sibling that carries the real email body as the group base
+      if (!existing.body && e.body) {
+        existing.body = e.body;
+        existing.id = e.id; // notes/expansion key follows the body-bearing event
+      }
+      if (e.attachments?.length) {
+        const seen = new Set(existing.attachments.map((a: any) => a.id));
+        e.attachments.forEach((a: any) => { if (!seen.has(a.id)) existing.attachments.push(a); });
+      }
+      if (e.confidence_scores && Object.keys(e.confidence_scores).length > 0
+          && (!existing.confidence_scores || Object.keys(existing.confidence_scores).length === 0)) {
+        existing.confidence_scores = e.confidence_scores;
+      }
+      if (e.user_notification_msg && !existing.user_notification_msg) {
+        existing.user_notification_msg = e.user_notification_msg;
+      }
+    });
+  const emailTrailEvents = Array.from(emailGroups.values())
     .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
   const workspaceEvents = emailTrailEvents;
@@ -599,7 +628,7 @@ export default function CompanyWorkspaceModal({
                               {new Date(evt.timestamp).toLocaleString("en-IN")}
                             </span>
                             <h5 className="text-sm font-black uppercase tracking-tight text-foreground mt-0.5">
-                              {evt.title}
+                              {evt.title || evt.subject || evt.label}
                             </h5>
                             <span className="text-[9px] text-muted-foreground uppercase">
                               Sender: {evt.sender}

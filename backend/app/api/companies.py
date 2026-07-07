@@ -253,9 +253,12 @@ def list_companies(
     if cached_list is None:
         companies = db.query(Company).all()
         def get_sort_key(c):
-            # Sort by when the registration email first arrived (created_at),
-            # so the most recently announced company always appears at the top.
-            dt = c.created_at
+            # Sort by when the drive's FIRST email actually arrived (earliest
+            # event timestamp), so the most recently announced company always
+            # appears at the top. created_at is only a fallback: it records
+            # parse time, which diverges from arrival order after re-ingestion.
+            candidates = [e.timestamp for e in (c.events or []) if e.timestamp]
+            dt = min(candidates) if candidates else c.created_at
             if dt is None:
                 return 0.0
             if dt.tzinfo is not None:

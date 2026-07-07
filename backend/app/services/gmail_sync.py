@@ -97,6 +97,15 @@ def start_scheduler():
             coalesce=True, misfire_grace_time=600, max_instances=1,
         )
         scheduler.add_job(refresh_views_cron, "interval", minutes=30, id="view_refresher_job", replace_existing=True, coalesce=True, misfire_grace_time=600)
+        # Safety net for JD strategies: inline daemon threads die with the
+        # process, so this sweep guarantees jd_strategy/jd_analysis eventually
+        # populate for every company (including generic role-based strategies
+        # for drives whose email carried no JD).
+        scheduler.add_job(
+            jd_strategy_sweep_cron, "interval", minutes=10,
+            id="jd_strategy_sweep_job", replace_existing=True,
+            coalesce=True, misfire_grace_time=600, max_instances=1,
+        )
         scheduler.add_job(opportunity_lifecycle_cron, "interval", hours=6, id="opportunity_lifecycle_job", replace_existing=True, coalesce=True, misfire_grace_time=3600)
         scheduler.start()
         logger.info("Background queue processor, view refresher, and opportunity lifecycle scheduler started.")
@@ -648,26 +657,10 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
         # Generate JD Strategy if not already generated
         if not company.jd_text and body:
             company.jd_text = body
-        if company.jd_text and (not company.jd_strategy or not isinstance(company.jd_strategy, dict) or not company.jd_strategy.get("required_skills")):
+        if not _strategy_is_populated(company.jd_strategy):
             try:
                 logger.info(f"Reconciliation: Generating JD Strategy for company {company.name} (ID: {company.id})...")
-                from app.services.ai_service import generate_jd_strategy
-                strategy = generate_jd_strategy(
-                    company.jd_text, role=company.role, company_name=company.name
-                )
-                if strategy and (strategy.get("required_skills") or strategy.get("role_summary")):
-                    company.jd_strategy = strategy
-                    # Sync into jd_analysis so @property accessors work
-                    if not company.jd_analysis:
-                        company.jd_analysis = {}
-                    company.jd_analysis["required_skills"] = strategy.get("required_skills", [])
-                    company.jd_analysis["ats_keywords"] = strategy.get("ats_keywords", [])
-                    company.jd_analysis["preferred_skills"] = strategy.get("preferred_skills", [])
-                    company.jd_analysis["interview_topics"] = strategy.get("interview_topics", [])
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(company, "jd_analysis")
-                    flag_modified(company, "jd_strategy")
-                    logger.info(f"Reconciliation: Saved JD Strategy and synced jd_analysis for company {company.name}.")
+                generate_and_store_jd_strategy(db, company)
             except Exception as e:
                 logger.error(f"Reconciliation: Failed to generate JD strategy for company {company.name} in job: {e}")
         
@@ -758,59 +751,144 @@ import threading
 _PROCESS_LOCK = threading.Lock()
 
 
+def _strategy_is_populated(strategy) -> bool:
+    """A usable cached strategy must be a dict with actual skill content."""
+    return (isinstance(strategy, dict)
+            and bool(strategy.get("required_skills") or strategy.get("ats_keywords")))
+
+
+def generate_and_store_jd_strategy(db: Session, company: Company) -> bool:
+    """Generate the JD strategy for a company and persist it (synchronous).
+
+    Writes jd_strategy, mirrors the key lists into jd_analysis (the JSON
+    column behind the @property accessors), and also mirrors them into the
+    legacy physical TEXT[] columns (jd_required_skills / jd_preferred_skills /
+    jd_ats_keywords / interview_topics) that exist in the Postgres schema but
+    are not mapped by the ORM — without this they stay permanently empty in
+    the Supabase table editor.
+
+    generate_jd_strategy never raises (it falls back to a deterministic
+    strategy), so on success the strategy is never empty. Returns True if a
+    strategy was stored.
+    """
+    from app.services.ai_service import generate_jd_strategy
+    from app.services.ai_provider import get_parser_gateway
+    from sqlalchemy.orm.attributes import flag_modified
+
+    logger.info(f"Generating JD strategy for {company.name} ({company.role})...")
+    strategy = generate_jd_strategy(
+        company.jd_text or "",
+        gateway=get_parser_gateway(),
+        role=company.role,
+        company_name=company.name,
+    )
+    if not _strategy_is_populated(strategy):
+        logger.warning(f"JD strategy for {company.name} came back empty; not storing.")
+        return False
+
+    company.jd_strategy = strategy
+    if not company.jd_analysis:
+        company.jd_analysis = {}
+    company.jd_analysis["required_skills"] = strategy.get("required_skills", [])
+    company.jd_analysis["ats_keywords"] = strategy.get("ats_keywords", [])
+    company.jd_analysis["preferred_skills"] = strategy.get("preferred_skills", [])
+    company.jd_analysis["interview_topics"] = strategy.get("interview_topics", [])
+    flag_modified(company, "jd_analysis")
+    flag_modified(company, "jd_strategy")
+
+    # Mirror into the unmapped legacy TEXT[] columns (Postgres only).
+    if "sqlite" not in settings.DATABASE_URL.lower():
+        try:
+            db.execute(text("""
+                UPDATE companies
+                SET jd_required_skills = :req,
+                    jd_preferred_skills = :pref,
+                    jd_ats_keywords = :ats,
+                    interview_topics = :topics
+                WHERE id = :cid
+            """), {
+                "req": strategy.get("required_skills", []),
+                "pref": strategy.get("preferred_skills", []),
+                "ats": strategy.get("ats_keywords", []),
+                "topics": strategy.get("interview_topics", []),
+                "cid": str(company.id),
+            })
+        except Exception as col_err:
+            logger.warning(f"Legacy JD column mirror failed (non-fatal): {col_err}")
+
+    db.commit()
+    try:
+        from app.core.redis import bump_company_version
+        bump_company_version(company.id)
+        bump_companies_list_version()
+    except Exception:
+        pass
+    logger.info(f"JD strategy stored for company {company.id} ({company.name}).")
+    return True
+
+
 def _generate_jd_strategy_async(company_id: str, company_name: str, role: str,
                                 jd_text: str):
     """Generate and cache JD strategy in background (non-blocking).
 
-    The email job completes immediately (company appears in opportunities),
-    while this runs asynchronously to populate jd_strategy with required
-    skills, ATS keywords, analysis. Exceptions are logged but don't fail
-    the email parsing.
+    Best-effort fast path: daemon threads do not survive process exits or
+    container restarts, so sweep_missing_jd_strategies (cron) is the
+    guarantee that the strategy eventually gets generated.
     """
-    from app.services.ai_service import generate_jd_strategy
-    from app.services.ai_provider import get_parser_gateway
-
     db = None
     try:
         db = SessionLocal()
         company = db.query(Company).filter(Company.id == company_id).first()
-        if not company or company.jd_strategy:
+        if not company or _strategy_is_populated(company.jd_strategy):
             logger.debug(f"JD strategy already cached for company {company_id}; skipping.")
             return
-
-        logger.info(f"Generating JD strategy in background for {company_name}...")
-        strategy = generate_jd_strategy(
-            jd_text,
-            gateway=get_parser_gateway(),
-            role=role,
-            company_name=company_name,
-        )
-        company.jd_strategy = strategy
-
-        # Sync key fields into jd_analysis so the @property accessors
-        # (jd_required_skills, jd_ats_keywords, etc.) return real data.
-        # jd_analysis is only written when a PDF attachment exists — without
-        # this sync, those columns stay empty even though jd_strategy has data.
-        if not company.jd_analysis:
-            company.jd_analysis = {}
-        company.jd_analysis["required_skills"] = strategy.get("required_skills", [])
-        company.jd_analysis["ats_keywords"] = strategy.get("ats_keywords", [])
-        company.jd_analysis["preferred_skills"] = strategy.get("preferred_skills", [])
-        company.jd_analysis["interview_topics"] = strategy.get("interview_topics", [])
-        from sqlalchemy.orm.attributes import flag_modified
-        flag_modified(company, "jd_analysis")
-        flag_modified(company, "jd_strategy")
-
-        db.commit()
-        logger.info(f"JD strategy cached and jd_analysis synced for company {company_id}")
+        generate_and_store_jd_strategy(db, company)
     except Exception as e:
         logger.warning(
             f"Background JD strategy generation failed for {company_name} "
-            f"(non-fatal; will generate lazily on first resume): {e}"
+            f"(non-fatal; the cron sweep will retry): {e}"
         )
     finally:
         if db:
             db.close()
+
+
+def sweep_missing_jd_strategies(db: Session, max_per_sweep: int = 3) -> int:
+    """Cron safety net: generate JD strategies for companies missing one.
+
+    The inline daemon-thread generation is lost whenever the process exits
+    (deploys, container idling, one-shot reprocess scripts). This sweep finds
+    companies whose jd_strategy is NULL/{}/contentless — including companies
+    with no jd_text at all, which get a generic role-based strategy so resume
+    tailoring never breaks — and fills them in, a few per tick.
+    """
+    candidates = db.query(Company).order_by(Company.created_at.desc()).all()
+    generated = 0
+    for company in candidates:
+        if generated >= max_per_sweep:
+            break
+        if _strategy_is_populated(company.jd_strategy):
+            continue
+        try:
+            if generate_and_store_jd_strategy(db, company):
+                generated += 1
+        except Exception as e:
+            db.rollback()
+            logger.error(f"JD strategy sweep failed for {company.name}: {e}")
+    return generated
+
+
+def jd_strategy_sweep_cron():
+    """Scheduled job: fill in missing JD strategies every 10 minutes."""
+    db = SessionLocal()
+    try:
+        count = sweep_missing_jd_strategies(db)
+        if count:
+            logger.info(f"JD strategy sweep generated {count} strategies.")
+    except Exception as e:
+        logger.error(f"JD strategy sweep cron failed: {e}", exc_info=True)
+    finally:
+        db.close()
 
 
 def process_queued_jobs(db: Session, job_id: Optional[str] = None,
@@ -1296,16 +1374,31 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             # We never let update mails create new company workspaces.
             # -----------------------------------------------------------------
             if not company and not is_announcement:
-                # Update email with no matching company in DB — silently drop it.
-                # This happens for residual update emails from old placement cycles
-                # whose main registration drive is not in our database.
-                # We do NOT create a new workspace or park a PendingCompanyEvent.
+                # Update email with no matching company in DB. Never drop it:
+                # the parent announcement may still be queued (or was missed /
+                # misparsed), so park it as a PendingCompanyEvent. When the
+                # matching drive is created, reconcile_pending_events_for_company
+                # attaches this update (timeline milestones, attachments,
+                # shortlists, notifications) to the new workspace.
+                existing_pending = db.query(PendingCompanyEvent).filter(
+                    PendingCompanyEvent.raw_ingestion_job_id == job.id,
+                    PendingCompanyEvent.company_name == company_name,
+                ).first()
+                if not existing_pending:
+                    db.add(PendingCompanyEvent(
+                        raw_ingestion_job_id=job.id,
+                        company_name=company_name,
+                        role_name=role,
+                        event_type=event_type,
+                        status="PENDING_PARENT",
+                        parsed_payload=validated_info,
+                    ))
                 logger.info(
                     f"Job {job.id}: update email ({event_type}) for '{company_name}' has no matching company. "
-                    f"Dropping silently — likely a residual old-cycle update."
+                    f"Parked as PendingCompanyEvent awaiting its parent announcement."
                 )
                 log_execution_stage(db, job.id, "COMPANY_MATCHED", "SKIPPED",
-                    f"No matching company for update email '{company_name}'. Dropped (old-cycle residual).")
+                    f"No matching company for update email '{company_name}'. Parked as PendingCompanyEvent.")
                 # Skip the rest of the role loop for this role
                 continue
 
@@ -1795,8 +1888,10 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                     continue
                 seen_companies.add(company.id)
 
-                if company.jd_text and not company.jd_strategy:
-                    # No strategy yet; generate it
+                if not _strategy_is_populated(company.jd_strategy):
+                    # No usable strategy yet; generate it (works even with no
+                    # jd_text — generate_jd_strategy falls back to a generic
+                    # role-based strategy so resume tailoring never breaks)
                     thread = threading.Thread(
                         target=_generate_jd_strategy_async,
                         args=(str(company.id), company.name, company.role, company.jd_text),
@@ -1805,7 +1900,7 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                     )
                     thread.start()
                     logger.info(f"Spawned background JD strategy thread for {company.name}")
-                elif company.jd_text and company.jd_strategy:
+                elif company.jd_text:
                     # Strategy cached; check if JD text was upgraded and needs regeneration
                     jd_hash = _hashlib.sha256(company.jd_text.encode("utf-8")).hexdigest()[:16]
                     cached_hash = company.jd_strategy.get("jd_hash") if isinstance(company.jd_strategy, dict) else None

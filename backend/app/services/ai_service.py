@@ -530,8 +530,56 @@ def extract_jd_keywords_deterministic(jd_text: str) -> Dict[str, List[str]]:
     }
 
 
+# Generic role-family defaults used when a drive email carries no real JD
+# (no PDF attachment and no requirements in the body). Keyed by keywords
+# matched against the role name; first match wins. Keeps resume tailoring
+# functional instead of breaking on an empty skill list.
+_ROLE_DEFAULT_SKILLS = [
+    (("data", "analytics", "analyst", "intelligence"),
+     ["Python", "SQL", "Pandas", "Excel", "Statistics", "Data Visualization", "Machine Learning"]),
+    (("machine learning", "ml", "ai "),
+     ["Python", "Machine Learning", "Deep Learning", "SQL", "TensorFlow", "PyTorch", "Statistics"]),
+    (("frontend", "front-end", "ui", "web"),
+     ["JavaScript", "TypeScript", "React", "HTML", "CSS", "Git", "REST APIs"]),
+    (("backend", "back-end", "api"),
+     ["Python", "Java", "SQL", "REST APIs", "Git", "Docker", "System Design"]),
+    (("devops", "cloud", "sre", "infrastructure"),
+     ["Linux", "Docker", "Kubernetes", "AWS", "CI/CD", "Git", "Python"]),
+    (("qa", "test", "quality", "sdet"),
+     ["Java", "Python", "Selenium", "SQL", "Test Automation", "Git", "APIs"]),
+    (("embedded", "firmware", "hardware", "vlsi", "electronics"),
+     ["C", "C++", "Embedded Systems", "Microcontrollers", "RTOS", "Debugging"]),
+    (("support", "consultant", "functional"),
+     ["SQL", "Communication", "Debugging", "Linux", "Scripting", "APIs"]),
+]
+_GENERIC_DEFAULT_SKILLS = ["Data Structures", "Algorithms", "Python", "Java",
+                           "SQL", "OOP", "Git", "Problem Solving"]
+
+# Below this many characters the "JD" is really just a registration blurb —
+# treat it as having no JD and build a generic role-based strategy instead.
+_JD_MIN_MEANINGFUL_CHARS = 150
+
+
+def _default_skills_for_role(role: str) -> List[str]:
+    role_lower = f" {(role or '').lower()} "
+    for keywords, skills in _ROLE_DEFAULT_SKILLS:
+        if any(kw in role_lower for kw in keywords):
+            return list(skills)
+    return list(_GENERIC_DEFAULT_SKILLS)
+
+
 def _deterministic_jd_strategy(jd_text: str, role: str = "", company_name: str = "") -> dict:
     kw = extract_jd_keywords_deterministic(jd_text)
+    # Sparse/absent JD: seed with typical skills for the role family so the
+    # strategy (and downstream resume tailoring / ATS matching) never runs
+    # on an empty skill list.
+    if len(kw["skills"]) < 3:
+        role_skills = _default_skills_for_role(role)
+        seen = {s.lower() for s in kw["skills"]}
+        for s in role_skills:
+            if s.lower() not in seen:
+                kw["skills"].append(s)
+                seen.add(s.lower())
     return {
         "required_skills": kw["skills"][:20],
         "preferred_skills": kw["preferred_skills"][:10],
@@ -560,20 +608,33 @@ def generate_jd_strategy(jd_text: str, gateway=None, role: str = "",
     strategy is grounded in the actual JD text and never empty. Falls back to
     the pure-deterministic strategy when no AI provider is reachable.
     """
-    if not jd_text or not jd_text.strip():
-        return _deterministic_jd_strategy(jd_text, role, company_name)
-
-    deterministic = _deterministic_jd_strategy(jd_text, role, company_name)
+    jd_hash = hashlib.sha256((jd_text or "").encode("utf-8")).hexdigest()[:16]
+    deterministic = _deterministic_jd_strategy(jd_text or "", role, company_name)
+    deterministic["jd_hash"] = jd_hash
+    deterministic["generated_at"] = datetime.utcnow().isoformat()
 
     if gateway is None:
         from app.services.ai_provider import get_parser_gateway
         gateway = get_parser_gateway()
 
-    prompt = f"""Analyze this Job Description and produce a resume-tailoring strategy.
+    # No meaningful JD in the email (common: registration mails with just a
+    # form link). Ask the model for a TYPICAL strategy for this role instead
+    # of analyzing a near-empty text, so resume tailoring still has substance.
+    has_meaningful_jd = bool(jd_text and len(jd_text.strip()) >= _JD_MIN_MEANINGFUL_CHARS)
+    if has_meaningful_jd:
+        task_block = f"""Analyze this Job Description and produce a resume-tailoring strategy.
 {f"Role: {role}" if role else ""}{f" | Company: {company_name}" if company_name else ""}
 
 Job Description:
-{jd_text[:_JD_PROMPT_CHAR_CAP]}
+{jd_text[:_JD_PROMPT_CHAR_CAP]}"""
+        grounding_rule = "Only list skills/keywords that actually appear in or are directly implied by the JD text."
+    else:
+        task_block = f"""No job description was provided for this campus placement drive.
+Produce a resume-tailoring strategy for what is TYPICALLY expected for this role:
+Role: {role or "Software Engineer"}{f" | Company: {company_name}" if company_name else ""} (fresh graduate / campus hire)"""
+        grounding_rule = "List the skills/keywords most commonly required for this role for entry-level candidates."
+
+    prompt = f"""{task_block}
 
 Return ONLY a valid JSON object matching this schema exactly (no markdown, no explanations):
 {{
@@ -590,7 +651,7 @@ Return ONLY a valid JSON object matching this schema exactly (no markdown, no ex
   "interview_topics": ["Topic 1", "Topic 2"],
   "role_summary": "One sentence summary of the role."
 }}
-Only list skills/keywords that actually appear in or are directly implied by the JD text."""
+{grounding_rule}"""
 
     try:
         result = gateway.generate(
@@ -629,7 +690,7 @@ Only list skills/keywords that actually appear in or are directly implied by the
 
         parsed["strategy_source"] = f"{result.provider}/{result.model}"
         parsed["generated_at"] = datetime.utcnow().isoformat()
-        parsed["jd_hash"] = hashlib.sha256(jd_text.encode("utf-8")).hexdigest()[:16]
+        parsed["jd_hash"] = jd_hash
         return parsed
     except Exception as e:
         logger.error(f"Failed to generate JD strategy via AI, using deterministic fallback: {str(e)}")

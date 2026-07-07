@@ -102,9 +102,27 @@ def main():
         target_job_ids = []
         skip_job_ids = []
 
+        # GUARD: only pre-cycle emails (before June 29, 2026) may be
+        # dead-lettered. Current-cycle emails from other companies are LEGIT
+        # new drives/updates — they must be reset to 'pending' so the queue
+        # reprocesses them, never killed. (A previous run of this script
+        # dead-lettered 60 current-cycle emails, silently dropping new
+        # company drives like Magna, TCS, Psemi, Danfoss...)
+        CYCLE_START = datetime(2026, 6, 29)
+
+        def is_current_cycle(j) -> bool:
+            ts_str = (j.payload or {}).get("timestamp")
+            if not ts_str:
+                return True  # unknown timestamp: err on the side of keeping it
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                return ts.replace(tzinfo=None) >= CYCLE_START
+            except ValueError:
+                return True
+
         for j in all_jobs:
             subject = (j.payload or {}).get("subject", "")
-            if subject_matches_target(subject):
+            if subject_matches_target(subject) or is_current_cycle(j):
                 target_job_ids.append(j.id)
                 print(f"  [TARGET ] {subject[:90]}")
             else:
