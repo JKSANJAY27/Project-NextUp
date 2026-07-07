@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import re
 import dateparser
@@ -9,15 +9,24 @@ from app.services.email_parser import normalize_degree, normalize_specialization
 
 logger = logging.getLogger(__name__)
 
+IST_OFFSET = timedelta(hours=5, minutes=30)
+
+
 def parse_date_safely(date_str: str, settings: dict) -> Optional[datetime]:
     if not date_str:
         return None
     date_str_clean = str(date_str).strip()
-    
+
     # 1. Try parsing directly as standard ISO-8601 first to avoid DMY format swapping
     try:
         val = date_str_clean.replace("Z", "+00:00")
         dt = datetime.fromisoformat(val)
+        # The LLM emits date_iso as NAIVE local time (IST, per the prompt's
+        # TIMEZONE instruction). This fast path used to return it unconverted,
+        # so 9:00 AM IST got stored as 9:00 UTC and rendered as 2:30 PM in the
+        # UI. Apply the same IST→UTC conversion dateparser would have done.
+        if dt.tzinfo is None and settings and settings.get('TIMEZONE') == 'Asia/Kolkata':
+            dt = (dt - IST_OFFSET).replace(tzinfo=timezone.utc)
         return dt
     except (ValueError, TypeError):
         pass

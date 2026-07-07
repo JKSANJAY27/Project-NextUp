@@ -16,12 +16,21 @@ from app.models.models import Company, CompanyEvent
 db = SessionLocal()
 
 print("=== STEP 1: Remove null-stage orphan events ===")
-orphans = db.query(CompanyEvent).filter(CompanyEvent.stage == None).all()
-print(f"  Found {len(orphans)} null-stage events to delete")
+# WARNING (fixed 2026-07-07): stage=NULL events are NOT junk — they are the
+# MAIN email events that carry the email body shown in the workspace "Email
+# Trail" / "View Source Email". A previous run of this script deleted every
+# email body in the app, plus the Groww OA update event. Only delete
+# null-stage events that ALSO have no subject and no body (true orphans).
+orphans = db.query(CompanyEvent).filter(
+    CompanyEvent.stage == None,
+    CompanyEvent.subject == None,
+    CompanyEvent.body == None,
+).all()
+print(f"  Found {len(orphans)} true orphan events (no stage, no subject, no body) to delete")
 for ev in orphans:
     db.delete(ev)
 db.commit()
-print("  [OK] Deleted all null-stage events")
+print("  [OK] Deleted true orphan events only (email-trail events preserved)")
 
 print("\n=== STEP 2: Remove stray Valuelabs LLP - Software Engineer (1 event only) ===")
 # This entry has only 1 null-stage event (now deleted) - it's an orphan from the update email

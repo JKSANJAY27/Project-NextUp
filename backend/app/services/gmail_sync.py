@@ -244,6 +244,53 @@ def clean_job_payload(job: RawIngestionJob):
     except Exception as e:
         logger.warning(f"Failed to clean job payload for {job.id}: {e}")
 
+IST_OFFSET = timedelta(hours=5, minutes=30)
+
+_MONTH_ABBR = {1: "jan", 2: "feb", 3: "mar", 4: "apr", 5: "may", 6: "jun",
+               7: "jul", 8: "aug", 9: "sep", 10: "oct", 11: "nov", 12: "dec"}
+
+# Subject keywords that identify what an update email is really about, used to
+# correct parser misclassification (e.g. "Groww Online Test Is Scheduled On
+# 08-07-2026" parsed as REGISTRATION).
+OA_SUBJECT_KEYWORDS = ["online test", "online assessment", "online assignment",
+                       "aptitude test", "coding test", "written test",
+                       "proctored test", "hackathon"]
+INTERVIEW_SUBJECT_KEYWORDS = ["interview", "next round of selection",
+                              "selection process is scheduled", "gd round",
+                              "group discussion"]
+
+
+def _date_mentioned_in_text(dt: datetime, text_lower: str) -> bool:
+    """Check whether a day+month actually appears in the email text.
+
+    The parser model sometimes invents milestone dates (e.g. copying another
+    drive's schedule) — a real date is always written somewhere in the mail:
+    '8th July', 'July 8', '08-07-2026', '8/7', '2026-07-08', ...
+    """
+    if not dt or not text_lower:
+        return False
+    d, m = dt.day, dt.month
+    mon = _MONTH_ABBR[m]
+    patterns = [
+        rf"\b0?{d}\s*(?:st|nd|rd|th)?\s*(?:of\s+)?(?:\*+\s*)?{mon}",  # 8th July / 08 Jul
+        rf"{mon}[a-z]*\.?\s+0?{d}\b",                                  # July 8
+        rf"\b0?{d}\s*[-/.]\s*0?{m}\s*[-/.]\s*(?:20)?\d{{2}}",          # 08-07-2026, 8/7/26
+        rf"\b0?{d}\s*[-/.]\s*0?{m}\b",                                 # 8/7, 08-07
+        rf"20\d\d-{m:02d}-{d:02d}",                                    # 2026-07-08
+    ]
+    return any(re.search(p, text_lower) for p in patterns)
+
+
+def milestone_date_is_grounded(ev_date_utc: datetime, ground_text_lower: str) -> bool:
+    """Grounded if the milestone's calendar day (checked in both IST and UTC
+    to tolerate historical tz drift) is written in the email text."""
+    if ev_date_utc is None:
+        return False
+    if _date_mentioned_in_text(ev_date_utc + IST_OFFSET, ground_text_lower):
+        return True
+    return _date_mentioned_in_text(ev_date_utc, ground_text_lower)
+
+
 def extract_neo_ids_from_text(text_val: str) -> list:
     """Extract Neo-ID-shaped tokens from free text (shortlists pasted into the
     email body instead of an Excel attachment)."""
@@ -1168,6 +1215,20 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
         registration_link = ext_data.get("registration_link", {}).get("value")
         requires_review = validated_info.get("parser_metadata", {}).get("requires_review", False)
         
+        # Subject-based event_type correction: update mails like
+        # "<Company> Online Test Is Scheduled On 08-07-2026 ..." are sometimes
+        # misparsed as REGISTRATION (the regex fallback's default, and a common
+        # small-model error). The subject line is authoritative for what an
+        # update email announces — never applied to NEW_DRIVE announcements.
+        if email_category != "NEW_DRIVE" and event_type in ("REGISTRATION", "NEW_DRIVE", "GENERAL_UPDATE"):
+            _subject_l = (subject or "").lower()
+            if any(k in _subject_l for k in OA_SUBJECT_KEYWORDS):
+                logger.info(f"Job {job.id}: event_type corrected {event_type} -> OA from subject.")
+                event_type = "OA"
+            elif any(k in _subject_l for k in INTERVIEW_SUBJECT_KEYWORDS):
+                logger.info(f"Job {job.id}: event_type corrected {event_type} -> INTERVIEW from subject.")
+                event_type = "INTERVIEW"
+
         # Determine whether this is an announcement email (can create/update company metadata).
         # IMPORTANT: Only treat as announcement if email_category is explicitly NEW_DRIVE.
         # DO NOT rely on event_type == REGISTRATION here — the regex fallback returns REGISTRATION
@@ -1374,12 +1435,9 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             # We never let update mails create new company workspaces.
             # -----------------------------------------------------------------
             if not company and not is_announcement:
-                # Update email with no matching company in DB. Never drop it:
-                # the parent announcement may still be queued (or was missed /
-                # misparsed), so park it as a PendingCompanyEvent. When the
-                # matching drive is created, reconcile_pending_events_for_company
-                # attaches this update (timeline milestones, attachments,
-                # shortlists, notifications) to the new workspace.
+                # Update email with no matching company in DB — park as PendingCompanyEvent.
+                # Most are old-season orphans (safely ignored by default), but this catches
+                # parser errors or misparsed company names, keeping them visible for debugging.
                 existing_pending = db.query(PendingCompanyEvent).filter(
                     PendingCompanyEvent.raw_ingestion_job_id == job.id,
                     PendingCompanyEvent.company_name == company_name,
@@ -1395,7 +1453,7 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                     ))
                 logger.info(
                     f"Job {job.id}: update email ({event_type}) for '{company_name}' has no matching company. "
-                    f"Parked as PendingCompanyEvent awaiting its parent announcement."
+                    f"Parked as PendingCompanyEvent (likely old-season, or parser error)."
                 )
                 log_execution_stage(db, job.id, "COMPANY_MATCHED", "SKIPPED",
                     f"No matching company for update email '{company_name}'. Parked as PendingCompanyEvent.")
@@ -1558,6 +1616,7 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             # We upsert by (company_id, stage, round_number) to avoid duplicates across re-ingestion.
             # ------------------------------------------------------------------
             parsed_events_list = ext_data.get("events") or []
+            milestone_ground_text = f"{subject}\n{body}\n{attachment_text}".lower()
             for ev_item in parsed_events_list:
                 if not isinstance(ev_item, dict):
                     continue
@@ -1571,9 +1630,27 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                         from datetime import timezone as _tz
                         ev_date = datetime.fromisoformat(ev_date_iso)
                         if ev_date.tzinfo:
-                            ev_date = ev_date.replace(tzinfo=None)
+                            ev_date = ev_date.astimezone(_tz.utc).replace(tzinfo=None)
+                        else:
+                            # Naive dates from the parser are IST local time
+                            # (legacy path) — normalize to UTC for storage.
+                            ev_date = ev_date - IST_OFFSET
                     except (ValueError, TypeError):
                         pass
+
+                # HALLUCINATION GUARD: only keep a milestone date if its
+                # calendar day is actually written in the email (subject, body
+                # or attachments). Small parser models invent schedules (e.g.
+                # Valuelabs got another drive's 8/9/10-July dates when its
+                # mail only mentions 16-17 July). An ungrounded date is
+                # dropped — the milestone stays visible with no date rather
+                # than showing a fabricated one.
+                if ev_date is not None and not milestone_date_is_grounded(ev_date, milestone_ground_text):
+                    logger.warning(
+                        f"Job {job.id}: milestone '{ev_item.get('label')}' date {ev_date_iso} "
+                        f"not found in email text — dropping hallucinated date."
+                    )
+                    ev_date = None
                 ev_round = ev_item.get("round_number")
                 ev_sequence = ev_item.get("sequence")
                 ev_mandatory = ev_item.get("mandatory", True)
@@ -1588,29 +1665,44 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                 ev_label_lower = (ev_item.get("label", "") or "").lower()
                 ev_venue_lower = (ev_item.get("venue", "") or "").lower()
                 combined_text = ev_label_lower + " " + ev_venue_lower
+                # For update mails (never announcements), the subject states
+                # what the email is about — include it so a lone milestone
+                # misparsed as REGISTRATION in an "Online Test scheduled..."
+                # mail gets reclassified to the correct stage.
+                if not is_announcement:
+                    combined_text += " " + (subject or "").lower()
 
-                OA_KEYWORDS = ["online test", "online assessment", "oa", "aptitude test",
-                               "hackathon", "coding test", "written test", "proctored test",
-                               "scheduled on", "assessment test"]
+                # 'oa' needs word boundaries (substring would match 'load',
+                # 'board'); 'scheduled on' was removed — it appears in
+                # interview/PPT subjects too and is not OA-specific.
+                OA_KEYWORDS = ["online test", "online assessment", "online assignment",
+                               "aptitude test", "hackathon", "coding test",
+                               "written test", "proctored test", "assessment test"]
                 PPT_KEYWORDS = ["pre placement talk", "ppt", "pre-placement", "campus visit",
                                 "company presentation", "info session"]
                 HR_KEYWORDS = ["hr interview", "hr round", "hr discussion"]
                 TECH_KEYWORDS = ["technical interview", "tech interview", "technical round",
                                  "coding interview", "system design"]
 
-                if ev_stage == "REGISTRATION" and any(kw in combined_text for kw in OA_KEYWORDS):
-                    logger.info(f"Stage reclassified: REGISTRATION -> ONLINE_ASSESSMENT based on label '{ev_item.get('label')}'")
-                    ev_stage = "ONLINE_ASSESSMENT"
-                elif ev_stage == "REGISTRATION" and any(kw in combined_text for kw in PPT_KEYWORDS):
-                    logger.info(f"Stage reclassified: REGISTRATION -> PRE_PLACEMENT_TALK based on label '{ev_item.get('label')}'")
-                    ev_stage = "PRE_PLACEMENT_TALK"
-                elif ev_stage == "GENERAL_UPDATE" and any(kw in combined_text for kw in OA_KEYWORDS):
-                    logger.info(f"Stage reclassified: GENERAL_UPDATE -> ONLINE_ASSESSMENT based on label '{ev_item.get('label')}'")
-                    ev_stage = "ONLINE_ASSESSMENT"
-                elif ev_stage == "GENERAL_UPDATE" and any(kw in combined_text for kw in HR_KEYWORDS):
-                    ev_stage = "HR_INTERVIEW"
-                elif ev_stage == "GENERAL_UPDATE" and any(kw in combined_text for kw in TECH_KEYWORDS):
-                    ev_stage = "TECHNICAL_INTERVIEW"
+                def _has_kw(kws):
+                    return (any(kw in combined_text for kw in kws)
+                            or re.search(r"\boa\b", combined_text) and kws is OA_KEYWORDS)
+
+                if ev_stage in ("REGISTRATION", "GENERAL_UPDATE"):
+                    # Interview checks first: interview subjects often also
+                    # contain scheduling phrases that overlap OA wording.
+                    new_stage = None
+                    if _has_kw(TECH_KEYWORDS):
+                        new_stage = "TECHNICAL_INTERVIEW"
+                    elif _has_kw(HR_KEYWORDS):
+                        new_stage = "HR_INTERVIEW"
+                    elif _has_kw(OA_KEYWORDS):
+                        new_stage = "ONLINE_ASSESSMENT"
+                    elif _has_kw(PPT_KEYWORDS) and ev_stage == "REGISTRATION":
+                        new_stage = "PRE_PLACEMENT_TALK"
+                    if new_stage and new_stage != ev_stage:
+                        logger.info(f"Stage reclassified: {ev_stage} -> {new_stage} based on '{ev_item.get('label')}' / subject")
+                        ev_stage = new_stage
 
                 # Map canonical stage → event_type
                 STAGE_TO_EVENT_TYPE = {
