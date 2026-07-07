@@ -885,19 +885,20 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
         
         email_timestamp = datetime.fromisoformat(email_timestamp_str.replace("Z", "+00:00")) if email_timestamp_str else datetime.utcnow()
         
-        # Historical filter: Ignore non-target companies from before July 7, 2026.
-        # This keeps the workspace clean of old batch/unwanted companies, while
-        # keeping the system open for all new drives hereafter.
+        # Historical filter: Ignore emails from before June 29, 2026 (start of new placement cycle)
+        # unless they are one of the 4 bootstrap companies (project44, valuelabs, groww, infosys).
+        # All emails from June 29 onwards pass through freely — any new drive or update will be processed.
         if email_timestamp:
             ts_naive = email_timestamp.replace(tzinfo=None)
-            if ts_naive < datetime(2026, 7, 7, 0, 0, 0):
+            if ts_naive < datetime(2026, 6, 29, 0, 0, 0):
+                # Before the new placement cycle start — block everything
                 TARGET_COMPANY_KEYWORDS = ['project44', 'valuelabs', 'value labs', 'groww', 'infosys']
                 subject_lower = subject.lower()
                 is_target = any(kw in subject_lower for kw in TARGET_COMPANY_KEYWORDS)
                 if not is_target:
-                    logger.info(f"Historical filter: skipping non-target job {job.id} - subject: {subject!r}")
+                    logger.info(f"Historical filter: skipping pre-cycle job {job.id} - subject: {subject!r}")
                     job.status = 'dead_letter'
-                    job.error_message = 'Excluded: historical non-target company'
+                    job.error_message = 'Excluded: pre-placement-cycle email'
                     job.parsed_output = None
                     job.validated_output = None
                     db.commit()
@@ -1295,23 +1296,16 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             # We never let update mails create new company workspaces.
             # -----------------------------------------------------------------
             if not company and not is_announcement:
-                import uuid as _uuid
-                pe = PendingCompanyEvent(
-                    id=_uuid.uuid4(),
-                    raw_ingestion_job_id=job.id,
-                    company_name=company_name,
-                    role_name=role,
-                    event_type=event_type,
-                    status="PENDING_PARENT",
-                    parsed_payload=validated_info
+                # Update email with no matching company in DB — silently drop it.
+                # This happens for residual update emails from old placement cycles
+                # whose main registration drive is not in our database.
+                # We do NOT create a new workspace or park a PendingCompanyEvent.
+                logger.info(
+                    f"Job {job.id}: update email ({event_type}) for '{company_name}' has no matching company. "
+                    f"Dropping silently — likely a residual old-cycle update."
                 )
-                db.add(pe)
-                db.flush()
-                logger.warning(
-                    f"Job {job.id} is a non-announcement email ({event_type}) with no matching company. "
-                    f"Stored as PendingCompanyEvent {pe.id} for '{company_name}' / '{role}'."
-                )
-                log_execution_stage(db, job.id, "COMPANY_MATCHED", "PENDING", f"No matching company workspace found. Parked in pending_company_events.")
+                log_execution_stage(db, job.id, "COMPANY_MATCHED", "SKIPPED",
+                    f"No matching company for update email '{company_name}'. Dropped (old-cycle residual).")
                 # Skip the rest of the role loop for this role
                 continue
 
@@ -1492,6 +1486,38 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                 ev_mandatory = ev_item.get("mandatory", True)
                 ev_label = ev_item.get("label", ev_stage)
                 ev_venue = ev_item.get("venue")
+
+                # ------------------------------------------------------------------
+                # Post-AI stage reclassification: fix common model errors where OA/test
+                # dates are tagged as REGISTRATION. We check the label/venue text and
+                # override the stage before persisting.
+                # ------------------------------------------------------------------
+                ev_label_lower = (ev_item.get("label", "") or "").lower()
+                ev_venue_lower = (ev_item.get("venue", "") or "").lower()
+                combined_text = ev_label_lower + " " + ev_venue_lower
+
+                OA_KEYWORDS = ["online test", "online assessment", "oa", "aptitude test",
+                               "hackathon", "coding test", "written test", "proctored test",
+                               "scheduled on", "assessment test"]
+                PPT_KEYWORDS = ["pre placement talk", "ppt", "pre-placement", "campus visit",
+                                "company presentation", "info session"]
+                HR_KEYWORDS = ["hr interview", "hr round", "hr discussion"]
+                TECH_KEYWORDS = ["technical interview", "tech interview", "technical round",
+                                 "coding interview", "system design"]
+
+                if ev_stage == "REGISTRATION" and any(kw in combined_text for kw in OA_KEYWORDS):
+                    logger.info(f"Stage reclassified: REGISTRATION -> ONLINE_ASSESSMENT based on label '{ev_item.get('label')}'")
+                    ev_stage = "ONLINE_ASSESSMENT"
+                elif ev_stage == "REGISTRATION" and any(kw in combined_text for kw in PPT_KEYWORDS):
+                    logger.info(f"Stage reclassified: REGISTRATION -> PRE_PLACEMENT_TALK based on label '{ev_item.get('label')}'")
+                    ev_stage = "PRE_PLACEMENT_TALK"
+                elif ev_stage == "GENERAL_UPDATE" and any(kw in combined_text for kw in OA_KEYWORDS):
+                    logger.info(f"Stage reclassified: GENERAL_UPDATE -> ONLINE_ASSESSMENT based on label '{ev_item.get('label')}'")
+                    ev_stage = "ONLINE_ASSESSMENT"
+                elif ev_stage == "GENERAL_UPDATE" and any(kw in combined_text for kw in HR_KEYWORDS):
+                    ev_stage = "HR_INTERVIEW"
+                elif ev_stage == "GENERAL_UPDATE" and any(kw in combined_text for kw in TECH_KEYWORDS):
+                    ev_stage = "TECHNICAL_INTERVIEW"
 
                 # Map canonical stage → event_type
                 STAGE_TO_EVENT_TYPE = {

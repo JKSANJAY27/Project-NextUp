@@ -27,6 +27,8 @@ export default function CompanyWorkspaceModal({
   const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
   const [expandedEmailHeightId, setExpandedEmailHeightId] = useState<string | null>(null);
   const [jdTextExpanded, setJdTextExpanded] = useState(false);
+  const [shortlistResult, setShortlistResult] = useState<Record<string, any>>({});
+  const [shortlistLoading, setShortlistLoading] = useState<string | null>(null);
   
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
@@ -67,6 +69,9 @@ export default function CompanyWorkspaceModal({
       }
     };
     fetchCompanyEvents();
+    // Clear shortlist state when company changes
+    setShortlistResult({});
+    setShortlistLoading(null);
   }, [selectedCompany]);
 
   // Decrypt notes whenever selectedCompany changes or encryption key is available
@@ -226,8 +231,10 @@ export default function CompanyWorkspaceModal({
       return new Date(a.date).getTime() - new Date(b.date).getTime();
     });
 
+  // Email trail = all events that have a subject (i.e., came from a real email)
+  // Milestone-only events (created synthetically) have no subject and are excluded.
   const emailTrailEvents = companyEvents
-    .filter((e: any) => e.body)
+    .filter((e: any) => e.subject)
     .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
   const workspaceEvents = emailTrailEvents;
@@ -579,6 +586,9 @@ export default function CompanyWorkspaceModal({
                   </h3>
 
                   <div className="relative border-l-2 border-border ml-3 pl-6 space-y-8">
+                    {workspaceEvents.length === 0 && (
+                      <p className="text-[9px] text-muted-foreground/60 italic">No email history available yet. Emails will appear here as they are processed.</p>
+                    )}
                     {workspaceEvents.map((evt: any) => (
                       <div key={evt.id} className="relative space-y-3">
                         <div className="absolute -left-[31px] top-1.5 h-4 w-4 bg-accent border-2 border-black" />
@@ -639,18 +649,57 @@ export default function CompanyWorkspaceModal({
 
                         {evt.attachments && evt.attachments.length > 0 && (
                           <div className="flex flex-wrap gap-1.5">
-                            {evt.attachments.map((att: any) => (
-                              <button
-                                key={att.id}
-                                onClick={() => handleOpenAttachment(att)}
-                                className="text-[9px] font-mono font-bold px-2 py-1 border border-border bg-muted/20 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase flex items-center gap-1.5"
-                                title={att.file_name}
-                              >
-                                {att.file_type === 'JD_PDF' || att.file_name?.toLowerCase().endsWith('.pdf') ? '📄' : '📊'}
-                                {att.file_name?.length > 34 ? att.file_name.slice(0, 32) + '…' : att.file_name}
-                                {openingAttachmentId === att.id ? ' ⏳' : ''}
-                              </button>
-                            ))}
+                            {evt.attachments.map((att: any) => {
+                              const isShortlist = att.file_type === 'SHORTLIST_EXCEL';
+                              if (isShortlist) {
+                                const sr = shortlistResult[companyId || ''];
+                                return (
+                                  <div key={att.id} className="flex flex-col gap-1">
+                                    <button
+                                      onClick={async () => {
+                                        if (!companyId) return;
+                                        setShortlistLoading(companyId);
+                                        try {
+                                          const res = await api.get(`/companies/${companyId}/shortlist-check`);
+                                          setShortlistResult(prev => ({ ...prev, [companyId]: res.data }));
+                                        } catch { /* ignore */ }
+                                        finally { setShortlistLoading(null); }
+                                      }}
+                                      className="text-[9px] font-mono font-bold px-2 py-1 border border-blue-500/50 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 transition-all uppercase flex items-center gap-1.5"
+                                      title="Check if your NEO ID is in this shortlist"
+                                    >
+                                      📊 {att.file_name?.length > 30 ? att.file_name.slice(0, 28) + '…' : att.file_name}
+                                      {shortlistLoading === companyId ? ' ⏳' : ' — Check NEO ID'}
+                                    </button>
+                                    {sr && (
+                                      <div className={`text-[9px] font-bold px-2 py-1 border ${
+                                        sr.found === true
+                                          ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-400'
+                                          : sr.found === false
+                                          ? 'border-red-500/50 bg-red-500/10 text-red-400'
+                                          : 'border-amber-500/50 bg-amber-500/10 text-amber-400'
+                                      }`}>
+                                        {sr.found === true ? '✓ ' : sr.found === false ? '✗ ' : 'ℹ '}
+                                        {sr.message}
+                                        {sr.total_shortlisted > 0 && !sr.found && ` (${sr.total_shortlisted} shortlisted)`}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              }
+                              return (
+                                <button
+                                  key={att.id}
+                                  onClick={() => handleOpenAttachment(att)}
+                                  className="text-[9px] font-mono font-bold px-2 py-1 border border-border bg-muted/20 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase flex items-center gap-1.5"
+                                  title={att.file_name}
+                                >
+                                  {att.file_type === 'JD_PDF' || att.file_name?.toLowerCase().endsWith('.pdf') ? '📄' : '📊'}
+                                  {att.file_name?.length > 34 ? att.file_name.slice(0, 32) + '…' : att.file_name}
+                                  {openingAttachmentId === att.id ? ' ⏳' : ''}
+                                </button>
+                              );
+                            })}
                           </div>
                         )}
 
@@ -658,7 +707,7 @@ export default function CompanyWorkspaceModal({
                           <div className={`border border-border/80 p-4 bg-muted/20 font-mono leading-relaxed whitespace-pre-wrap overflow-y-auto border-dashed ${
                             expandedEmailHeightId === evt.id ? 'max-h-[75vh] text-xs' : 'max-h-48 text-[10px]'
                           }`}>
-                            {evt.body}
+                            {evt.body || <span className="text-muted-foreground italic">Email body not available (milestone-only event).</span>}
                           </div>
                         )}
 

@@ -253,7 +253,9 @@ def list_companies(
     if cached_list is None:
         companies = db.query(Company).all()
         def get_sort_key(c):
-            dt = c.latest_event.timestamp if c.latest_event and c.latest_event.timestamp else c.created_at
+            # Sort by when the registration email first arrived (created_at),
+            # so the most recently announced company always appears at the top.
+            dt = c.created_at
             if dt is None:
                 return 0.0
             if dt.tzinfo is not None:
@@ -352,8 +354,10 @@ def get_company_events(
     if cached is not None:
         return cached
 
+    from sqlalchemy.orm import undefer
     query = (
         db.query(CompanyEvent)
+        .options(undefer(CompanyEvent.body))
         .filter(CompanyEvent.company_id == id)
     )
     if cursor:
@@ -419,3 +423,94 @@ def get_company_events(
         
     set_cache(cache_key, results, expire_seconds=600)
     return results
+
+
+@router.get("/{id}/shortlist-check")
+def check_shortlist(
+    id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Check if the current user's NEO ID is present in the shortlist Excel
+    attached to this company's events. Returns found status, total count,
+    and the attachment details.
+    """
+    from app.models.models import AttachmentMetadata
+    from app.services.excel_parser import extract_neo_ids_from_excel
+    import base64 as _b64
+
+    # Find all SHORTLIST_EXCEL attachments for this company's events
+    events = db.query(CompanyEvent).filter(CompanyEvent.company_id == id).all()
+    event_ids = [e.id for e in events]
+
+    from sqlalchemy.orm import undefer as _undefer
+    shortlist_attachments = []
+    if event_ids:
+        shortlist_attachments = (
+            db.query(AttachmentMetadata)
+            .options(_undefer(AttachmentMetadata.file_data))
+            .filter(
+                AttachmentMetadata.company_event_id.in_(event_ids),
+                AttachmentMetadata.file_type == "SHORTLIST_EXCEL"
+            )
+            .all()
+        )
+
+    if not shortlist_attachments:
+        return {
+            "has_shortlist": False,
+            "found": None,
+            "total_shortlisted": 0,
+            "message": "No shortlist uploaded for this company yet."
+        }
+
+    # Get current user's NEO ID hash for comparison
+    profile = current_user.profile
+    if not profile:
+        return {
+            "has_shortlist": True,
+            "found": None,
+            "total_shortlisted": 0,
+            "message": "Set up your student profile first to check shortlist eligibility."
+        }
+
+    user_neo_hash = profile.neo_id_hash  # Already stored as a hash
+
+    # Process each shortlist attachment
+    all_neo_ids = []
+    attachment_names = []
+    for att in shortlist_attachments:
+        attachment_names.append(att.file_name or "shortlist.xlsx")
+        if att.file_data:
+            try:
+                if isinstance(att.file_data, str):
+                    file_bytes = _b64.b64decode(att.file_data)
+                else:
+                    file_bytes = bytes(att.file_data)
+                neo_ids = extract_neo_ids_from_excel(file_bytes)
+                all_neo_ids.extend(neo_ids)
+            except Exception as e:
+                logger.warning(f"Failed to parse shortlist attachment {att.id}: {e}")
+
+    unique_neo_ids = list(set(all_neo_ids))
+
+    # Check by comparing hash of each extracted ID against the user's stored hash
+    import hashlib as _hashlib
+    found = False
+    for neo_id in unique_neo_ids:
+        neo_hash = _hashlib.sha256(neo_id.upper().encode()).hexdigest()
+        if neo_hash == user_neo_hash:
+            found = True
+            break
+
+    return {
+        "has_shortlist": True,
+        "found": found,
+        "total_shortlisted": len(unique_neo_ids),
+        "attachment_names": attachment_names,
+        "message": (
+            "Your NEO ID is in the shortlist!" if found
+            else f"Your NEO ID was not found in this shortlist ({len(unique_neo_ids)} students shortlisted)."
+        )
+    }
