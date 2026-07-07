@@ -476,19 +476,33 @@ def get_parser_gateway() -> AIGateway:
     """
     Email parsing chain.
     Provider order:
-      1. Ollama (HF Space / local) — only included when DISABLE_OLLAMA != 'true'
-         and OLLAMA_BASE_URL is configured.
-      2. HuggingFace Router (Llama-3.3-70B-Instruct) — always included as the
-         primary/mandatory provider.  This is the main parser the system relies on.
+      1. RemoteSpaceProvider (HF Space with Ollama) — primary, free, unlimited.
+         Only included when PARSER_AI_BASE_URL / HUGGINGFACE_PARSER_SPACE_URL is set.
+         Defaults to the resume Space URL so the two Spaces share one Ollama.
+      2. Ollama (local container) — only when DISABLE_OLLAMA != 'true' and
+         OLLAMA_BASE_URL is a real local endpoint.
+      3. HuggingFace Router (Llama-3.3-70B-Instruct) — metered fallback only.
+         Used as last resort when both Space and local Ollama are unavailable.
 
-    Regex is NOT a provider here — if both providers exhaust retries the gateway
-    raises AIUnavailableError and the ingestion job is retried later.
+    Regex is NOT a provider here — if all providers fail the gateway raises
+    AIUnavailableError and the ingestion job is retried later.
     """
     import os
     global _parser_gateway
     with _gateway_lock:
         if _parser_gateway is None:
             providers: List[AIProvider] = []
+
+            # Tier 1: dedicated HF Space (free Ollama, preferred)
+            if settings.PARSER_AI_BASE_URL:
+                providers.append(RemoteSpaceProvider(
+                    settings.PARSER_AI_BASE_URL,
+                    settings.PARSER_AI_MODEL,
+                    settings.PARSER_AI_AUTH_TOKEN,
+                    name="parser-space",
+                ))
+
+            # Tier 2: local Ollama (only when running inside a container with Ollama)
             disable_ollama = os.getenv("DISABLE_OLLAMA", "").lower() == "true"
             if not disable_ollama and settings.OLLAMA_BASE_URL:
                 providers.append(
@@ -497,7 +511,8 @@ def get_parser_gateway() -> AIGateway:
                         name="parser-ollama",
                     )
                 )
-            # HF Router is always present — it is the mandatory parser.
+
+            # Tier 3: HF Router — always present as emergency fallback (metered).
             providers.append(
                 HFRouterProvider(
                     settings.HF_FALLBACK_MODEL, settings.HF_API_TOKEN,

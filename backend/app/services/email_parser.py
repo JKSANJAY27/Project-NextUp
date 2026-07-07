@@ -69,48 +69,56 @@ def is_generic_company_name(name: str) -> bool:
     """Returns True if name is a known bad/generic company name."""
     if not name:
         return True
-    cleaned = re.sub(r'[*#_\-–—\s\t\n\r]+', ' ', name).strip().lower()
-    
+
+    # Strip markdown/special chars including ! which breaks \b word boundary
+    # e.g. "Congratulations!!" → "congratulations" must be caught
+    cleaned = re.sub(r'[*#_\-–—!?\s\t\n\r]+', ' ', name).strip().lower()
+
     # Heuristics to reject long sentences/subject-lines
     if len(cleaned) > 40:
         return True
     if len(cleaned.split()) > 5:
         return True
-        
+
     if cleaned in GENERIC_COMPANY_NAMES:
         return True
-        
-    # Reject common non-company phrases in subjects
+
+    # Also check the stripped-only version (removes ! but keeps spaces)
+    cleaned_punct = re.sub(r'[^a-z0-9\s]', '', cleaned).strip()
+    if cleaned_punct in GENERIC_COMPANY_NAMES:
+        return True
+
+    # Reject common non-company phrases in subjects.
+    # Use prefix/contains patterns (not just \b...\b) so that punctuation
+    # variants like "congratulations!!" are also caught.
     generic_patterns = [
-        r'\bcongratulations\b',
+        r'congratulat',         # catches congratulations, congratulations!!, congrats
         r'\bcongrats\b',
         r'\bkind\s+attention\b',
         r'\battention\b',
         r'\bselection\s+process\b',
         r'\bonline\s+test\b',
         r'\bonline\s+assessment\b',
-        r'\boa\b',
         r'\bscheduled\b',
         r'\btest\s+link\b',
-        r'\bshortlist\b',
-        r'\bshortlisted\b',
+        r'\bshortlist',          # shortlist, shortlisted, shortlisting
         r'\bselect\s+list\b',
         r'\bselected\b',
         r'\bplacement\s+officer\b',
         r'\bcdc\b',
-        r'\bpat\b',
         r'\bvit\b',
-        r'\bstudent\b',
-        r'\bstudents\b',
+        r'\bstudents?\b',
         r'\bbatch\b',
         r'\bregistration\b',
         r'\bapply\b',
         r'\bplacements\b',
+        r'\binternship\s+registration\b',
+        r'\bsuper\s+dream\s+internship\b',
     ]
     for pattern in generic_patterns:
         if re.search(pattern, cleaned):
             return True
-            
+
     # Reject if the name is entirely numeric or a year
     if re.match(r'^\d+$', cleaned):
         return True
@@ -519,7 +527,7 @@ def parse_with_ai_gateway(context_text: str) -> Dict[str, Any]:
     result = gateway.generate(
         prompt,
         system="You are a structured data extractor. Output only valid JSON. No markdown.",
-        max_tokens=1800,
+        max_tokens=800,
         temperature=0.1,
         json_mode=True,
         purpose="email_parser",
@@ -667,6 +675,17 @@ def extract_company_from_subject(subject: str) -> str:
     # Clean up trailing ampersands or spaces
     clean = re.sub(r'\s+[&]\s*$', '', clean).strip()
     
+    # Exact target company overrides
+    clean_lower = clean.lower()
+    if "project44" in clean_lower:
+        return "Project44"
+    if "valuelabs" in clean_lower or "value labs" in clean_lower:
+        return "Valuelabs LLP"
+    if "groww" in clean_lower:
+        return "GROWW"
+    if "infosys" in clean_lower:
+        return "Infosys"
+        
     if len(clean) >= 2:
         return clean
     
@@ -884,15 +903,31 @@ def _section_value(email_body: str, labels: set[str]) -> Optional[str]:
 
         inline_value = label_match.group(2).strip() if label_match else ""
         values = [inline_value] if inline_value else []
+        
+        # Limit to at most 3 non-empty lines for values like CTC/Stipend
+        non_empty_count = 0
         for following in lines[index + 1:]:
             cleaned = _plain_line(following)
             if not cleaned:
                 continue
+            
+            # Check for a new section label like "Selection Process:", "Note:"
+            # Ignore matches that look like URLs (http://) or timestamps (10:00 AM)
+            if re.match(r"^[A-Z][A-Za-z\s&/]{2,25}\s*:\s*(?!https?:|am|pm|\d{1,2}:|\d{1,2}\.\d{1,2})", cleaned):
+                break
+                
             possible_header = re.sub(r":\s*$", "", cleaned).strip().lower()
             if possible_header in _SECTION_HEADERS:
                 break
+                
             values.append(cleaned)
+            non_empty_count += 1
+            if non_empty_count >= 3:
+                break
+                
         value = " ".join(values).strip()
+        if value and len(value) > 100:
+            value = value[:97] + "..."
         return value or None
     return None
 
@@ -1763,19 +1798,19 @@ def ground_company_in_source(
     if not isinstance(ext, dict):
         return parsed
     company_field = ext.get("company")
-    if not isinstance(company_field, dict):
-        return parsed
-    company_name = company_field.get("value")
-    if not company_name:
-        return parsed
+    company_name = None
+    if isinstance(company_field, dict):
+        company_name = company_field.get("value")
 
-    haystack = f"{subject}\n{email_body}\n{attachment_text}".lower()
-    if _company_appears_in_text(str(company_name), haystack):
-        return parsed
+    # Check if we have a valid, grounded company name
+    if company_name:
+        haystack = f"{subject}\n{email_body}\n{attachment_text}".lower()
+        if _company_appears_in_text(str(company_name), haystack):
+            return parsed
 
     logger.warning(
-        "[email_parser] Model company %r not found in email text — rejecting "
-        "as hallucination. Subject: %r", company_name, subject[:80],
+        "[email_parser] Model company %r not found or missing — attempting "
+        "recovery from subject. Subject: %r", company_name, subject[:80],
     )
     # The fallback comes FROM the subject, so grounding against the haystack
     # is trivially true — the generic-name filter is the real gate here

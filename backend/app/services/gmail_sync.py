@@ -657,7 +657,17 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
                 )
                 if strategy and (strategy.get("required_skills") or strategy.get("role_summary")):
                     company.jd_strategy = strategy
-                    logger.info(f"Reconciliation: Saved JD Strategy for company {company.name}.")
+                    # Sync into jd_analysis so @property accessors work
+                    if not company.jd_analysis:
+                        company.jd_analysis = {}
+                    company.jd_analysis["required_skills"] = strategy.get("required_skills", [])
+                    company.jd_analysis["ats_keywords"] = strategy.get("ats_keywords", [])
+                    company.jd_analysis["preferred_skills"] = strategy.get("preferred_skills", [])
+                    company.jd_analysis["interview_topics"] = strategy.get("interview_topics", [])
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(company, "jd_analysis")
+                    flag_modified(company, "jd_strategy")
+                    logger.info(f"Reconciliation: Saved JD Strategy and synced jd_analysis for company {company.name}.")
             except Exception as e:
                 logger.error(f"Reconciliation: Failed to generate JD strategy for company {company.name} in job: {e}")
         
@@ -776,8 +786,23 @@ def _generate_jd_strategy_async(company_id: str, company_name: str, role: str,
             company_name=company_name,
         )
         company.jd_strategy = strategy
+
+        # Sync key fields into jd_analysis so the @property accessors
+        # (jd_required_skills, jd_ats_keywords, etc.) return real data.
+        # jd_analysis is only written when a PDF attachment exists — without
+        # this sync, those columns stay empty even though jd_strategy has data.
+        if not company.jd_analysis:
+            company.jd_analysis = {}
+        company.jd_analysis["required_skills"] = strategy.get("required_skills", [])
+        company.jd_analysis["ats_keywords"] = strategy.get("ats_keywords", [])
+        company.jd_analysis["preferred_skills"] = strategy.get("preferred_skills", [])
+        company.jd_analysis["interview_topics"] = strategy.get("interview_topics", [])
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(company, "jd_analysis")
+        flag_modified(company, "jd_strategy")
+
         db.commit()
-        logger.info(f"JD strategy cached for company {company_id}")
+        logger.info(f"JD strategy cached and jd_analysis synced for company {company_id}")
     except Exception as e:
         logger.warning(
             f"Background JD strategy generation failed for {company_name} "
@@ -860,6 +885,24 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
         
         email_timestamp = datetime.fromisoformat(email_timestamp_str.replace("Z", "+00:00")) if email_timestamp_str else datetime.utcnow()
         
+        # Historical filter: Ignore non-target companies from before July 7, 2026.
+        # This keeps the workspace clean of old batch/unwanted companies, while
+        # keeping the system open for all new drives hereafter.
+        if email_timestamp:
+            ts_naive = email_timestamp.replace(tzinfo=None)
+            if ts_naive < datetime(2026, 7, 7, 0, 0, 0):
+                TARGET_COMPANY_KEYWORDS = ['project44', 'valuelabs', 'value labs', 'groww', 'infosys']
+                subject_lower = subject.lower()
+                is_target = any(kw in subject_lower for kw in TARGET_COMPANY_KEYWORDS)
+                if not is_target:
+                    logger.info(f"Historical filter: skipping non-target job {job.id} - subject: {subject!r}")
+                    job.status = 'dead_letter'
+                    job.error_message = 'Excluded: historical non-target company'
+                    job.parsed_output = None
+                    job.validated_output = None
+                    db.commit()
+                    return True
+                    
         # 3. Pre-extract attachment text to provide full context to LLM.
         # jd_pdf_full_text keeps the (much longer) untruncated JD text so it
         # can be stored on the company for JD-strategy generation and resume
@@ -1092,12 +1135,31 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
         # Prevents one email with spurious multi-role LLM output from creating two Company rows
         # for the same company (e.g. 'Decode Age - Software Engineer' + 'Decode Age - Data Intelligence Intern').
         companies_created_this_job: dict = {}  # { norm_company_key: Company }
-        
+        # Safe truncation of company name to database limits
+        if company_name and len(company_name) > 255:
+            company_name = company_name[:252] + "..."
+            
+        if recruitment_cycle and len(recruitment_cycle) > 100:
+            recruitment_cycle = recruitment_cycle[:97] + "..."
+
         processed_events = []
         for r_item in roles_list:
             role = r_item.get("role", {}).get("value", "Software Engineer").strip()
+            if role and len(role) > 255:
+                role = role[:252] + "..."
+                
             ctc = r_item.get("ctc", {}).get("value")
+            if ctc:
+                ctc = str(ctc).strip()
+                if len(ctc) > 100:
+                    ctc = ctc[:97] + "..."
+                    
             stipend = r_item.get("stipend", {}).get("value")
+            if stipend:
+                stipend = str(stipend).strip()
+                if len(stipend) > 100:
+                    stipend = stipend[:97] + "..."
+                    
             eligible_branches = r_item.get("eligible_branches", {}).get("value", [])
             min_cgpa = r_item.get("min_cgpa", {}).get("value")
             requires_no_arrears = r_item.get("requires_no_arrears", {}).get("value", False)

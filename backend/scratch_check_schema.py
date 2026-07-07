@@ -1,19 +1,30 @@
-import os
-import sys
-from sqlalchemy import create_engine, text
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dotenv import load_dotenv
-
 load_dotenv()
-db_url = os.getenv("DATABASE_URL")
-if not db_url:
-    print("No DATABASE_URL")
-    sys.exit(1)
 
-engine = create_engine(db_url)
-try:
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'companies';"))
-        for row in result:
-            print(row[0], row[1])
-except Exception as e:
-    print("Error:", e)
+from app.core.database import SessionLocal
+from sqlalchemy import text
+
+db = SessionLocal()
+res = db.execute(text("""
+    SELECT column_name, data_type, character_maximum_length 
+    FROM information_schema.columns 
+    WHERE table_name = 'companies';
+""")).fetchall()
+
+print("=== companies columns ===")
+for r in res:
+    print(r)
+
+res2 = db.execute(text("""
+    SELECT column_name, data_type, character_maximum_length 
+    FROM information_schema.columns 
+    WHERE table_name = 'company_events';
+""")).fetchall()
+
+print("\n=== company_events columns ===")
+for r in res2:
+    print(r)
+
+db.close()

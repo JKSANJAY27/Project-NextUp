@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     RESUME_AI_BASE_URL: str = os.getenv("HUGGINGFACE_RESUME_SPACE_URL", "")
     RESUME_AI_MODEL: str = "qwen2.5:3b"   # Ollama model inside the resume Space
     RESUME_AI_AUTH_TOKEN: str = ""
+    # Dedicated parser HF Space (can share the resume Space URL for now).
+    # When set, the parser gateway uses this Space first (free, unlimited)
+    # before falling back to the metered HF Router.
+    PARSER_AI_BASE_URL: str = os.getenv("HUGGINGFACE_PARSER_SPACE_URL",
+                              os.getenv("HUGGINGFACE_RESUME_SPACE_URL", ""))
+    PARSER_AI_MODEL: str = "qwen2.5:3b"
+    PARSER_AI_AUTH_TOKEN: str = ""
     # Free HF Spaces run on 2 vCPU: a slim prompt + ~900 output tokens still
     # takes several minutes. This is fine — resume jobs are async.
     RESUME_AI_TIMEOUT_SECONDS: int = 480

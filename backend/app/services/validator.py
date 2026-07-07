@@ -146,11 +146,18 @@ def normalize_company_name(name: str, db: Session) -> str:
         score = 0
         if clean_ext == clean_incoming:
             score = 100
-        elif (len(clean_ext) >= 3 and clean_ext in clean_incoming) or (len(clean_incoming) >= 3 and clean_incoming in clean_ext):
-            overlap_ratio = len(clean_ext) / len(clean_incoming) if len(clean_incoming) > 0 else 0
-            if overlap_ratio > 1:
-                overlap_ratio = 1 / overlap_ratio
-            score = int(70 * overlap_ratio) + 20
+        else:
+            # Token-based exact subset match for company names (e.g. "Infosys" matches "Infosys HackwithInfy...")
+            ext_tokens = set(clean_ext.split())
+            incoming_tokens = set(clean_incoming.split())
+            sig_ext = {t for t in ext_tokens if len(t) >= 3 and t not in {"llp", "pvt", "ltd", "inc"}}
+            if sig_ext and sig_ext.issubset(incoming_tokens):
+                score = 90
+            elif (len(clean_ext) >= 3 and clean_ext in clean_incoming) or (len(clean_incoming) >= 3 and clean_incoming in clean_ext):
+                overlap_ratio = len(clean_ext) / len(clean_incoming) if len(clean_incoming) > 0 else 0
+                if overlap_ratio > 1:
+                    overlap_ratio = 1 / overlap_ratio
+                score = int(70 * overlap_ratio) + 20
             
         if score > best_score and score >= 60:
             best_score = score
@@ -274,7 +281,7 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session,
     # 1. Company Name Normalization & Confidence Check
     company_obj = ext.get("company", {})
     if not isinstance(company_obj, dict):
-        company_obj = {"value": str(company_obj), "confidence": 0.50}
+        company_obj = {"value": str(company_obj) if company_obj is not None else None, "confidence": 0.50}
     comp_val = company_obj.get("value") or "Unknown Company"
     comp_conf = company_obj.get("confidence", 0.50)
     
@@ -294,7 +301,7 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session,
     # 2. Event Type Normalization
     event_obj = ext.get("event_type", {})
     if not isinstance(event_obj, dict):
-        event_obj = {"value": str(event_obj), "confidence": 0.50}
+        event_obj = {"value": str(event_obj) if event_obj is not None else None, "confidence": 0.50}
     event_val = event_obj.get("value") or "NEW_DRIVE"
     event_conf = event_obj.get("confidence", 0.50)
     
@@ -399,7 +406,7 @@ def validate_and_normalize_parsed_data(parsed_data: Dict[str, Any], db: Session,
         # Role name normalization
         r_obj = r.get("role", {})
         if not isinstance(r_obj, dict):
-            r_obj = {"value": str(r_obj), "confidence": 0.50}
+            r_obj = {"value": str(r_obj) if r_obj is not None else None, "confidence": 0.50}
         r_val = r_obj.get("value") or "Software Engineer"
         r_conf = r_obj.get("confidence", 0.50)
         norm_role = normalize_role_name(r_val)
