@@ -486,6 +486,16 @@ def get_parser_gateway() -> AIGateway:
 
     Regex is NOT a provider here — if all providers fail the gateway raises
     AIUnavailableError and the ingestion job is retried later.
+
+    Provider selection logic:
+      Tier 1 (RemoteSpaceProvider): only when PARSER_AI_BASE_URL / HUGGINGFACE_PARSER_SPACE_URL
+        is set. This is the correct way to talk to the HF Space running Ollama — it speaks
+        the /api/generate contract exposed by the Space's app.py, not raw Ollama protocol.
+      Tier 2 (OllamaProvider): only for a genuine LOCAL Ollama instance (localhost/127.0.0.1).
+        OllamaProvider._ping() checks /api/tags which does NOT exist on HF Spaces, so it must
+        never be pointed at a remote URL — doing so wastes retries and burns circuit-breaker
+        budget before the usable HF Router tier is reached.
+      Tier 3 (HFRouterProvider): always present as emergency fallback (metered HF credits).
     """
     import os
     global _parser_gateway
@@ -493,7 +503,8 @@ def get_parser_gateway() -> AIGateway:
         if _parser_gateway is None:
             providers: List[AIProvider] = []
 
-            # Tier 1: dedicated HF Space (free Ollama, preferred)
+            # Tier 1: dedicated HF Space via RemoteSpaceProvider (free, preferred).
+            # Set HUGGINGFACE_PARSER_SPACE_URL (or HUGGINGFACE_RESUME_SPACE_URL) in .env.
             if settings.PARSER_AI_BASE_URL:
                 providers.append(RemoteSpaceProvider(
                     settings.PARSER_AI_BASE_URL,
@@ -502,14 +513,26 @@ def get_parser_gateway() -> AIGateway:
                     name="parser-space",
                 ))
 
-            # Tier 2: local Ollama (only when running inside a container with Ollama)
+            # Tier 2: local Ollama — ONLY when it is a genuine local process.
+            # We explicitly skip this tier when OLLAMA_BASE_URL is a remote HF Space URL
+            # because OllamaProvider speaks the /api/tags + /api/generate protocol that
+            # HF Spaces do NOT expose. Pointing it at a remote URL causes every _ping()
+            # to fail, wasting retry budget before reaching the HF Router tier.
             disable_ollama = os.getenv("DISABLE_OLLAMA", "").lower() == "true"
-            if not disable_ollama and settings.OLLAMA_BASE_URL:
+            ollama_url = settings.OLLAMA_BASE_URL or ""
+            is_local_ollama = ollama_url.startswith(("http://localhost", "http://127.0.0.1"))
+            if not disable_ollama and is_local_ollama:
                 providers.append(
                     OllamaProvider(
-                        settings.OLLAMA_BASE_URL, settings.OLLAMA_MODEL,
+                        ollama_url, settings.OLLAMA_MODEL,
                         name="parser-ollama",
                     )
+                )
+            elif not disable_ollama and ollama_url and not is_local_ollama:
+                logger.info(
+                    "[parser-gateway] Skipping OllamaProvider for parser: OLLAMA_BASE_URL=%r "
+                    "is a remote URL — use HUGGINGFACE_PARSER_SPACE_URL for HF Spaces.",
+                    ollama_url,
                 )
 
             # Tier 3: HF Router — always present as emergency fallback (metered).

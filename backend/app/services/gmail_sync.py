@@ -259,6 +259,18 @@ INTERVIEW_SUBJECT_KEYWORDS = ["interview", "next round of selection",
                               "selection process is scheduled", "gd round",
                               "group discussion"]
 
+# Subject keywords that UNAMBIGUOUSLY signal a follow-up/update email, not a new drive.
+# Used in the pre-is_announcement guard to downgrade a misclassified NEW_DRIVE email.
+# Small models (qwen2.5:1.5b) frequently classify update emails as NEW_DRIVE, which
+# bypasses the missing-company guard and creates phantom company workspaces.
+# Thread replies (Re:/Fwd:) are already caught by is_thread_reply — not duplicated here.
+DRIVE_UPDATE_SUBJECT_KEYWORDS = [
+    "update", "timeline extension", "shortlist", "selection list",
+    "next round", "selection process is scheduled",
+    "kind attn", "kind attention", "applied students",
+    "results", "offer letter", "rejection", "regret",
+]
+
 
 def _date_mentioned_in_text(dt: datetime, text_lower: str) -> bool:
     """Check whether a day+month actually appears in the email text.
@@ -1214,12 +1226,38 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
         registration_deadline = datetime.fromisoformat(registration_deadline_str) if registration_deadline_str else None
         registration_link = ext_data.get("registration_link", {}).get("value")
         requires_review = validated_info.get("parser_metadata", {}).get("requires_review", False)
-        
+
+        # -----------------------------------------------------------------------
+        # PRE-ANNOUNCEMENT GUARD: downgrade misclassified NEW_DRIVE emails.
+        #
+        # Problem: Small models (qwen2.5:1.5b) frequently classify update emails
+        # (OA schedules, shortlists, interview notices, timeline extensions) as
+        # NEW_DRIVE. When that happens:
+        #   (a) is_announcement evaluates to True
+        #   (b) the subject-based event_type correction below is SKIPPED
+        #   (c) the missing-company guard fires with is_announcement=True → bypass
+        #   (d) a phantom company workspace is created from an update email
+        #
+        # Fix: if the subject line contains a keyword that UNAMBIGUOUSLY signals
+        # an update (not an announcement), force email_category → DRIVE_UPDATE
+        # BEFORE is_announcement is evaluated. This makes both (b) and (c) work.
+        # Thread replies (Re:/Fwd:) are already caught by is_thread_reply below.
+        # -----------------------------------------------------------------------
+        if email_category == "NEW_DRIVE":
+            _subj_lower = (subject or "").lower()
+            if any(k in _subj_lower for k in DRIVE_UPDATE_SUBJECT_KEYWORDS):
+                logger.warning(
+                    f"Job {job.id}: NEW_DRIVE email downgraded to DRIVE_UPDATE — "
+                    f"subject contains update keyword(s). Subject: {subject!r}"
+                )
+                email_category = "DRIVE_UPDATE"
+                ext_data["email_category"] = "DRIVE_UPDATE"
+
         # Subject-based event_type correction: update mails like
         # "<Company> Online Test Is Scheduled On 08-07-2026 ..." are sometimes
         # misparsed as REGISTRATION (the regex fallback's default, and a common
         # small-model error). The subject line is authoritative for what an
-        # update email announces — never applied to NEW_DRIVE announcements.
+        # update email announces — never applied to genuine NEW_DRIVE announcements.
         if email_category != "NEW_DRIVE" and event_type in ("REGISTRATION", "NEW_DRIVE", "GENERAL_UPDATE"):
             _subject_l = (subject or "").lower()
             if any(k in _subject_l for k in OA_SUBJECT_KEYWORDS):
