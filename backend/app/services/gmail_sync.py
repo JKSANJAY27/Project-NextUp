@@ -259,6 +259,25 @@ INTERVIEW_SUBJECT_KEYWORDS = ["interview", "next round of selection",
                               "selection process is scheduled", "gd round",
                               "group discussion"]
 
+# Subject keywords that UNAMBIGUOUSLY signal a follow-up/update email, not a new drive.
+# Used in the pre-is_announcement guard to downgrade a misclassified NEW_DRIVE email.
+# Small models (qwen2.5:1.5b) frequently classify update emails as NEW_DRIVE, which
+# bypasses the missing-company guard and creates phantom company workspaces.
+# Thread replies (Re:/Fwd:) are already caught by is_thread_reply — not duplicated here.
+DRIVE_UPDATE_SUBJECT_KEYWORDS = [
+    # Explicit update signals
+    "update", "timeline extension", "shortlist", "selection list",
+    "next round", "selection process is scheduled",
+    "kind attn", "kind attention", "applied students",
+    "results", "offer letter", "rejection", "regret",
+    # Scheduling phrases — a brand-new registration email never says
+    # "online test is scheduled" or "interview scheduled on"; only update
+    # emails announcing a specific date/time for an existing drive do.
+    "is scheduled", "scheduled on", "online test", "online assessment",
+    "aptitude test", "coding test", "written test",
+    "interview scheduled", "gd round", "group discussion",
+]
+
 
 def _date_mentioned_in_text(dt: datetime, text_lower: str) -> bool:
     """Check whether a day+month actually appears in the email text.
@@ -1315,12 +1334,38 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                 registration_deadline, f"{subject}\n{body}")
         registration_link = ext_data.get("registration_link", {}).get("value")
         requires_review = validated_info.get("parser_metadata", {}).get("requires_review", False)
-        
+
+        # -----------------------------------------------------------------------
+        # PRE-ANNOUNCEMENT GUARD: downgrade misclassified NEW_DRIVE emails.
+        #
+        # Problem: Small models (qwen2.5:1.5b) frequently classify update emails
+        # (OA schedules, shortlists, interview notices, timeline extensions) as
+        # NEW_DRIVE. When that happens:
+        #   (a) is_announcement evaluates to True
+        #   (b) the subject-based event_type correction below is SKIPPED
+        #   (c) the missing-company guard fires with is_announcement=True → bypass
+        #   (d) a phantom company workspace is created from an update email
+        #
+        # Fix: if the subject line contains a keyword that UNAMBIGUOUSLY signals
+        # an update (not an announcement), force email_category → DRIVE_UPDATE
+        # BEFORE is_announcement is evaluated. This makes both (b) and (c) work.
+        # Thread replies (Re:/Fwd:) are already caught by is_thread_reply below.
+        # -----------------------------------------------------------------------
+        if email_category == "NEW_DRIVE":
+            _subj_lower = (subject or "").lower()
+            if any(k in _subj_lower for k in DRIVE_UPDATE_SUBJECT_KEYWORDS):
+                logger.warning(
+                    f"Job {job.id}: NEW_DRIVE email downgraded to DRIVE_UPDATE — "
+                    f"subject contains update keyword(s). Subject: {subject!r}"
+                )
+                email_category = "DRIVE_UPDATE"
+                ext_data["email_category"] = "DRIVE_UPDATE"
+
         # Subject-based event_type correction: update mails like
         # "<Company> Online Test Is Scheduled On 08-07-2026 ..." are sometimes
         # misparsed as REGISTRATION (the regex fallback's default, and a common
         # small-model error). The subject line is authoritative for what an
-        # update email announces — never applied to NEW_DRIVE announcements.
+        # update email announces — never applied to genuine NEW_DRIVE announcements.
         if email_category != "NEW_DRIVE" and event_type in ("REGISTRATION", "NEW_DRIVE", "GENERAL_UPDATE"):
             _subject_l = (subject or "").lower()
             if any(k in _subject_l for k in OA_SUBJECT_KEYWORDS):
@@ -1555,6 +1600,50 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                     db, job.id, "COMPANY_MATCHED", "SUCCESS",
                     f"Same-email dedup reused company workspace: {company.name} (Role: {company.role})"
                 )
+
+            # -----------------------------------------------------------------
+            # STRONG-SIGNAL GUARD: Require positive evidence before creating
+            # a new company workspace.
+            #
+            # The problem: AI email_category is unreliable. A small model
+            # frequently classifies update emails (OA schedule, interview
+            # notice, shortlist) as NEW_DRIVE. Subject keyword lists are
+            # fragile — every new phrasing needs a new keyword.
+            #
+            # The solution: require the PARSED DATA ITSELF to prove it is a
+            # new registration drive. A genuine announcement always contains
+            # at least 2 of these registration signals:
+            #   1. CTC or stipend (compensation is only in new announcements)
+            #   2. Registration deadline (only relevant for new registrations)
+            #   3. Registration link (only in new announcements)
+            #   4. Eligibility criteria text (only in new announcements)
+            #
+            # Update emails (OA schedule, interview notice, shortlist) almost
+            # never carry CTC, deadline, registration link, and eligibility
+            # together — because they're not new drives.
+            #
+            # This makes the guard data-driven, not keyword-driven.
+            # -----------------------------------------------------------------
+            if not company and is_announcement:
+                eligibility_raw_text_check = ext_data.get("eligibility_raw_text", {}).get("value")
+                reg_signals = sum([
+                    1 if (ctc or stipend) else 0,
+                    1 if registration_deadline else 0,
+                    1 if registration_link else 0,
+                    1 if (eligibility_raw_text_check and len(str(eligibility_raw_text_check)) > 30) else 0,
+                ])
+                if reg_signals < 2:
+                    logger.warning(
+                        f"Job {job.id}: is_announcement=True for unknown company "
+                        f"'{company_name}' but only {reg_signals}/4 registration signals "
+                        f"found (need >=2 to create workspace). Demoting to update routing "
+                        f"(PendingCompanyEvent) for safety. "
+                        f"Signals: ctc={bool(ctc or stipend)}, deadline={bool(registration_deadline)}, "
+                        f"link={bool(registration_link)}, eligibility={bool(eligibility_raw_text_check and len(str(eligibility_raw_text_check)) > 30)}. "
+                        f"Subject: {subject!r}"
+                    )
+                    is_announcement = False
+                    job.final_classification = event_type
 
             # -----------------------------------------------------------------
             # GUARD: If this is an update mail (not an announcement) and we
