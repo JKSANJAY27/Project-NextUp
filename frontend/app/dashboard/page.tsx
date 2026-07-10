@@ -1820,7 +1820,7 @@ function DashboardPageContent() {
                                 )}
                               </div>
                               
-                              <div className="absolute left-6 bottom-full mb-1 hidden group-hover/elig:block bg-zinc-950 border-2 border-black p-4 shadow-[4px_4px_0px_0px_#000] z-50 text-[10px] min-w-[300px] max-w-md uppercase leading-relaxed font-bold rounded-none">
+                              <div className="absolute right-full top-0 mr-4 hidden group-hover/elig:block bg-zinc-950 border-2 border-black p-4 shadow-[4px_4px_0px_0px_#000] z-50 text-[10px] min-w-[300px] max-w-md uppercase leading-relaxed font-bold rounded-none">
                                 {c.eligibility_explanation ? (
                                   <div className="space-y-3">
                                     {c.eligibility_explanation.failed && c.eligibility_explanation.failed.length > 0 && (

@@ -131,36 +131,30 @@ def delete_company_cascade(db, company: Company):
     print(f"    Deleted company row.")
 
 
-def reset_job(db, job_id: str):
+def deadletter_job(db, job_id: str):
+    """Permanently mark a bad job as dead_letter so it never re-runs."""
     job = db.query(RawIngestionJob).filter(
         text("CAST(id AS TEXT) = :jid")
     ).params(jid=job_id).first()
 
     if not job:
-        print(f"  WARNING: job {job_id} not found in DB, skipping reset.")
+        print(f"  WARNING: job {job_id} not found in DB, skipping.")
+        return
+
+    if job.status == "dead_letter":
+        print(f"  Job {job_id} already dead_letter — skipping (idempotent).")
         return
 
     old_status = job.status
-    job.status = "pending"
+    job.status = "dead_letter"
     job.locked_at = None
     job.locked_by = None
-    job.processed_at = None
-    job.retry_count = 0
-    job.error_message = None
-    job.final_classification = None
-    # Clear parsed/validated output so it fully re-parses
-    job.parsed_output = None
-    job.validated_output = None
+    job.error_message = (
+        "Permanently dead-lettered: this email is from an old/rejected drive. "
+        "Company was manually deleted. Do not re-process."
+    )
 
-    # Remove old execution logs for this job so the re-run starts clean
-    try:
-        db.query(IngestionExecutionLog).filter(
-            text("CAST(job_id AS TEXT) = :jid")
-        ).params(jid=job_id).delete(synchronize_session=False)
-    except Exception as e:
-        print(f"  (Could not delete execution logs for {job_id}: {e})")
-
-    print(f"  Reset job {job_id}: {old_status!r} -> 'pending'")
+    print(f"  Dead-lettered job {job_id}: {old_status!r} -> 'dead_letter'")
 
 
 def main():
@@ -202,11 +196,11 @@ def main():
             db.flush()
 
         # ------------------------------------------------------------------
-        # 2. Reset source jobs to pending for re-processing
+        # 2. Permanently dead-letter the source jobs (never re-run them)
         # ------------------------------------------------------------------
-        print(f"\nResetting {len(BAD_JOB_IDS)} source ingestion jobs to 'pending'...")
+        print(f"\nDead-lettering {len(BAD_JOB_IDS)} source ingestion jobs permanently...")
         for jid in BAD_JOB_IDS:
-            reset_job(db, jid)
+            deadletter_job(db, jid)
 
         # ------------------------------------------------------------------
         # 3. Commit
@@ -214,9 +208,7 @@ def main():
         db.commit()
         print("\n" + "=" * 60)
         print("Cleanup committed successfully.")
-        print("The reset jobs will be re-processed on the next cron tick.")
-        print("With the patched pipeline they should route to PendingCompanyEvent")
-        print("(no company in DB) instead of creating new workspaces.")
+        print("Bad jobs are permanently dead-lettered — they will NEVER re-run.")
         print("=" * 60)
 
     except Exception as e:
