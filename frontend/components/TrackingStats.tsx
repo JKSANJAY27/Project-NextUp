@@ -3,7 +3,6 @@ import React from "react";
 interface TrackingStatsProps {
   total: number;
   registration: number;
-  shortlisted: number;
   onlineAssessment: number;
   interview: number;
   offer: number;
@@ -12,13 +11,12 @@ interface TrackingStatsProps {
 export default function TrackingStats({
   total,
   registration,
-  shortlisted,
   onlineAssessment,
   interview,
   offer,
 }: TrackingStatsProps) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
       <div className="border-2 border-border bg-card p-4 flex flex-col justify-between h-24 transition-colors hover:border-foreground">
         <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase">Total Applications</span>
         <span className="text-3xl font-extrabold tracking-tighter text-foreground">{total}</span>
@@ -26,10 +24,6 @@ export default function TrackingStats({
       <div className="border-2 border-yellow-500/30 bg-yellow-500/5 p-4 flex flex-col justify-between h-24">
         <span className="text-[10px] font-black tracking-widest text-yellow-500 uppercase">Registration</span>
         <span className="text-3xl font-extrabold tracking-tighter text-yellow-500">{registration}</span>
-      </div>
-      <div className="border-2 border-blue-500/30 bg-blue-500/5 p-4 flex flex-col justify-between h-24">
-        <span className="text-[10px] font-black tracking-widest text-blue-500 uppercase">Shortlisted</span>
-        <span className="text-3xl font-extrabold tracking-tighter text-blue-500">{shortlisted}</span>
       </div>
       <div className="border-2 border-orange-500/30 bg-orange-500/5 p-4 flex flex-col justify-between h-24">
         <span className="text-[10px] font-black tracking-widest text-orange-500 uppercase">Online Assessment</span>

@@ -145,10 +145,11 @@ export default function TrackingPage() {
     visibleCompanies = visibleCompanies.filter(c => (applications[c.id]?.priority_score || 0) > 3);
   }
 
-  // Normalize stages
+  // Normalize stages. There is no separate 'Shortlisted' stage: a shortlist
+  // always admits you into the next round (OA/Interview), so any legacy
+  // 'Shortlisted' application shows under Online Assessment.
   const categorized = {
     REGISTRATION: [] as Company[],
-    SHORTLISTED: [] as Company[],
     ONLINE_ASSESSMENT: [] as Company[],
     INTERVIEW: [] as Company[],
     OFFER: [] as Company[],
@@ -159,8 +160,7 @@ export default function TrackingPage() {
     const status = applications[c.id]?.status || "Applied";
     if (status.includes("Offer")) categorized.OFFER.push(c);
     else if (status.includes("Interview") || status === "Technical" || status === "HR") categorized.INTERVIEW.push(c);
-    else if (status === "OA" || status.includes("Assessment")) categorized.ONLINE_ASSESSMENT.push(c);
-    else if (status === "Shortlisted") categorized.SHORTLISTED.push(c);
+    else if (status === "OA" || status.includes("Assessment") || status === "Shortlisted") categorized.ONLINE_ASSESSMENT.push(c);
     else if (status.includes("Rejected") || status.includes("Archived")) categorized.REJECTED.push(c);
     else categorized.REGISTRATION.push(c); // Applied maps to REGISTRATION visually
   });
@@ -290,7 +290,6 @@ export default function TrackingPage() {
         <TrackingStats
           total={visibleCompanies.length}
           registration={categorized.REGISTRATION.length}
-          shortlisted={categorized.SHORTLISTED.length}
           onlineAssessment={categorized.ONLINE_ASSESSMENT.length}
           interview={categorized.INTERVIEW.length}
           offer={categorized.OFFER.length}
@@ -313,12 +312,6 @@ export default function TrackingPage() {
               ))}
             </TrackingSection>
             
-            <TrackingSection title="Shortlisted" count={categorized.SHORTLISTED.length} colorClass="bg-blue-500">
-              {categorized.SHORTLISTED.map(c => (
-                <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="SHORTLISTED" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />
-              ))}
-            </TrackingSection>
-
             <TrackingSection title="Online Assessment" count={categorized.ONLINE_ASSESSMENT.length} colorClass="bg-orange-500">
               {categorized.ONLINE_ASSESSMENT.map(c => (
                 <TrackingCard key={c.id} company={c} application={applications[c.id]} nextEvent={getNextEvent(c.id)} stage="ONLINE_ASSESSMENT" onClick={() => { setSelectedCompanyId(c.id); }} onArchive={() => handleArchive(c.id)} />

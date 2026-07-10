@@ -661,18 +661,24 @@ export default function CompanyWorkspaceModal({
 
                         {evt.confidence_scores && Object.keys(evt.confidence_scores).length > 0 && (
                           <div className="flex flex-wrap gap-1.5">
-                            {Object.entries(evt.confidence_scores || {}).map(([field, score]: [string, any]) => (
-                              <span 
-                                key={field} 
+                            {Object.entries(evt.confidence_scores || {}).map(([field, score]: [string, any]) => {
+                              // Some events store 0-1 fractions, others 0-100
+                              // percents (showed as "5000% CONFIDENCE")
+                              const pct = Math.min(100, Math.round(score > 1 ? score : score * 100));
+                              const frac = pct / 100;
+                              return (
+                              <span
+                                key={field}
                                 className={`text-[8px] font-mono font-bold px-1.5 py-0.5 border ${
-                                  score >= 0.85 ? 'bg-emerald-950/25 border-emerald-500/50 text-emerald-400' :
-                                  score >= 0.70 ? 'bg-amber-950/25 border-amber-500/50 text-amber-400' :
+                                  frac >= 0.85 ? 'bg-emerald-950/25 border-emerald-500/50 text-emerald-400' :
+                                  frac >= 0.70 ? 'bg-amber-950/25 border-amber-500/50 text-amber-400' :
                                   'bg-red-950/25 border-red-500/50 text-red-400'
                                 }`}
                               >
-                                {field.toUpperCase()}: {Math.round(score * 100)}% CONFIDENCE
+                                {field.toUpperCase()}: {pct}% CONFIDENCE
                               </span>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
 
@@ -681,25 +687,38 @@ export default function CompanyWorkspaceModal({
                             {evt.attachments.map((att: any) => {
                               const isShortlist = att.file_type === 'SHORTLIST_EXCEL';
                               if (isShortlist) {
-                                const sr = shortlistResult[companyId || ''];
+                                // Per-ATTACHMENT check: each round has its own
+                                // list (you can be on the PPT list but not the
+                                // interview list), so results are keyed and
+                                // scoped by attachment, not by company.
+                                const sr = shortlistResult[att.id];
                                 return (
                                   <div key={att.id} className="flex flex-col gap-1">
-                                    <button
-                                      onClick={async () => {
-                                        if (!companyId) return;
-                                        setShortlistLoading(companyId);
-                                        try {
-                                          const res = await api.get(`/companies/${companyId}/shortlist-check`);
-                                          setShortlistResult(prev => ({ ...prev, [companyId]: res.data }));
-                                        } catch { /* ignore */ }
-                                        finally { setShortlistLoading(null); }
-                                      }}
-                                      className="text-[9px] font-mono font-bold px-2 py-1 border border-blue-500/50 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 transition-all uppercase flex items-center gap-1.5"
-                                      title="Check if your NEO ID is in this shortlist"
-                                    >
-                                      📊 {att.file_name?.length > 30 ? att.file_name.slice(0, 28) + '…' : att.file_name}
-                                      {shortlistLoading === companyId ? ' ⏳' : ' — Check NEO ID'}
-                                    </button>
+                                    <div className="flex gap-1.5">
+                                      <button
+                                        onClick={async () => {
+                                          if (!companyId) return;
+                                          setShortlistLoading(att.id);
+                                          try {
+                                            const res = await api.get(`/companies/${companyId}/shortlist-check?attachment_id=${att.id}`);
+                                            setShortlistResult(prev => ({ ...prev, [att.id]: res.data }));
+                                          } catch { /* ignore */ }
+                                          finally { setShortlistLoading(null); }
+                                        }}
+                                        className="text-[9px] font-mono font-bold px-2 py-1 border border-blue-500/50 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 transition-all uppercase flex items-center gap-1.5"
+                                        title="Check if your NEO ID is in this shortlist"
+                                      >
+                                        📊 {att.file_name?.length > 30 ? att.file_name.slice(0, 28) + '…' : att.file_name}
+                                        {shortlistLoading === att.id ? ' ⏳' : ' — Check NEO ID'}
+                                      </button>
+                                      <button
+                                        onClick={() => handleOpenAttachment(att)}
+                                        className="text-[9px] font-mono font-bold px-2 py-1 border border-border bg-muted/20 hover:bg-accent hover:text-black hover:border-accent transition-all uppercase"
+                                        title="Download this shortlist to verify manually"
+                                      >
+                                        ⬇ VIEW{openingAttachmentId === att.id ? ' ⏳' : ''}
+                                      </button>
+                                    </div>
                                     {sr && (
                                       <div className={`text-[9px] font-bold px-2 py-1 border ${
                                         sr.found === true
@@ -710,7 +729,6 @@ export default function CompanyWorkspaceModal({
                                       }`}>
                                         {sr.found === true ? '✓ ' : sr.found === false ? '✗ ' : 'ℹ '}
                                         {sr.message}
-                                        {sr.total_shortlisted > 0 && !sr.found && ` (${sr.total_shortlisted} shortlisted)`}
                                       </div>
                                     )}
                                   </div>

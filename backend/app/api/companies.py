@@ -431,13 +431,15 @@ def get_company_events(
 @router.get("/{id}/shortlist-check")
 def check_shortlist(
     id: UUID,
+    attachment_id: Optional[UUID] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
     Check if the current user's NEO ID is present in the shortlist Excel
-    attached to this company's events. Returns found status, total count,
-    and the attachment details.
+    attached to this company's events. Pass attachment_id to check ONE
+    specific shortlist (each round has its own list — you can be on the PPT
+    list but not the interview list); without it, all lists are merged.
     """
     from app.models.models import AttachmentMetadata
     from app.services.excel_parser import extract_neo_ids_from_excel
@@ -450,15 +452,17 @@ def check_shortlist(
     from sqlalchemy.orm import undefer as _undefer
     shortlist_attachments = []
     if event_ids:
-        shortlist_attachments = (
+        q = (
             db.query(AttachmentMetadata)
             .options(_undefer(AttachmentMetadata.file_data))
             .filter(
                 AttachmentMetadata.company_event_id.in_(event_ids),
                 AttachmentMetadata.file_type == "SHORTLIST_EXCEL"
             )
-            .all()
         )
+        if attachment_id:
+            q = q.filter(AttachmentMetadata.id == attachment_id)
+        shortlist_attachments = q.all()
 
     if not shortlist_attachments:
         return {
@@ -498,12 +502,14 @@ def check_shortlist(
 
     unique_neo_ids = list(set(all_neo_ids))
 
-    # Check by comparing hash of each extracted ID against the user's stored hash
-    import hashlib as _hashlib
+    # Compare using the same PEPPERED blind index the profile stores.
+    # A raw sha256 here could never match generate_blind_index output —
+    # every check reported 'not found' even for students on the list.
+    from app.core.security import generate_blind_index
+    from app.core.config import settings as _settings
     found = False
     for neo_id in unique_neo_ids:
-        neo_hash = _hashlib.sha256(neo_id.upper().encode()).hexdigest()
-        if neo_hash == user_neo_hash:
+        if generate_blind_index(neo_id, _settings.PEPPER) == user_neo_hash:
             found = True
             break
 

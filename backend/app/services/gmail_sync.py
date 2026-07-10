@@ -291,6 +291,65 @@ def milestone_date_is_grounded(ev_date_utc: datetime, ground_text_lower: str) ->
     return _date_mentioned_in_text(ev_date_utc, ground_text_lower)
 
 
+# Evidence keywords per milestone stage: a milestone may only be created when
+# the email actually TALKS about that stage. Date grounding alone is not
+# enough — the model invents 'typical' timelines (PPT, interviews) reusing the
+# one real date in the mail (e.g. KOEL: only a registration deadline existed,
+# yet PPT + Technical Interview milestones appeared with derived times).
+_STAGE_EVIDENCE_PATTERNS = {
+    "ONLINE_ASSESSMENT": r"online\s+test|online\s+assessment|aptitude|coding\s+test|written\s+test|hackathon|proctored|assessment|\boa\b",
+    "PRE_PLACEMENT_TALK": r"pre[\s\-]?placement\s+talk|\bppt\b|company\s+presentation|info\s+session",
+    "TECHNICAL_INTERVIEW": r"interview|group\s+discussion|\bgd\b",
+    "HR_INTERVIEW": r"interview|hr\s+round|hr\s+discussion",
+    "OFFER": r"offer|selection\s+list|selected|congratulations|placed",
+    "REJECTION": r"regret|not\s+selected|rejected",
+    "REGISTRATION": r"regist|last\s+date|apply|deadline",
+}
+
+
+def milestone_stage_is_grounded(stage: str, ground_text_lower: str) -> bool:
+    """The stage keyword must appear somewhere in the email text."""
+    pattern = _STAGE_EVIDENCE_PATTERNS.get(stage)
+    if pattern is None:
+        return True  # unknown/GENERAL_UPDATE stages pass through
+    return bool(re.search(pattern, ground_text_lower))
+
+
+_TIME_NEAR_DATE_RE = re.compile(
+    r"\(?\b(\d{1,2})[:.](\d{2})\s*(am|pm)\b\)?|\(?\b(\d{1,2})\s*(am|pm)\b\)?",
+    re.IGNORECASE,
+)
+
+
+def refine_midnight_time_from_text(dt_ist: datetime, text: str) -> datetime:
+    """Recover a time-of-day written near a date in the email.
+
+    Deadlines like 'Last date for Registration *10th July 2026 (05.30 pm)*'
+    were stored as midnight because the model/regex parsed only the date.
+    Looks for a time expression within the same ~160-char window as the
+    date mention and merges it in. `dt_ist` must be naive IST; only applied
+    when the current time is exactly midnight (i.e. date-only).
+    """
+    if not dt_ist or not text or (dt_ist.hour, dt_ist.minute) != (0, 0):
+        return dt_ist
+    for m in _TIME_NEAR_DATE_RE.finditer(text):
+        window = text[max(0, m.start() - 120): m.end() + 40].lower()
+        if not _date_mentioned_in_text(dt_ist, window):
+            continue
+        if m.group(1) is not None:
+            hour, minute, ampm = int(m.group(1)), int(m.group(2)), m.group(3).lower()
+        else:
+            hour, minute, ampm = int(m.group(4)), 0, m.group(5).lower()
+        if not (1 <= hour <= 12 and 0 <= minute <= 59):
+            continue
+        if ampm == "pm" and hour != 12:
+            hour += 12
+        elif ampm == "am" and hour == 12:
+            hour = 0
+        return dt_ist.replace(hour=hour, minute=minute)
+    return dt_ist
+
+
 def extract_neo_ids_from_text(text_val: str) -> list:
     """Extract Neo-ID-shaped tokens from free text (shortlists pasted into the
     email body instead of an Excel attachment)."""
@@ -314,6 +373,34 @@ _SHORTLIST_STAGE_WORDING = {
     "OFFER_RELEASED": "been placed on the final selection list",
     "OFFER": "been placed on the final selection list",
 }
+
+# Application stages in progression order. A shortlist can only move an
+# application FORWARD, never back. Values must satisfy the DB CHECK
+# constraints on applications.status / recruitment_state ('OA', not
+# 'Online Assessment').
+_STAGE_ORDER = {
+    "Applied": 0,
+    "Shortlisted": 1,     # legacy value, no longer assigned
+    "OA": 1,
+    "Interview": 2,
+    "Offer": 3,
+}
+
+
+def _shortlist_target_stage(event_type_hint: str, event) -> str:
+    """Where a matched student advances to. There is no separate 'Shortlisted'
+    stage — a shortlist is always FOR something (test, interview, offer):
+    being on it moves you into that round directly."""
+    if event_type_hint in ("OFFER_RELEASED", "OFFER"):
+        return "Offer"
+    if event_type_hint in ("OA_RESULT", "INTERVIEW_RESULT"):
+        return "Interview"
+    text = ""
+    if event is not None:
+        text = f"{getattr(event, 'subject', '') or ''} {getattr(event, 'body', '') or ''}".lower()
+    if "interview" in text or "selection process" in text:
+        return "Interview"
+    return "OA"
 
 
 def apply_shortlist_matches(db: Session, company: Company, event: Optional[CompanyEvent],
@@ -368,25 +455,29 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
         stage_wording = _SHORTLIST_STAGE_WORDING.get(
             event_type_hint, "been shortlisted for the next round"
         )
+        target_stage = _shortlist_target_stage(event_type_hint, event)
 
         for profile in profiles:
-            # Application status logic
+            # Application status logic: advance directly to the round the
+            # shortlist is for (no intermediate 'Shortlisted' stage).
             app = apps_by_user_id.get(profile.user_id)
             if not app:
                 app = Application(
                     user_id=profile.user_id,
                     company_id=company.id,
-                    status='Shortlisted',
-                    recruitment_state='Shortlisted',
-                    current_round='Shortlist Announcement',
+                    status=target_stage,
+                    recruitment_state=target_stage,
+                    current_round=target_stage,
                     user_decision='tracking',
                 )
                 db.add(app)
             else:
                 if app.status not in ('Offer', 'Rejected', 'Declined', 'Ignored'):
-                    app.status = 'Shortlisted'
-                    app.recruitment_state = 'Shortlisted'
-                    app.current_round = 'Shortlisted'
+                    # only move forward, never demote
+                    if _STAGE_ORDER.get(target_stage, 1) >= _STAGE_ORDER.get(app.status, 0):
+                        app.status = target_stage
+                        app.recruitment_state = target_stage
+                        app.current_round = target_stage
                     app.user_decision = 'tracking'
 
             # OpportunityState logic
@@ -1212,6 +1303,16 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
         location = ext_data.get("job_location", {}).get("value")
         registration_deadline_str = ext_data.get("deadline_iso", {}).get("value")
         registration_deadline = datetime.fromisoformat(registration_deadline_str) if registration_deadline_str else None
+        if registration_deadline is not None:
+            if registration_deadline.tzinfo is not None:
+                # normalize to naive IST (the parser's local convention)
+                from datetime import timezone as _tz2
+                registration_deadline = registration_deadline.astimezone(
+                    _tz2(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
+            # 'Last date: 10th July 2026 (05.30 pm)' parsed as midnight —
+            # recover the written time so specs/milestones show 5:30 PM.
+            registration_deadline = refine_midnight_time_from_text(
+                registration_deadline, f"{subject}\n{body}")
         registration_link = ext_data.get("registration_link", {}).get("value")
         requires_review = validated_info.get("parser_metadata", {}).get("requires_review", False)
         
@@ -1340,16 +1441,21 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                 best_score = -1
                 subject_clean = clean_company_name_key(subject).lower()
                 for c in candidate_companies:
+                    db_name_clean = clean_company_name_key(c.name).lower()
+                    ext_name_clean = clean_company_name_key(company_name).lower()
+
                     role_score = 0
                     if normalize_role_name(c.role) == normalize_role_name(role):
                         role_score = 20
                     elif len(c.role) >= 3 and (c.role.lower() in role.lower() or role.lower() in c.role.lower()):
                         role_score = 10
-                    else:
+                    elif db_name_clean != ext_name_clean:
+                        # Role mismatch is only disqualifying when the company
+                        # names don't match EXACTLY. 'Valuelabs online test...'
+                        # schedule mails parse with the default role and used
+                        # to spawn a duplicate 'Software Engineer' drive for a
+                        # company that already existed.
                         continue
-                        
-                    db_name_clean = clean_company_name_key(c.name).lower()
-                    ext_name_clean = clean_company_name_key(company_name).lower()
                     
                     score = role_score
                     name_matched = False
@@ -1399,6 +1505,27 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                 if best_score >= fuzzy_threshold:
                     company = best_match
                     logger.info(f"Fuzzy matched incoming email to existing company: {company.name} (ID: {company.id}, Match Score: {best_score})")
+
+                    # A NEW_DRIVE-classified mail that matches an existing
+                    # company but parsed only the DEFAULT fallback role is a
+                    # schedule/update mail, not a second drive — route it as
+                    # an update so it can't overwrite drive metadata.
+                    if (is_announcement
+                            and normalize_role_name(role) != normalize_role_name(company.role)
+                            and normalize_role_name(role) == normalize_role_name("Software Engineer")):
+                        _subj_l = (subject or "").lower()
+                        if any(k in _subj_l for k in OA_SUBJECT_KEYWORDS):
+                            event_type = "OA"
+                        elif any(k in _subj_l for k in INTERVIEW_SUBJECT_KEYWORDS):
+                            event_type = "INTERVIEW"
+                        else:
+                            event_type = "GENERAL_UPDATE"
+                        is_announcement = False
+                        job.final_classification = event_type
+                        logger.info(
+                            f"Job {job.id}: NEW_DRIVE demoted to {event_type} — company "
+                            f"'{company.name}' already exists and parsed role was the default fallback."
+                        )
 
             # -----------------------------------------------------------------
             # SAME-EMAIL DEDUP GUARD (Fix for multi-role over-splitting):
@@ -1704,6 +1831,26 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                         logger.info(f"Stage reclassified: {ev_stage} -> {new_stage} based on '{ev_item.get('label')}' / subject")
                         ev_stage = new_stage
 
+                # HALLUCINATION GUARD 2: the stage itself must be mentioned in
+                # the email. KOEL's mail had only a registration deadline, yet
+                # the model produced PPT + Technical Interview milestones with
+                # invented times — drop any stage without textual evidence.
+                if not milestone_stage_is_grounded(ev_stage, milestone_ground_text):
+                    logger.warning(
+                        f"Job {job.id}: milestone stage '{ev_stage}' ('{ev_label}') has no "
+                        f"supporting text in the email — dropping hallucinated milestone."
+                    )
+                    continue
+
+                # Recover a time-of-day written next to the date when the
+                # parser stored date-only midnight ('10th July 2026 (05.30 pm)').
+                if ev_date is not None:
+                    ist_dt = ev_date + IST_OFFSET
+                    refined_ist = refine_midnight_time_from_text(ist_dt, f"{subject}\n{body}")
+                    if refined_ist != ist_dt:
+                        logger.info(f"Job {job.id}: milestone '{ev_label}' time refined to {refined_ist.time()} IST from email text.")
+                        ev_date = refined_ist - IST_OFFSET
+
                 # Map canonical stage → event_type
                 STAGE_TO_EVENT_TYPE = {
                     "REGISTRATION": "NEW_DRIVE",
@@ -1778,6 +1925,37 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             if parsed_events_list:
                 db.flush()
                 logger.info(f"Persisted {len(parsed_events_list)} timeline milestones for company {company.id}")
+
+            # DETERMINISTIC REGISTRATION MILESTONE: when the mail has a parsed
+            # registration deadline but the model returned no REGISTRATION
+            # event (Aganitha/Couchbase: deadline shown in specs, timeline
+            # empty), synthesize the milestone from the deadline itself.
+            if is_announcement and registration_deadline:
+                has_reg_milestone = db.query(CompanyEvent).filter(
+                    CompanyEvent.company_id == company.id,
+                    CompanyEvent.stage == "REGISTRATION",
+                ).first()
+                if not has_reg_milestone:
+                    reg_ist = registration_deadline  # already refined naive IST
+                    db.add(CompanyEvent(
+                        company_id=company.id,
+                        event_type="NEW_DRIVE",
+                        stage="REGISTRATION",
+                        date=reg_ist - IST_OFFSET,
+                        status="pending",
+                        subject=subject,
+                        sender=sender,
+                        body=None,
+                        timestamp=email_timestamp,
+                        source_email=sender,
+                        sequence=1,
+                        parsed_metadata={
+                            "label": "Last Date for Registration",
+                            "mandatory": True,
+                            "confidence": 1.0,
+                        },
+                    ))
+                    logger.info(f"Synthesized REGISTRATION milestone from deadline for company {company.id}")
 
             # For update-type events (OA, SHORTLIST, INTERVIEW, etc.) that carry a deadline,
             # update the company's stored deadline and record the label so the frontend
