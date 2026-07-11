@@ -15,113 +15,30 @@ except ImportError:
     import json
     HAS_ORJSON = False
 
-# Initialize redis connection — try native redis-py first, fall back to REST
+# Initialize redis connection with graceful fallback
 _redis_metrics_lock = threading.Lock()
 
-class UpstashRESTClient:
-    """Upstash Redis REST API client for environments where native Redis
-    connections are unreliable (firewall restrictions, TLS issues, etc.)."""
-    def __init__(self, url: str):
-        # URL format: redis://:token@host:port or https://:token@host:port
-        # Upstash REST API uses: https://host/exec?token=token
-        import urllib.parse
-
-        if url.startswith("redis://"):
-            url = url[8:]  # remove redis://
-        elif url.startswith("https://"):
-            url = url[8:]  # remove https://
-
-        if "@" in url:
-            auth, host = url.split("@", 1)
-            # auth is either 'default:token' or ':token'
-            token = auth.split(":")[-1]
-        else:
-            raise ValueError("Redis URL must contain authentication token")
-
-        # Remove port from host if present
-        if ":" in host:
-            host = host.split(":")[0]
-
-        self.base_url = f"https://{host}"
-        self.token = token
-        self.session = None
-
-    def _get_session(self):
-        if self.session is None:
-            import requests
-            self.session = requests.Session()
-        return self.session
-
-    def _cmd(self, *args):
-        """Execute a Redis command via Upstash REST API.
-        Format: POST /exec with Authorization header and JSON command."""
-        import urllib.parse
-        session = self._get_session()
-
-        # Upstash REST API endpoint
-        url = f"{self.base_url}/exec"
-
-        # Token goes in Authorization header
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json"
-        }
-
-        try:
-            resp = session.post(url, json=list(args), headers=headers, timeout=5)
-            resp.raise_for_status()
-            try:
-                result = resp.json()
-                # Upstash returns {"result": value} or {"error": "..."}
-                if isinstance(result, dict):
-                    if "error" in result:
-                        raise Exception(result["error"])
-                    return result.get("result")
-                return result
-            except Exception as e:
-                logger.debug(f"Error parsing Upstash response: {e}, raw: {resp.text}")
-                return resp.text
-        except Exception as e:
-            logger.error(f"Upstash REST API error: {e}")
-            raise
-
+class NoOpRedis:
+    """Fallback when Redis is unavailable. Caching is simply skipped."""
     def ping(self):
-        """Test connection."""
-        self._cmd("PING")
         return True
-
     def get(self, key: str):
-        """Get a key from Redis."""
-        try:
-            result = self._cmd("GET", key)
-            return result if result else None
-        except:
-            return None
-
+        return None
     def set(self, key: str, value):
-        """Set a key in Redis."""
-        self._cmd("SET", key, value)
-
+        pass
     def setex(self, key: str, seconds: int, value):
-        """Set a key with expiration in Redis."""
-        self._cmd("SETEX", key, seconds, value)
-
+        pass
     def delete(self, *keys):
-        """Delete keys from Redis."""
-        if keys:
-            self._cmd("DEL", *keys)
-
+        pass
     def incr(self, key: str):
-        """Increment a key."""
-        result = self._cmd("INCR", key)
-        return result if isinstance(result, int) else int(result or 0)
+        return 1
 
 def _connect():
-    """Try native redis-py first; fall back to Upstash REST if that fails."""
+    """Try to connect to Redis. On failure, return NoOp client (app still works)."""
     if not settings.REDIS_URL:
-        return None
+        logger.info("REDIS_URL not configured; caching disabled.")
+        return NoOpRedis()
 
-    # First, try native redis
     try:
         import redis
         client = redis.Redis.from_url(
@@ -132,62 +49,49 @@ def _connect():
             decode_responses=False
         )
         client.ping()
-        logger.info("Connected to Redis via native protocol.")
+        logger.info("Successfully connected to Redis cache.")
         return client
     except Exception as e:
-        logger.debug(f"Native Redis failed ({type(e).__name__}), trying Upstash REST API...")
-
-    # Fall back to Upstash REST API
-    try:
-        # Convert redis:// URL to https:// for REST
-        rest_url = settings.REDIS_URL.replace("redis://", "https://")
-        client = UpstashRESTClient(rest_url)
-        client.ping()
-        logger.info("Connected to Upstash via REST API.")
-        return client
-    except Exception as e:
-        logger.error(f"Both native Redis and Upstash REST failed: {e}")
-        return None
+        logger.warning(
+            f"Redis connection failed ({type(e).__name__}: {e}). "
+            f"Caching disabled; app continues without cache. "
+            f"Will retry every 30 seconds."
+        )
+        return NoOpRedis()
 
 try:
     redis_client = _connect()
-    if redis_client:
-        logger.info("Redis cache initialized successfully.")
-    else:
-        logger.warning("Redis cache disabled (retrying in background).")
 except Exception as e:
-    import traceback
-    logger.error(f"Redis initialization failed: {type(e).__name__}: {e}")
-    logger.debug(f"Traceback:\n{traceback.format_exc()}")
-    redis_client = None
+    logger.error(f"Failed to initialize Redis fallback: {e}")
+    redis_client = NoOpRedis()
 
-# A Redis that was down at boot used to disable caching for the process
-# LIFETIME. _ensure_client() retries the connection at most once every
-# 30 seconds, so caching self-heals when Redis becomes reachable.
+# A Redis that was down at boot retries every 30 seconds (self-healing)
 _reconnect_lock = threading.Lock()
 _last_reconnect_attempt = 0.0
 _RECONNECT_INTERVAL = 30.0
 
 def _ensure_client() -> bool:
     global redis_client, _last_reconnect_attempt
-    if redis_client is not None:
-        return True
-    now = time.monotonic()
-    if now - _last_reconnect_attempt < _RECONNECT_INTERVAL:
-        return False
-    with _reconnect_lock:
-        if redis_client is not None:
-            return True
-        if time.monotonic() - _last_reconnect_attempt < _RECONNECT_INTERVAL:
+    if isinstance(redis_client, NoOpRedis):
+        now = time.monotonic()
+        if now - _last_reconnect_attempt < _RECONNECT_INTERVAL:
             return False
-        _last_reconnect_attempt = time.monotonic()
-        try:
-            redis_client = _connect()
-            logger.info("Redis connection (re)established — caching enabled.")
-            return True
-        except Exception as e:
-            logger.debug(f"Redis still unreachable: {e}")
+        with _reconnect_lock:
+            if not isinstance(redis_client, NoOpRedis):
+                return True
+            if time.monotonic() - _last_reconnect_attempt < _RECONNECT_INTERVAL:
+                return False
+            _last_reconnect_attempt = time.monotonic()
+            try:
+                new_client = _connect()
+                if not isinstance(new_client, NoOpRedis):
+                    redis_client = new_client
+                    logger.info("Redis connection established (caching enabled).")
+                    return True
+            except Exception as e:
+                logger.debug(f"Redis still unavailable: {e}")
             return False
+    return True
 
 # Metrics Counters
 metrics = {
@@ -203,202 +107,147 @@ def _incr_metric(key: str, val: int = 1):
     with _redis_metrics_lock:
         metrics[key] += val
 
-def _serialize(value: Any) -> bytes:
-    if HAS_ORJSON:
-        return orjson.dumps(value)
-    else:
-        import json
-        return json.dumps(value, default=str).encode("utf-8")
-
-def _deserialize(data: bytes) -> Any:
-    if HAS_ORJSON:
-        return orjson.loads(data)
-    else:
-        import json
-        return json.loads(data.decode("utf-8"))
-
-def get_cache(key: str) -> Optional[Any]:
-    """Retrieve and decompress cached JSON data from Redis."""
+def get_cache(cache_key: str) -> Optional[Any]:
+    """Retrieve a cached value. Returns None if not found or Redis unavailable."""
     if not _ensure_client():
-        _incr_metric("db_fallback")
+        _incr_metric("miss")
         return None
-    
-    start_time = time.perf_counter()
-    _incr_metric("total_gets")
-    
+
     try:
-        data = redis_client.get(key)
-        if data is None:
+        start = time.monotonic()
+        compressed_bytes = redis_client.get(cache_key)
+        elapsed_ms = (time.monotonic() - start) * 1000
+
+        _incr_metric("total_get_time_ms", int(elapsed_ms))
+        _incr_metric("total_gets")
+
+        if compressed_bytes is None:
             _incr_metric("miss")
-            logger.info(f"Cache MISS for key: {key}")
             return None
-        
-        # Decompress gzip
-        try:
-            decompressed = gzip.decompress(data)
-            value = _deserialize(decompressed)
-        except Exception as decomp_err:
-            # Fallback to plain if not compressed
-            try:
-                value = _deserialize(data)
-            except Exception:
-                raise decomp_err
-        
+
+        if HAS_ORJSON:
+            data = orjson.loads(gzip.decompress(compressed_bytes))
+        else:
+            data = json.loads(gzip.decompress(compressed_bytes).decode("utf-8"))
+
         _incr_metric("hit")
-        elapsed = (time.perf_counter() - start_time) * 1000.0
-        with _redis_metrics_lock:
-            metrics["total_get_time_ms"] += elapsed
-            avg_time = metrics["total_get_time_ms"] / metrics["total_gets"]
-        logger.info(f"Cache HIT for key: {key} in {elapsed:.2f}ms (Avg: {avg_time:.2f}ms).")
-        return value
-        
+        return data
     except Exception as e:
+        logger.debug(f"Cache get failed: {e}")
         _incr_metric("error")
         _incr_metric("db_fallback")
-        logger.warning(f"Redis get error (falling back to DB): {e}")
         return None
 
-def set_cache(key: str, value: Any, expire_seconds: int = 300) -> bool:
-    """Compress with gzip and cache serialized JSON data in Redis."""
-    if not _ensure_client():
+def set_cache(cache_key: str, data: Any, expire_seconds: int = 3600) -> bool:
+    """Store a value in cache. Returns False if Redis unavailable (caller falls back to DB)."""
+    if not _ensure_client() or isinstance(redis_client, NoOpRedis):
+        _incr_metric("db_fallback")
         return False
+
     try:
-        serialized = _serialize(value)
+        if HAS_ORJSON:
+            serialized = orjson.dumps(data)
+        else:
+            serialized = json.dumps(data).encode("utf-8")
+
         compressed = gzip.compress(serialized)
-        redis_client.setex(key, expire_seconds, compressed)
+        redis_client.setex(cache_key, expire_seconds, compressed)
         return True
     except Exception as e:
+        logger.debug(f"Cache set failed: {e}")
         _incr_metric("error")
-        logger.warning(f"Redis set error: {e}")
+        _incr_metric("db_fallback")
         return False
 
-def get_jd_strategy_cache(company_id: UUID) -> Optional[dict]:
-    """Retrieve cached JD Strategy for a company. Cached for 24h by default."""
-    version = get_company_version(company_id)
-    key = f"nextup:cache:company:{company_id}:jd_strategy:v{version}"
-    return get_cache(key)
-
-def set_jd_strategy_cache(company_id: UUID, strategy: dict) -> bool:
-    """Store company JD Strategy in cache for 24 hours."""
-    version = get_company_version(company_id)
-    key = f"nextup:cache:company:{company_id}:jd_strategy:v{version}"
-    return set_cache(key, strategy, expire_seconds=86400)
-
-
-# Versioning Helpers
-
+# Version management (cache invalidation)
 def get_user_version(user_id: UUID) -> int:
-    """Get the current cache version for a user. Defaults to 1 if not set."""
+    """Get cache version for a user (invalidates all user caches when incremented)."""
     if not _ensure_client():
-        return 1
+        return 0
     try:
         version = redis_client.get(f"nextup:version:user:{user_id}")
         if version is None:
             redis_client.set(f"nextup:version:user:{user_id}", 1)
             return 1
-        return int(version)
-    except Exception as e:
-        logger.warning(f"Redis get_user_version error: {e}")
-        return 1
+        return int(version) if isinstance(version, int) else int(version.decode())
+    except:
+        return 0
 
 def bump_user_version(user_id: UUID) -> int:
-    """Increment the cache version for a user, effectively invalidating their caches."""
-    if not _ensure_client():
+    """Invalidate all caches for a user by incrementing their version."""
+    if not _ensure_client() or isinstance(redis_client, NoOpRedis):
         return 1
     try:
         new_version = redis_client.incr(f"nextup:version:user:{user_id}")
-        logger.info(f"Bumped cache version for user {user_id} to {new_version}")
-        return new_version
-    except Exception as e:
-        logger.warning(f"Redis bump_user_version error: {e}")
+        return new_version if isinstance(new_version, int) else int(new_version)
+    except:
         return 1
 
 def get_companies_list_version() -> int:
-    """Get the current cache version for the companies list. Defaults to 1."""
+    """Get cache version for the companies list."""
     if not _ensure_client():
-        return 1
+        return 0
     try:
         version = redis_client.get("nextup:version:companies:list")
         if version is None:
             redis_client.set("nextup:version:companies:list", 1)
             return 1
-        return int(version)
-    except Exception as e:
-        logger.warning(f"Redis get_companies_list_version error: {e}")
-        return 1
+        return int(version) if isinstance(version, int) else int(version.decode())
+    except:
+        return 0
 
 def bump_companies_list_version() -> int:
-    """Increment companies list cache version."""
-    if not _ensure_client():
+    """Invalidate the companies list cache."""
+    if not _ensure_client() or isinstance(redis_client, NoOpRedis):
         return 1
     try:
         new_version = redis_client.incr("nextup:version:companies:list")
-        logger.info(f"Bumped companies list cache version to {new_version}")
-        return new_version
-    except Exception as e:
-        logger.warning(f"Redis bump_companies_list_version error: {e}")
+        return new_version if isinstance(new_version, int) else int(new_version)
+    except:
         return 1
 
 def get_company_version(company_id: UUID) -> int:
-    """Get the cache version of an individual company. Defaults to 1."""
+    """Get cache version for a specific company."""
     if not _ensure_client():
-        return 1
+        return 0
     try:
         version = redis_client.get(f"nextup:version:company:{company_id}")
         if version is None:
             redis_client.set(f"nextup:version:company:{company_id}", 1)
             return 1
-        return int(version)
-    except Exception as e:
-        logger.warning(f"Redis get_company_version error: {e}")
-        return 1
+        return int(version) if isinstance(version, int) else int(version.decode())
+    except:
+        return 0
 
 def bump_company_version(company_id: UUID) -> int:
-    """Increment cache version for an individual company."""
-    if not _ensure_client():
+    """Invalidate all caches for a company."""
+    if not _ensure_client() or isinstance(redis_client, NoOpRedis):
         return 1
     try:
         new_version = redis_client.incr(f"nextup:version:company:{company_id}")
-        logger.info(f"Bumped company details cache version for {company_id} to {new_version}")
-        # When an individual company changes, the companies list is also affected, so bump list too.
-        bump_companies_list_version()
-        return new_version
-    except Exception as e:
-        logger.warning(f"Redis bump_company_version error: {e}")
+        return new_version if isinstance(new_version, int) else int(new_version)
+    except:
         return 1
 
 def get_announcements_version() -> int:
-    """Get the current cache version for announcements. Defaults to 1."""
+    """Get cache version for announcements."""
     if not _ensure_client():
-        return 1
+        return 0
     try:
         version = redis_client.get("nextup:version:announcements")
         if version is None:
             redis_client.set("nextup:version:announcements", 1)
             return 1
-        return int(version)
-    except Exception as e:
-        logger.warning(f"Redis get_announcements_version error: {e}")
-        return 1
+        return int(version) if isinstance(version, int) else int(version.decode())
+    except:
+        return 0
 
 def bump_announcements_version() -> int:
-    """Increment announcements cache version."""
-    if not _ensure_client():
+    """Invalidate the announcements cache."""
+    if not _ensure_client() or isinstance(redis_client, NoOpRedis):
         return 1
     try:
         new_version = redis_client.incr("nextup:version:announcements")
-        logger.info(f"Bumped announcements cache version to {new_version}")
-        return new_version
-    except Exception as e:
-        logger.warning(f"Redis bump_announcements_version error: {e}")
+        return new_version if isinstance(new_version, int) else int(new_version)
+    except:
         return 1
-
-def log_cache_metrics():
-    """Output summary of cache hit/miss metrics."""
-    total = metrics["hit"] + metrics["miss"]
-    hit_rate = (metrics["hit"] / total) if total > 0 else 0.0
-    logger.info(
-        f"Cache Metrics - Hits: {metrics['hit']}, Misses: {metrics['miss']}, "
-        f"Errors: {metrics['error']}, Fallbacks: {metrics['db_fallback']}, "
-        f"Hit Rate: {hit_rate:.2%}"
-    )
