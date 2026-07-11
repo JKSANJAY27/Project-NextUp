@@ -41,7 +41,10 @@ try:
     redis_client = _connect()
     logger.info("Successfully connected to Redis cache with connection pool.")
 except Exception as e:
-    logger.warning(f"Redis connection failed (caching disabled, retrying in background): {e}")
+    import traceback
+    logger.error(f"Redis connection failed (caching disabled, retrying in background): {type(e).__name__}: {e}")
+    logger.debug(f"Redis connection error traceback:\n{traceback.format_exc()}")
+    logger.error(f"REDIS_URL configured as: {settings.REDIS_URL[:30]}..." if settings.REDIS_URL else "REDIS_URL not set")
     redis_client = None
 
 # A Redis that was down at boot used to disable caching for the process
