@@ -51,19 +51,24 @@ async def parse_uploaded_resume(
 
 @router.get("/me")
 def get_user_resume(
+    include_files: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Retrieves the user's standard structured resume data.
     Decrypts the resume JSON client-side (or in-memory using session key).
+
+    The encrypted PDF/raw-text blobs (100KB+ each) are only included with
+    ?include_files=1 — shipping them on every fetch multiplied DB egress
+    for data most screens never use.
     """
     derived_key = get_session_key(current_user.id)
     if not derived_key:
         raise HTTPException(status_code=400, detail="Vault session key missing. Please log in.")
 
     version = get_user_version(current_user.id)
-    cache_key = f"nextup:cache:user:{current_user.id}:resumes_me:v{version}"
+    cache_key = f"nextup:cache:user:{current_user.id}:resumes_me:v{version}:files{int(include_files)}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
@@ -92,10 +97,12 @@ def get_user_resume(
         res = {
             "template": resume.latex_template,
             "resume_data": resume_data,
-            "raw_text_enc": resume.raw_text_enc,
-            "pdf_file_enc": resume.pdf_file_enc,
-            "pdf_filename_enc": resume.pdf_filename_enc
+            "has_pdf": bool(resume.pdf_file_enc),
+            "pdf_filename_enc": resume.pdf_filename_enc,
         }
+        if include_files:
+            res["raw_text_enc"] = resume.raw_text_enc
+            res["pdf_file_enc"] = resume.pdf_file_enc
         set_cache(cache_key, res, expire_seconds=300) # 5 min TTL
         return res
     except Exception as e:

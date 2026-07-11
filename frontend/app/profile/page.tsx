@@ -192,7 +192,8 @@ export default function ProfilePage() {
   const fetchResumeData = async () => {
     if (!encryptionKey) return;
     try {
-      const res = await api.get("/resumes/me");
+      // Profile is the only screen that needs the encrypted PDF blob
+      const res = await api.get("/resumes/me?include_files=1");
       if (res.data) {
         if (res.data.raw_text_enc) {
           setHasSavedResume(true);
