@@ -22,16 +22,25 @@ class UpstashRESTClient:
     """Upstash Redis REST API client for environments where native Redis
     connections are unreliable (firewall restrictions, TLS issues, etc.)."""
     def __init__(self, url: str):
-        # URL format: https://default:token@host
-        # Extract token from URL
-        if url.startswith("https://"):
+        # URL format: redis://:token@host:port or https://:token@host:port
+        # Upstash REST API uses: https://host/exec?token=token
+        import urllib.parse
+
+        if url.startswith("redis://"):
+            url = url[8:]  # remove redis://
+        elif url.startswith("https://"):
             url = url[8:]  # remove https://
+
         if "@" in url:
             auth, host = url.split("@", 1)
-            token = auth.split(":")[-1]  # get token after ':'
+            # auth is either 'default:token' or ':token'
+            token = auth.split(":")[-1]
         else:
-            token = ""
-            host = url
+            raise ValueError("Redis URL must contain authentication token")
+
+        # Remove port from host if present
+        if ":" in host:
+            host = host.split(":")[0]
 
         self.base_url = f"https://{host}"
         self.token = token
@@ -41,20 +50,40 @@ class UpstashRESTClient:
         if self.session is None:
             import requests
             self.session = requests.Session()
-            self.session.headers.update({
-                "Authorization": f"Bearer {self.token}"
-            })
         return self.session
 
     def _cmd(self, *args):
-        """Execute a Redis command via REST API."""
+        """Execute a Redis command via Upstash REST API.
+        Format: POST /exec with Authorization header and JSON command."""
+        import urllib.parse
         session = self._get_session()
-        resp = session.post(f"{self.base_url}/", json=list(args), timeout=5)
-        resp.raise_for_status()
+
+        # Upstash REST API endpoint
+        url = f"{self.base_url}/exec"
+
+        # Token goes in Authorization header
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json"
+        }
+
         try:
-            return resp.json()
-        except:
-            return resp.text
+            resp = session.post(url, json=list(args), headers=headers, timeout=5)
+            resp.raise_for_status()
+            try:
+                result = resp.json()
+                # Upstash returns {"result": value} or {"error": "..."}
+                if isinstance(result, dict):
+                    if "error" in result:
+                        raise Exception(result["error"])
+                    return result.get("result")
+                return result
+            except Exception as e:
+                logger.debug(f"Error parsing Upstash response: {e}, raw: {resp.text}")
+                return resp.text
+        except Exception as e:
+            logger.error(f"Upstash REST API error: {e}")
+            raise
 
     def ping(self):
         """Test connection."""
