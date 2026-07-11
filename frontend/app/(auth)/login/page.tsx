@@ -1,14 +1,16 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
 import { deriveKey, exportKeyToHex } from "@/lib/crypto";
 import { supabase } from "@/lib/supabase";
+import { ALLOWED_GOOGLE_DOMAIN } from "@/lib/auth-utils";
 import api from "@/lib/api";
 import { Eye, EyeOff, ArrowLeft } from "lucide-react";
 import CrowdCanvas from "@/components/CrowdCanvas";
+import GoogleAuthButton from "@/components/GoogleAuthButton";
 
 async function getDeterministicSalt(email: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -26,6 +28,20 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+
+  // Surface errors passed back via redirects (Google domain check, expired session)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const errParam = params.get("error");
+    if (errParam === "domain") {
+      setError(`Only @${ALLOWED_GOOGLE_DOMAIN} Google accounts can be used. Please choose your college account.`);
+    } else if (errParam === "session_expired") {
+      setError("Your session expired. Please sign in again.");
+    }
+    if (errParam) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -196,6 +212,11 @@ export default function LoginPage() {
               {loading ? "Signing you in..." : "Sign In"}
             </button>
           </form>
+
+          <GoogleAuthButton
+            label="Sign in with Google"
+            onError={(msg) => setError(msg)}
+          />
 
           <div className="text-center">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">

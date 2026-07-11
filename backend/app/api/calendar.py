@@ -6,6 +6,7 @@ import urllib.parse
 import requests
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import RedirectResponse
+from jose import jwt, JWTError
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.api.auth import get_current_user
@@ -17,64 +18,95 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
+STATE_PURPOSE = "gcal_link"
+FRONTEND_CALENDAR_URL = f"{settings.FRONTEND_URL.rstrip('/')}/calendar"
+
+def _build_redirect_uri(request: Request) -> str:
+    base_url = str(request.base_url).rstrip('/')
+    return f"{base_url}{settings.API_V1_STR}/calendar/google/callback"
+
+def _sign_state(user_id: UUID) -> str:
+    """Short-lived signed state token so the callback can't be forged (CSRF)."""
+    return jwt.encode(
+        {
+            "sub": str(user_id),
+            "purpose": STATE_PURPOSE,
+            "exp": datetime.utcnow() + timedelta(minutes=10),
+        },
+        settings.JWT_SECRET,
+        algorithm="HS256",
+    )
+
+def _verify_state(state: str) -> Optional[UUID]:
+    try:
+        payload = jwt.decode(state, settings.JWT_SECRET, algorithms=["HS256"])
+        if payload.get("purpose") != STATE_PURPOSE:
+            return None
+        return UUID(payload["sub"])
+    except (JWTError, KeyError, ValueError):
+        return None
+
 @router.get("/google/auth-url")
 def get_google_auth_url(request: Request, current_user: User = Depends(get_current_user)):
     """
     Generates the Google OAuth consent screen URL for linking Google Calendar.
     """
-    client_id = settings.GOOGLE_CLIENT_ID
-    
-    # Construct redirect_uri dynamically based on the current request host
-    base_url = str(request.base_url).rstrip('/')
-    redirect_uri = f"{base_url}{settings.API_V1_STR}/calendar/google/callback"
-    scopes = "https://www.googleapis.com/auth/calendar.events"
-    
     params = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "redirect_uri": _build_redirect_uri(request),
         "response_type": "code",
-        "scope": scopes,
+        "scope": "https://www.googleapis.com/auth/calendar.events",
         "access_type": "offline",
         "prompt": "consent",
-        "state": str(current_user.id)
+        "state": _sign_state(current_user.id)
     }
-    
+
     url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
     return {"url": url}
 
 @router.get("/google/callback")
-def google_callback(request: Request, code: str, state: str, db: Session = Depends(get_db)):
+def google_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     """
     Google OAuth Callback endpoint. Exchanges authorization code for tokens,
     saves credentials in the database, triggers initial sync, and redirects back to frontend.
     """
+    # User denied consent (or Google returned an error) — no code is present.
+    if error or not code or not state:
+        logger.warning(f"Google Calendar OAuth aborted: error={error}")
+        return RedirectResponse(f"{FRONTEND_CALENDAR_URL}?error=oauth_failed")
+
+    user_id = _verify_state(state)
+    if not user_id:
+        logger.warning("Google Calendar OAuth callback with invalid/expired state token")
+        return RedirectResponse(f"{FRONTEND_CALENDAR_URL}?error=oauth_failed")
+
     token_url = "https://oauth2.googleapis.com/token"
-    
-    # Construct redirect_uri dynamically to match the authorize request
-    base_url = str(request.base_url).rstrip('/')
-    redirect_uri = f"{base_url}{settings.API_V1_STR}/calendar/google/callback"
-    
+
     payload = {
         "code": code,
         "client_id": settings.GOOGLE_CLIENT_ID,
         "client_secret": settings.GOOGLE_CLIENT_SECRET,
-        "redirect_uri": redirect_uri,
+        "redirect_uri": _build_redirect_uri(request),
         "grant_type": "authorization_code"
     }
-    
+
     try:
         res = requests.post(token_url, data=payload, timeout=10)
         if res.status_code != 200:
             logger.error(f"Token exchange failed: {res.text}")
-            return RedirectResponse("http://localhost:3000/calendar?error=oauth_failed")
-            
+            return RedirectResponse(f"{FRONTEND_CALENDAR_URL}?error=oauth_failed")
+
         data = res.json()
         access_token = data["access_token"]
         refresh_token = data.get("refresh_token")
         expires_in = data.get("expires_in", 3600)
         expiry = datetime.utcnow() + timedelta(seconds=expires_in)
-        
-        user_id = UUID(state)
         creds = db.query(UserGoogleCredentials).filter(UserGoogleCredentials.user_id == user_id).first()
         if not creds:
             creds = UserGoogleCredentials(
@@ -104,11 +136,11 @@ def google_callback(request: Request, code: str, state: str, db: Session = Depen
             sync_all_events_to_google(db, user_id)
         except Exception as e:
             logger.error(f"Error during initial Google Calendar sync: {e}")
-            
-        return RedirectResponse("http://localhost:3000/calendar?connected=true")
+
+        return RedirectResponse(f"{FRONTEND_CALENDAR_URL}?connected=true")
     except Exception as e:
         logger.error(f"Exception in Google callback: {e}")
-        return RedirectResponse("http://localhost:3000/calendar?error=system_error")
+        return RedirectResponse(f"{FRONTEND_CALENDAR_URL}?error=system_error")
 
 @router.get("/google/status")
 def google_status(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):

@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     MOCK_GMAIL: bool = False
+
+    # Frontend origin used for post-OAuth redirects (set to the deployed URL in prod)
+    FRONTEND_URL: str = "http://localhost:3000"
+    # Google OAuth (login/register) accounts must belong to this domain
+    ALLOWED_GOOGLE_DOMAIN: str = "vitstudent.ac.in"
     
     # Extensible University Defaults (VIT Vellore)
     UNIVERSITY_NAME: str = "Vellore Institute of Technology"

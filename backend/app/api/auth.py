@@ -97,6 +97,17 @@ def get_current_user(request: Request, token: str = Depends(oauth2_scheme), db: 
             if not email:
                 raise credentials_exception
                 
+            # Google-provisioned accounts must use the college domain.
+            # (The frontend also enforces this, but the JWT is the authority.)
+            provider = (payload.get("app_metadata") or {}).get("provider")
+            if provider == "google" and not email.strip().lower().endswith(
+                f"@{settings.ALLOWED_GOOGLE_DOMAIN}"
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Only @{settings.ALLOWED_GOOGLE_DOMAIN} Google accounts are allowed.",
+                )
+
             user = User(id=user_id, email=email, role="student")
             db.add(user)
             try:

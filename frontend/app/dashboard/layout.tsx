@@ -6,6 +6,7 @@ import { useAppStore } from "@/lib/store";
 import { isProfileComplete } from "@/lib/profile-utils";
 import Sidebar from "@/components/Sidebar";
 import NotificationsDropdown from "@/components/NotificationsDropdown";
+import VaultGate from "@/components/VaultGate";
 
 export default function DashboardLayout({
   children,
@@ -37,6 +38,7 @@ export default function DashboardLayout({
   }
 
   return (
+    <VaultGate>
     <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
       <Suspense fallback={<div className="w-64 bg-background border-r-2 border-border hidden md:block" />}>
         <Sidebar />
@@ -58,6 +60,7 @@ export default function DashboardLayout({
         </main>
       </div>
     </div>
+    </VaultGate>
   );
 }
 

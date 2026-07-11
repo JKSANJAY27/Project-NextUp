@@ -10,6 +10,7 @@ import api from "@/lib/api";
 import { Eye, EyeOff, ExternalLink, ArrowLeft } from "lucide-react";
 import CrowdCanvas from "@/components/CrowdCanvas";
 import TermsModal from "@/components/TermsModal";
+import GoogleAuthButton from "@/components/GoogleAuthButton";
 
 async function getDeterministicSalt(email: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -352,6 +353,18 @@ export default function RegisterPage() {
               {loading ? "Creating your account..." : "Create Account"}
             </button>
           </form>
+
+          <GoogleAuthButton
+            label="Sign up with Google"
+            onBeforeStart={() => {
+              if (!agreedToTerms) {
+                setShowTermsModal(true);
+                return false;
+              }
+              return true;
+            }}
+            onError={(msg) => setError(msg)}
+          />
 
           <div className="text-center">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">

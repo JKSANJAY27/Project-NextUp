@@ -88,8 +88,12 @@ export default function CalendarPage() {
         setGoogleConnected(true);
         setGoogleMsg("SUCCESSFULLY CONNECTED TO GOOGLE CALENDAR!");
         window.history.replaceState({}, document.title, window.location.pathname);
-      } else if (urlParams.get("error") === "oauth_failed") {
-        setGoogleMsg("GOOGLE OAUTH FAILED. PLEASE TRY AGAIN.");
+      } else if (urlParams.get("error")) {
+        setGoogleMsg(
+          urlParams.get("error") === "system_error"
+            ? "SOMETHING WENT WRONG WHILE CONNECTING. PLEASE TRY AGAIN."
+            : "GOOGLE CALENDAR LINKING WAS CANCELLED OR FAILED. PLEASE TRY AGAIN."
+        );
         window.history.replaceState({}, document.title, window.location.pathname);
       }
     }
