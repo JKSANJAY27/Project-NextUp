@@ -4,7 +4,6 @@ import gzip
 import threading
 from typing import Any, Optional
 from uuid import UUID
-import redis
 from app.core.config import settings
 
 logger = logging.getLogger("nextup.cache")
@@ -16,30 +15,121 @@ except ImportError:
     import json
     HAS_ORJSON = False
 
-# Initialize redis connection pool
+# Initialize redis connection — try native redis-py first, fall back to REST
 _redis_metrics_lock = threading.Lock()
 
-def _connect() -> "redis.Redis":
-    # For Upstash, the URL is redis://:token@host:port — redis-py handles
-    # TLS/SSL automatically. Don't pass SSL params to avoid compatibility issues.
-    client = redis.Redis.from_url(
-        settings.REDIS_URL,
-        socket_timeout=5.0,
-        socket_connect_timeout=5.0,
-        max_connections=20,
-        decode_responses=False
-    )
-    client.ping()
-    return client
+class UpstashRESTClient:
+    """Upstash Redis REST API client for environments where native Redis
+    connections are unreliable (firewall restrictions, TLS issues, etc.)."""
+    def __init__(self, url: str):
+        # URL format: https://default:token@host
+        # Extract token from URL
+        if url.startswith("https://"):
+            url = url[8:]  # remove https://
+        if "@" in url:
+            auth, host = url.split("@", 1)
+            token = auth.split(":")[-1]  # get token after ':'
+        else:
+            token = ""
+            host = url
+
+        self.base_url = f"https://{host}"
+        self.token = token
+        self.session = None
+
+    def _get_session(self):
+        if self.session is None:
+            import requests
+            self.session = requests.Session()
+            self.session.headers.update({
+                "Authorization": f"Bearer {self.token}"
+            })
+        return self.session
+
+    def _cmd(self, *args):
+        """Execute a Redis command via REST API."""
+        session = self._get_session()
+        resp = session.post(f"{self.base_url}/", json=list(args), timeout=5)
+        resp.raise_for_status()
+        try:
+            return resp.json()
+        except:
+            return resp.text
+
+    def ping(self):
+        """Test connection."""
+        self._cmd("PING")
+        return True
+
+    def get(self, key: str):
+        """Get a key from Redis."""
+        try:
+            result = self._cmd("GET", key)
+            return result if result else None
+        except:
+            return None
+
+    def set(self, key: str, value):
+        """Set a key in Redis."""
+        self._cmd("SET", key, value)
+
+    def setex(self, key: str, seconds: int, value):
+        """Set a key with expiration in Redis."""
+        self._cmd("SETEX", key, seconds, value)
+
+    def delete(self, *keys):
+        """Delete keys from Redis."""
+        if keys:
+            self._cmd("DEL", *keys)
+
+    def incr(self, key: str):
+        """Increment a key."""
+        result = self._cmd("INCR", key)
+        return result if isinstance(result, int) else int(result or 0)
+
+def _connect():
+    """Try native redis-py first; fall back to Upstash REST if that fails."""
+    if not settings.REDIS_URL:
+        return None
+
+    # First, try native redis
+    try:
+        import redis
+        client = redis.Redis.from_url(
+            settings.REDIS_URL,
+            socket_timeout=5.0,
+            socket_connect_timeout=5.0,
+            max_connections=20,
+            decode_responses=False
+        )
+        client.ping()
+        logger.info("Connected to Redis via native protocol.")
+        return client
+    except Exception as e:
+        logger.debug(f"Native Redis failed ({type(e).__name__}), trying Upstash REST API...")
+
+    # Fall back to Upstash REST API
+    try:
+        # Convert redis:// URL to https:// for REST
+        rest_url = settings.REDIS_URL.replace("redis://", "https://")
+        client = UpstashRESTClient(rest_url)
+        client.ping()
+        logger.info("Connected to Upstash via REST API.")
+        return client
+    except Exception as e:
+        logger.error(f"Both native Redis and Upstash REST failed: {e}")
+        return None
 
 try:
     redis_client = _connect()
-    logger.info("Successfully connected to Redis cache with connection pool.")
+    if redis_client:
+        logger.info("Redis cache initialized successfully.")
+    else:
+        logger.warning("Redis cache disabled (retrying in background).")
 except Exception as e:
     import traceback
-    logger.error(f"Redis connection failed (caching disabled, retrying in background): {type(e).__name__}: {e}")
-    logger.debug(f"Redis connection error traceback:\n{traceback.format_exc()}")
-    logger.error(f"REDIS_URL configured as: {settings.REDIS_URL[:30]}..." if settings.REDIS_URL else "REDIS_URL not set")
+    logger.error(f"Redis initialization failed: {type(e).__name__}: {e}")
+    logger.debug(f"Traceback:\n{traceback.format_exc()}")
     redis_client = None
 
 # A Redis that was down at boot used to disable caching for the process
