@@ -20,17 +20,12 @@ except ImportError:
 _redis_metrics_lock = threading.Lock()
 
 def _connect() -> "redis.Redis":
-    # Upstash requires TLS. Use ssl_context to handle SSL properly.
-    import ssl
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-
+    # For Upstash, the URL is redis://:token@host:port — redis-py handles
+    # TLS/SSL automatically. Don't pass SSL params to avoid compatibility issues.
     client = redis.Redis.from_url(
         settings.REDIS_URL,
         socket_timeout=5.0,
         socket_connect_timeout=5.0,
-        ssl_context=ssl_context,
         max_connections=20,
         decode_responses=False
     )
