@@ -434,8 +434,7 @@ export default function CompanyWorkspaceModal({
                                 setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
                                 onClose();
                                 await handleUpdateApplication(selectedCompany.id, {
-                                  user_decision: "archived",
-                                  status: "Archived"
+                                  user_decision: "archived"
                                 });
                               }
                             });

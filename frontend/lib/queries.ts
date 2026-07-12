@@ -28,7 +28,7 @@ export function useUserProfile(enabled = true) {
   });
 }
 
-// 1.5 Unified Dashboard Hook (staleTime: 5 min)
+// 1.5 Unified Dashboard Hook (staleTime: 5 min, always refetch on mount)
 export function useDashboard(enabled = true) {
   return useQuery({
     queryKey: CACHE_KEYS.dashboard,
@@ -37,6 +37,7 @@ export function useDashboard(enabled = true) {
       return res.data;
     },
     staleTime: 5 * 60 * 1000,
+    refetchOnMount: "always",
     enabled,
   });
 }

@@ -68,8 +68,7 @@ export default function TrackingPage() {
             });
             
             await api.patch(`/applications/${app.id}`, {
-              user_decision: "archived",
-              status: "Archived"
+              user_decision: "archived"
             });
           } else {
             // If for some reason there is no application workspace, call opportunity state

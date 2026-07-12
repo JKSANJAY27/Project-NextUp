@@ -880,7 +880,15 @@ function DashboardPageContent() {
       eventText = `You have ${mainEvent.title} at ${mainEvent.time.toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })} today.`;
     }
     
-    const trackedApps = Object.values(applications).filter(app => app.user_decision === 'tracking');
+    // Exclude terminated states so rejected/declined apps don't skew the digest
+    // Check BOTH recruitment_state AND status — rejection can live in either field
+    const TERMINAL_STATES = ['Rejected', 'Declined', 'Likely Rejected', 'Offer'];
+    const trackedApps = Object.values(applications).filter(
+      app =>
+        app.user_decision === 'tracking' &&
+        !TERMINAL_STATES.includes(app.recruitment_state) &&
+        !TERMINAL_STATES.includes(app.status)
+    );
     const interviewCount = trackedApps.filter(app => app.recruitment_state === 'Interview' || app.recruitment_state === 'Awaiting Interview Result').length;
     const oaCount = trackedApps.filter(app => app.recruitment_state === 'OA' || app.recruitment_state === 'Awaiting OA Result').length;
     
@@ -911,7 +919,9 @@ function DashboardPageContent() {
       }
     }
 
-    return `Good morning, ${userName}. ${eventText} ${statsText} ${focusText}`;
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+    return `${greeting}, ${userName}. ${eventText} ${statsText} ${focusText}`;
   };
 
 
