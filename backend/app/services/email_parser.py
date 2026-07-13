@@ -1051,6 +1051,155 @@ def ground_role_facts_in_source(
     return parsed
 
 
+def _extract_degree_types_from_block(text: str) -> List[str]:
+    """
+    Deterministically scan a text block for degree type keywords.
+    Handles variants like 'M. Tech', 'M.Tech', 'M Tech', 'MTech',
+    'B. Tech', 'B.Tech', 'B Tech', 'BTech', 'MCA', 'M.Sc' etc.
+    Returns a list of canonical degree codes e.g. ['MTECH', 'BTECH'].
+    """
+    found = []
+    # Use a single flexible pattern for each degree that accepts an optional
+    # space or dot between the letter and "Tech".
+    if re.search(r'\bm\.?\s*tech\b|\bmtech\b|\bmaster\s+of\s+tech', text, re.I):
+        found.append("MTECH")
+    if re.search(r'\bb\.?\s*tech\b|\bbtech\b|\bbachelor\s+of\s+tech', text, re.I):
+        found.append("BTECH")
+    if re.search(r'\bm\.?\s*c\.?\s*a\b|\bmca\b|\bmaster\s+of\s+comp', text, re.I):
+        found.append("MCA")
+    if re.search(r'\bm\.?\s*sc\.?\b|\bmsc\b|\bmaster\s+of\s+sci', text, re.I):
+        found.append("MSC")
+    return found
+
+
+def _extract_eligible_branches_block(email_body: str) -> Optional[str]:
+    """
+    Extract the raw text of the 'Eligible Branches' section from the email body.
+    Returns the block text or None if not found.
+    """
+    m = re.search(
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*"
+        r"(?:Eligible\s*Branches|Eligibility\s*Branches|"
+        r"Eligible\s*Departments?|Eligible\s*Programs?)"
+        r"\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*[\n\r]*"
+        r"(.*?)"
+        r"(?=\n\s*[\-\–\—\*\u00d8\d\.\s]*\s*"
+        r"(?:Eligibility\s*Criteria|Eligibility|Criteria|CTC|Salary|"
+        r"Stipend|Last\s+date|Last\s+Date|Website|Job\s+location|"
+        r"Designation|Date\s+of\s+Visit)|$)",
+        email_body,
+        re.IGNORECASE | re.DOTALL,
+    )
+    return m.group(1).strip() if m else None
+
+
+def _extract_eligibility_raw_text_block(email_body: str) -> Optional[str]:
+    """
+    Extract the raw text of the 'Eligibility Criteria' section.
+    Returns a cleaned multi-line string or None.
+    """
+    m = re.search(
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*"
+        r"(?:Eligibility\s*Criteria|Eligibility|Criteria)"
+        r"\s*[\*_]*\s*[:\-\–\—\s]\s*[\n\r]*"
+        r"(.*?)"
+        r"(?:CTC|Stipend|Last\s+date|Website|Job\s+location|Designation|$)",
+        email_body,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return None
+    lines = [clean_val(l) for l in m.group(1).strip().split("\n") if clean_val(l)]
+    return "\n".join(lines) if lines else None
+
+
+def ground_eligibility_in_source(
+    parsed: Dict[str, Any], email_body: str
+) -> Dict[str, Any]:
+    """
+    Deterministic post-processing step: re-extract degree_types, eligible_branches
+    and eligibility_raw_text directly from the email body and use them to OVERRIDE
+    the AI output whenever the AI returned null / empty for those fields.
+
+    This is the same principle as ground_role_facts_in_source() for CGPA/CTC:
+    regex rules on the structured CDC email format are MORE reliable than a
+    small LLM for these particular fields.
+
+    Specifically corrects:
+    - AI returns degree_types: [] / null  →  fill from branch block
+    - AI returns eligible_branches: [] / null  →  fill from branch block
+    - AI returns eligibility_raw_text: null  →  fill from eligibility criteria block
+    """
+    ext = parsed.get("extracted_data") if isinstance(parsed, dict) else None
+    if not isinstance(ext, dict):
+        return parsed
+
+    roles = ext.get("roles")
+    if not isinstance(roles, list) or not roles:
+        return parsed
+
+    # Deterministically extract the branch block from the email body.
+    branch_block = _extract_eligible_branches_block(email_body)
+    det_degrees: List[str] = []
+    det_branches: List[str] = []
+
+    if branch_block:
+        det_degrees = _extract_degree_types_from_block(branch_block)
+        det_branches = get_branches_from_text(branch_block, strict=False)
+        # If still no degrees found in the branch block text, fall back to full email
+        if not det_degrees:
+            det_degrees = _extract_degree_types_from_block(email_body)
+    else:
+        # No dedicated branch block found — scan the whole email (strict mode).
+        det_degrees = _extract_degree_types_from_block(email_body)
+        det_branches = get_branches_from_text(email_body, strict=True)
+
+    # Deterministically extract eligibility raw text.
+    det_raw_text = _extract_eligibility_raw_text_block(email_body)
+
+    # Also try to capture the branch block as part of the raw text.
+    if branch_block and det_raw_text:
+        det_raw_text = f"Eligible Branches: {branch_block}\n{det_raw_text}"
+    elif branch_block:
+        det_raw_text = f"Eligible Branches: {branch_block}"
+
+    # Update eligibility_raw_text at the top-level extracted_data if AI left it empty
+    current_raw = ext.get("eligibility_raw_text", {})
+    current_raw_val = current_raw.get("value") if isinstance(current_raw, dict) else None
+    if not current_raw_val and det_raw_text:
+        ext["eligibility_raw_text"] = {"value": det_raw_text, "confidence": 0.80}
+        logger.info(
+            "[eligibility_grounding] eligibility_raw_text was empty — filled from regex: %r",
+            det_raw_text[:120],
+        )
+
+    for role in roles:
+        if not isinstance(role, dict):
+            continue
+
+        # --- degree_types ---
+        dt_field = role.get("degree_types", {})
+        dt_val = dt_field.get("value") if isinstance(dt_field, dict) else dt_field
+        if not dt_val and det_degrees:  # AI returned null / empty → override
+            role["degree_types"] = {"value": det_degrees, "confidence": 0.85}
+            logger.info(
+                "[eligibility_grounding] degree_types overridden with regex result: %s",
+                det_degrees,
+            )
+
+        # --- eligible_branches ---
+        eb_field = role.get("eligible_branches", {})
+        eb_val = eb_field.get("value") if isinstance(eb_field, dict) else eb_field
+        if not eb_val and det_branches:  # AI returned null / empty → override
+            role["eligible_branches"] = {"value": det_branches, "confidence": 0.85}
+            logger.info(
+                "[eligibility_grounding] eligible_branches overridden with regex result: %s",
+                det_branches,
+            )
+
+    return parsed
+
+
 def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, Any]:
     """
     Rule-based extraction using regular expressions as a last-resort fallback.
@@ -1181,27 +1330,12 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     else:
         data["eligible_branches"] = get_branches_from_text(email_body, strict=True)
 
-    # Degree types — search branches block first, then whole email as fallback
+    # Degree types — use the shared helper (handles 'M. Tech', 'M.Tech', 'MTech' variants).
+    # Search branches block first; fall back to full email if nothing found.
     degree_search_text = branches_text if branches_text else email_body
-    found_degrees = []
-    if re.search(r'\b(b\.?\s*tech|bachelor\s+of\s+tech)\b', degree_search_text, re.I):
-        found_degrees.append("BTECH")
-    if re.search(r'\b(m\.?\s*tech|master\s+of\s+tech)\b', degree_search_text, re.I):
-        found_degrees.append("MTECH")
-    if re.search(r'\b(m\.?\s*c\.?\s*a|master\s+of\s+computer\s+app)\b', degree_search_text, re.I):
-        found_degrees.append("MCA")
-    if re.search(r'\b(m\.?\s*sc|master\s+of\s+sci)\b', degree_search_text, re.I):
-        found_degrees.append("MSC")
-    # If still no degree types found and we searched a limited block, search full email
+    found_degrees = _extract_degree_types_from_block(degree_search_text)
     if not found_degrees and branches_text:
-        if re.search(r'\b(b\.?\s*tech|bachelor\s+of\s+tech)\b', email_body, re.I):
-            found_degrees.append("BTECH")
-        if re.search(r'\b(m\.?\s*tech|master\s+of\s+tech)\b', email_body, re.I):
-            found_degrees.append("MTECH")
-        if re.search(r'\b(m\.?\s*c\.?\s*a|master\s+of\s+computer\s+app)\b', email_body, re.I):
-            found_degrees.append("MCA")
-        if re.search(r'\b(m\.?\s*sc|master\s+of\s+sci)\b', email_body, re.I):
-            found_degrees.append("MSC")
+        found_degrees = _extract_degree_types_from_block(email_body)
     data["degree_types"] = found_degrees
 
     # Specializations — only from branches block (strict), or whole body if none found
@@ -1764,7 +1898,11 @@ def parse_placement_email(
 
     # Deterministic post-processing: override fragile model fields with
     # source-grounded values (CTC, Stipend, CGPA) extracted directly from email.
-    return ground_role_facts_in_source(parsed, email_body)
+    parsed = ground_role_facts_in_source(parsed, email_body)
+    # Ground eligibility fields (degree_types, eligible_branches, eligibility_raw_text)
+    # using deterministic regex — more reliable than small LLMs for these structured fields.
+    parsed = ground_eligibility_in_source(parsed, email_body)
+    return parsed
 
 
 def _company_appears_in_text(company_name: str, haystack_lower: str) -> bool:

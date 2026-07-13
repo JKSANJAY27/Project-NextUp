@@ -1,104 +1,271 @@
-from typing import Optional, Tuple, Dict, Any
-from app.models.models import StudentProfile, Company
+import re
+from typing import Optional, Tuple, Dict, Any, List
 
-def check_eligibility(profile: StudentProfile, company: Company) -> Tuple[str, Optional[str], Dict[str, Any]]:
+# ──────────────────────────────────────────────────────────────────────────────
+# Canonical mapping: token that might appear in eligible_branches / raw text
+# → normalised degree type (as stored in StudentProfile.degree_type)
+# ──────────────────────────────────────────────────────────────────────────────
+_DEGREE_TOKEN_MAP = {
+    # B.Tech variants
+    "b.tech": "BTECH", "btech": "BTECH", "b tech": "BTECH",
+    "b.e": "BTECH", "be": "BTECH",
+    "b.tech integrated": "BTECH", "btech integrated": "BTECH",
+    # M.Tech variants
+    "m.tech": "MTECH", "mtech": "MTECH", "m tech": "MTECH",
+    "m.tech integrated": "MTECH", "mtech integrated": "MTECH",
+    "m.e": "MTECH", "me": "MTECH",
+    # MCA
+    "mca": "MCA",
+    # MSC
+    "m.sc": "MSC", "msc": "MSC", "m sc": "MSC",
+    # MBA
+    "mba": "MBA",
+    # PHD
+    "ph.d": "PHD", "phd": "PHD",
+}
+
+# Ordered from longest to shortest so "m.tech integrated" matches before "m.tech"
+_DEGREE_TOKENS_SORTED = sorted(_DEGREE_TOKEN_MAP.keys(), key=len, reverse=True)
+
+
+def _extract_degree_types_from_text(text: str) -> List[str]:
+    """
+    Scan a raw eligibility text string and return the set of degree types
+    (using canonical labels like BTECH, MTECH, MCA, MSC …) found in it.
+    Returns an empty list when no degree keywords are found.
+    """
+    if not text:
+        return []
+    lower = text.lower()
+    found = set()
+    for token in _DEGREE_TOKENS_SORTED:
+        if token in lower:
+            found.add(_DEGREE_TOKEN_MAP[token])
+    return list(found)
+
+
+def _branch_matches(user_branch: str, user_degree: str, eligible_branches: List[str]) -> bool:
+    """
+    Returns True if the student's branch+degree combination is covered by
+    at least one entry in the eligible_branches list.
+
+    Each entry may be a branch code ("CSE", "IT"), a degree-prefixed label
+    ("M.TECH CSE", "B.TECH CSE"), or a degree code ("MTECH", "BTECH").
+    """
+    ub = user_branch.strip().upper()  # e.g. "CSE"
+    ud = user_degree.strip().upper()  # e.g. "BTECH"
+
+    # Normalise common degree-label variants to canonical codes
+    deg_norm = {
+        "MTECH": "MTECH", "M.TECH": "MTECH", "M TECH": "MTECH", "ME": "MTECH",
+        "BTECH": "BTECH", "B.TECH": "BTECH", "B TECH": "BTECH", "BE": "BTECH",
+        "MCA": "MCA", "MSC": "MSC", "M.SC": "MSC",
+    }
+
+    for entry in eligible_branches:
+        e = entry.strip().upper()
+        # 1. Pure degree codes stored directly ("MTECH", "BTECH")
+        if e in deg_norm and deg_norm[e] == ud:
+            return True
+        # 2. Branch codes without degree prefix ("CSE", "IT") — match on branch only
+        if e == ub:
+            return True
+        # 3. Compound "DEGREE BRANCH" labels ("M.TECH CSE", "B.TECH CSE")
+        # Check both the degree part and branch part
+        matched_deg = None
+        for tok, canon in deg_norm.items():
+            if e.startswith(tok):
+                matched_deg = canon
+                branch_part = e[len(tok):].strip()
+                break
+        if matched_deg is not None:
+            if matched_deg == ud and (not branch_part or ub in branch_part or branch_part in ub):
+                return True
+
+    return False
+
+
+def check_eligibility(profile, company) -> Tuple[str, Optional[str], Dict[str, Any]]:
     """
     Checks if a student is eligible for a company drive.
     Returns a tuple: (status, reason, explanation_dict)
-    Status can be: 'ELIGIBLE', 'NOT_ELIGIBLE'
+    Status can be: 'ELIGIBLE', 'NOT_ELIGIBLE', 'UNKNOWN'
+
+    Degree / branch checking follows a three-tier priority:
+      Tier 1 – eligibility_rules.degree_types (structured, from AI parser)
+      Tier 2 – company.eligible_branches ARRAY (raw branch list from parser)
+      Tier 3 – parse eligibility_raw_text for degree keywords (fallback)
+
+    A drive is marked NOT_ELIGIBLE only when there is *positive evidence*
+    that the student does not qualify; if all three tiers are empty we skip
+    the branch check rather than falsely blocking anyone.
     """
-    matched = []
-    failed = []
-    
+    matched: List[str] = []
+    failed: List[str] = []
+
     rules = company.eligibility_rules or {}
-    
-    # 1. Degree Type check
-    degree_types = rules.get("degree_types")
-    if degree_types:
-        user_deg = (profile.degree_type or "").strip().upper()
-        if user_deg not in [d.strip().upper() for d in degree_types]:
-            failed.append(f"Required degree: {', '.join(degree_types)}. Your degree: {profile.degree_type or 'None'}")
-        else:
-            matched.append(f"Degree matched: {profile.degree_type}")
-    else:
-        # Fallback to legacy check or match if empty
-        pass
+    user_deg = (profile.degree_type or "").strip().upper()
+    user_branch = (profile.branch or "").strip().upper()
 
-    # 2. Specialization check
-    specializations = rules.get("specializations")
-    allow_all_specializations = rules.get("allow_all_specializations", False)
-    
-    # If specializations list is empty/null, or allow_all_specializations is True:
-    if allow_all_specializations or not specializations:
-        matched.append("Specialization matched (All specializations under degree allowed)")
-    else:
-        user_spec = (profile.specialization or "").strip().upper()
-        if user_spec not in [s.strip().upper() for s in specializations]:
-            failed.append(f"Required specialization: {', '.join(specializations)}. Your specialization: {profile.specialization or 'None'}")
-        else:
-            matched.append(f"Specialization matched: {profile.specialization}")
+    # ── 1. DEGREE / BRANCH CHECK ──────────────────────────────────────────────
+    # Tier 1: structured degree_types from eligibility_rules
+    degree_types_raw: List[str] = rules.get("degree_types") or []
+    # Tier 2: eligible_branches ARRAY on the Company model
+    eligible_branches: List[str] = getattr(company, "eligible_branches", None) or []
+    # Tier 3: raw text fallback
+    eligibility_raw_text: Optional[str] = getattr(company, "eligibility_raw_text", None)
 
-    # 3. CGPA Check
+    branch_checked = False
+
+    if degree_types_raw:
+        # Tier 1: structured — authoritative
+        branch_checked = True
+        normalized = [d.strip().upper() for d in degree_types_raw]
+        if user_deg not in normalized:
+            # Build human-readable label set
+            readable = ", ".join(degree_types_raw)
+            failed.append(
+                f"Required degree: {readable}. "
+                f"Your degree: {profile.degree_type or 'None'}"
+            )
+        else:
+            matched.append(f"Degree type matched: {profile.degree_type}")
+
+    elif eligible_branches:
+        # Tier 2: check each entry in the eligible_branches ARRAY
+        branch_checked = True
+        if not _branch_matches(user_branch, user_deg, eligible_branches):
+            readable = ", ".join(eligible_branches)
+            failed.append(
+                f"Required branch: {readable}. "
+                f"Your degree/branch: {profile.degree_type} {profile.branch}"
+            )
+        else:
+            matched.append(f"Branch matched: {profile.degree_type} {profile.branch}")
+
+    else:
+        # Tier 3: parse raw text for degree keywords
+        raw_degrees = _extract_degree_types_from_text(eligibility_raw_text)
+        if raw_degrees:
+            branch_checked = True
+            if user_deg not in raw_degrees:
+                readable = ", ".join(raw_degrees)
+                failed.append(
+                    f"Required degree (from eligibility text): {readable}. "
+                    f"Your degree: {profile.degree_type or 'None'}"
+                )
+            else:
+                matched.append(
+                    f"Degree matched (from eligibility text): {profile.degree_type}"
+                )
+        # else: no data at all — skip the branch check (don't block anyone)
+
+    # ── 2. SPECIALIZATION CHECK ───────────────────────────────────────────────
+    # Only run this if the degree check PASSED (or was skipped) and we have data.
+    # Don't penalise for specialization when the degree itself already failed.
+    specializations: List[str] = rules.get("specializations") or []
+    allow_all_specializations: bool = rules.get("allow_all_specializations", False)
+
+    if not failed or not branch_checked:
+        # Only check specialization when the student's degree matched (or no
+        # degree data existed at all), so we don't pile on redundant failures.
+        if allow_all_specializations or not specializations:
+            matched.append("Specialization: All specializations allowed")
+        else:
+            user_spec = (profile.specialization or "").strip().upper()
+            if user_spec not in [s.strip().upper() for s in specializations]:
+                failed.append(
+                    f"Required specialization: {', '.join(specializations)}. "
+                    f"Your specialization: {profile.specialization or 'None'}"
+                )
+            else:
+                matched.append(f"Specialization matched: {profile.specialization}")
+
+    # ── 3. CGPA CHECK ─────────────────────────────────────────────────────────
     min_cgpa = rules.get("min_cgpa") or rules.get("cgpa")
     if min_cgpa is not None:
         if profile.cgpa is None:
             failed.append(f"Required CGPA: {float(min_cgpa):.2f}. Your CGPA: Not set")
         elif float(profile.cgpa) < float(min_cgpa):
-            failed.append(f"Required CGPA: {float(min_cgpa):.2f}. Your CGPA: {float(profile.cgpa):.2f}")
+            failed.append(
+                f"Required CGPA: {float(min_cgpa):.2f}. "
+                f"Your CGPA: {float(profile.cgpa):.2f}"
+            )
         else:
-            matched.append(f"CGPA matched: {float(profile.cgpa):.2f} >= {float(min_cgpa):.2f}")
+            matched.append(
+                f"CGPA matched: {float(profile.cgpa):.2f} >= {float(min_cgpa):.2f}"
+            )
 
-    # 4. Tenth Marks Check
+    # ── 4. TENTH MARKS CHECK ──────────────────────────────────────────────────
     min_tenth = rules.get("min_tenth_marks") or rules.get("min_tenth")
     if min_tenth is not None:
         if profile.tenth_marks is None:
             failed.append(f"Required 10th Marks: {float(min_tenth):.1f}%. Your Marks: Not set")
         elif float(profile.tenth_marks) < float(min_tenth):
-            failed.append(f"Required 10th Marks: {float(min_tenth):.1f}%. Your Marks: {float(profile.tenth_marks):.1f}%")
+            failed.append(
+                f"Required 10th Marks: {float(min_tenth):.1f}%. "
+                f"Your Marks: {float(profile.tenth_marks):.1f}%"
+            )
         else:
-            matched.append(f"10th Marks matched: {float(profile.tenth_marks):.1f}% >= {float(min_tenth):.1f}%")
+            matched.append(
+                f"10th Marks matched: {float(profile.tenth_marks):.1f}% >= {float(min_tenth):.1f}%"
+            )
 
-    # 5. Twelfth Marks Check
+    # ── 5. TWELFTH MARKS CHECK ────────────────────────────────────────────────
     min_twelfth = rules.get("min_twelfth_marks") or rules.get("min_twelfth")
     if min_twelfth is not None:
         if profile.twelfth_marks is None:
             failed.append(f"Required 12th Marks: {float(min_twelfth):.1f}%. Your Marks: Not set")
         elif float(profile.twelfth_marks) < float(min_twelfth):
-            failed.append(f"Required 12th Marks: {float(min_twelfth):.1f}%. Your Marks: {float(profile.twelfth_marks):.1f}%")
+            failed.append(
+                f"Required 12th Marks: {float(min_twelfth):.1f}%. "
+                f"Your Marks: {float(profile.twelfth_marks):.1f}%"
+            )
         else:
-            matched.append(f"12th Marks matched: {float(profile.twelfth_marks):.1f}% >= {float(min_twelfth):.1f}%")
+            matched.append(
+                f"12th Marks matched: {float(profile.twelfth_marks):.1f}% >= {float(min_twelfth):.1f}%"
+            )
 
-    # 6. Arrears Check
+    # ── 6. ARREARS CHECK ──────────────────────────────────────────────────────
     requires_no_arrears = rules.get("requires_no_arrears")
     if requires_no_arrears is None:
-        requires_no_arrears = rules.get("min_arrears") is False or rules.get("min_arrears") == 0
-        
+        requires_no_arrears = (
+            rules.get("min_arrears") is False or rules.get("min_arrears") == 0
+        )
+
     if requires_no_arrears:
         if profile.has_arrears:
             failed.append("No active arrears required. You have active arrears")
         else:
             matched.append("No active arrears condition met")
 
-    # 7. PG UG CGPA Check
-    user_deg_upper = (profile.degree_type or "").strip().upper()
-    is_pg = user_deg_upper in ("MTECH", "MCA", "MSC")
+    # ── 7. PG UG CGPA CHECK ───────────────────────────────────────────────────
+    is_pg = user_deg in ("MTECH", "MCA", "MSC")
     min_ug_cgpa = rules.get("min_ug_cgpa")
     if is_pg and min_ug_cgpa is not None:
         if profile.ug_cgpa is None:
-            failed.append(f"Required UG CGPA: {float(min_ug_cgpa):.2f}. Your UG CGPA: Not set")
+            failed.append(
+                f"Required UG CGPA: {float(min_ug_cgpa):.2f}. Your UG CGPA: Not set"
+            )
         elif float(profile.ug_cgpa) < float(min_ug_cgpa):
-            failed.append(f"Required UG CGPA: {float(min_ug_cgpa):.2f}. Your UG CGPA: {float(profile.ug_cgpa):.2f}")
+            failed.append(
+                f"Required UG CGPA: {float(min_ug_cgpa):.2f}. "
+                f"Your UG CGPA: {float(profile.ug_cgpa):.2f}"
+            )
         else:
-            matched.append(f"UG CGPA matched: {float(profile.ug_cgpa):.2f} >= {float(min_ug_cgpa):.2f}")
+            matched.append(
+                f"UG CGPA matched: {float(profile.ug_cgpa):.2f} >= {float(min_ug_cgpa):.2f}"
+            )
 
+    # ── RESULT ────────────────────────────────────────────────────────────────
     eligible = len(failed) == 0
     status = "ELIGIBLE" if eligible else "NOT_ELIGIBLE"
     reason = "You meet all academic criteria." if eligible else failed[0]
-    
+
     explanation = {
         "eligible": eligible,
         "matched": matched,
-        "failed": failed
+        "failed": failed,
     }
-    
+
     return status, reason, explanation
