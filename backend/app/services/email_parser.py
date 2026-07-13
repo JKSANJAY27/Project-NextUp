@@ -1200,6 +1200,77 @@ def ground_eligibility_in_source(
     return parsed
 
 
+def extract_explicit_deadline(email_body: str, subject: str = "") -> Optional[str]:
+    """
+    Deterministically scan the email body for standard registration deadline patterns.
+    Converts to ISO date format. Returns None if not found or unparseable.
+    """
+    deadline_match = re.search(
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Last\s*date\s*for\s*Registration|Last\s*Date\s*to\s*Apply|Registration\s*Deadline|Last\s*Date|Deadline|Last\s*date)\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*([^\n\r]+)",
+        email_body,
+        re.IGNORECASE
+    )
+    raw_date = None
+    if deadline_match:
+        raw_date = clean_val(deadline_match.group(1))
+    else:
+        # Try inline "register on or before [date]"
+        on_or_before = re.search(
+            r"(?:register|apply|submission|submit)\s*(?:[^\n\r]{0,50}?)(?:on\s*or\s*before|before|by|on)\s*\*?([^\n\r]{5,40})",
+            email_body,
+            re.I
+        )
+        if on_or_before:
+            raw_date = clean_val(on_or_before.group(1))
+            
+    if raw_date:
+        # Strip trailing punctuation/periods/spaces
+        raw_date = re.sub(r'[\.\s]+$', '', raw_date).strip()
+        parsed_date = dateparser.parse(raw_date, settings={'TIMEZONE': 'Asia/Kolkata', 'TO_TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True})
+        if parsed_date:
+            return parsed_date.isoformat()
+            
+    return None
+
+
+def ground_deadline_in_source(
+    parsed: Dict[str, Any], email_body: str, subject: str = ""
+) -> Dict[str, Any]:
+    """
+    Deterministic post-processing step: Override fragile or hallucinated AI deadline
+    outputs using the REGISTRATION milestone event date (if present) or via a robust
+    fallback regex scan of the email body.
+    """
+    ext = parsed.get("extracted_data") if isinstance(parsed, dict) else None
+    if not isinstance(ext, dict):
+        return parsed
+
+    # 1. First priority: look for a REGISTRATION event milestone in the events list.
+    registration_date = None
+    events = ext.get("events") or []
+    for evt in events:
+        if isinstance(evt, dict) and evt.get("stage") == "REGISTRATION":
+            date_iso = evt.get("date_iso")
+            if date_iso:
+                registration_date = date_iso
+                break
+
+    # 2. Second priority: fall back to a regex scan of the email body.
+    if not registration_date:
+        registration_date = extract_explicit_deadline(email_body, subject)
+
+    # If we successfully matched a deterministic registration date, override the AI's deadline_iso.
+    if registration_date:
+        current_deadline = ext.get("deadline_iso") or {}
+        if isinstance(current_deadline, dict):
+            ext["deadline_iso"] = {"value": registration_date, "confidence": 0.99}
+        else:
+            ext["deadline_iso"] = {"value": registration_date, "confidence": 0.99}
+        logger.info("[deadline_grounding] deadline_iso grounded and overridden with %s", registration_date)
+
+    return parsed
+
+
 def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, Any]:
     """
     Rule-based extraction using regular expressions as a last-resort fallback.
@@ -1902,6 +1973,8 @@ def parse_placement_email(
     # Ground eligibility fields (degree_types, eligible_branches, eligibility_raw_text)
     # using deterministic regex — more reliable than small LLMs for these structured fields.
     parsed = ground_eligibility_in_source(parsed, email_body)
+    # Ground registration deadline_iso using REGISTRATION milestone or fallback regex.
+    parsed = ground_deadline_in_source(parsed, email_body, subject)
     return parsed
 
 
