@@ -1323,6 +1323,12 @@ function DashboardPageContent() {
                           <div className="flex-1 min-w-0">
                             <h5 className="font-extrabold text-sm uppercase tracking-tighter text-foreground truncate">{comp.name}</h5>
                             <p className="text-[10px] text-muted-foreground uppercase">{comp.role} ✦ {comp.category}</p>
+                            <div className="mt-1.5 flex flex-col gap-0.5">
+                              {getEligibilityIcon(comp.eligibility_status)}
+                              {comp.eligibility_reason && (
+                                <p className="text-[9px] text-muted-foreground uppercase leading-normal mt-0.5">{comp.eligibility_reason}</p>
+                              )}
+                            </div>
                           </div>
                           <span className="text-[8px] font-black bg-amber-950/60 border border-amber-500/50 text-amber-400 px-1.5 py-0.5 uppercase shrink-0">
                             PENDING
