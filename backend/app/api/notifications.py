@@ -167,3 +167,24 @@ def mark_all_as_read(
         notif.is_read = True
     db.commit()
     return {"message": f"Successfully marked {len(unread_notifs)} notifications as read."}
+
+@router.delete("/{notification_id}", status_code=status.HTTP_200_OK)
+def delete_notification(
+    notification_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a single notification."""
+    notif = (
+        db.query(Notification)
+        .filter(Notification.id == notification_id, Notification.user_id == current_user.id)
+        .first()
+    )
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification not found")
+        
+    db.delete(notif)
+    db.commit()
+    return {"message": "Notification successfully deleted."}
+
+

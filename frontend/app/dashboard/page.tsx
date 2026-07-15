@@ -880,7 +880,15 @@ function DashboardPageContent() {
       eventText = `You have ${mainEvent.title} at ${mainEvent.time.toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })} today.`;
     }
     
-    const trackedApps = Object.values(applications).filter(app => app.user_decision === 'tracking');
+    // Exclude terminated states so rejected/declined apps don't skew the digest
+    // Check BOTH recruitment_state AND status — rejection can live in either field
+    const TERMINAL_STATES = ['Rejected', 'Declined', 'Likely Rejected', 'Offer'];
+    const trackedApps = Object.values(applications).filter(
+      app =>
+        app.user_decision === 'tracking' &&
+        !TERMINAL_STATES.includes(app.recruitment_state) &&
+        !TERMINAL_STATES.includes(app.status)
+    );
     const interviewCount = trackedApps.filter(app => app.recruitment_state === 'Interview' || app.recruitment_state === 'Awaiting Interview Result').length;
     const oaCount = trackedApps.filter(app => app.recruitment_state === 'OA' || app.recruitment_state === 'Awaiting OA Result').length;
     
@@ -911,7 +919,9 @@ function DashboardPageContent() {
       }
     }
 
-    return `Good morning, ${userName}. ${eventText} ${statsText} ${focusText}`;
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+    return `${greeting}, ${userName}. ${eventText} ${statsText} ${focusText}`;
   };
 
 
@@ -1313,6 +1323,12 @@ function DashboardPageContent() {
                           <div className="flex-1 min-w-0">
                             <h5 className="font-extrabold text-sm uppercase tracking-tighter text-foreground truncate">{comp.name}</h5>
                             <p className="text-[10px] text-muted-foreground uppercase">{comp.role} ✦ {comp.category}</p>
+                            <div className="mt-1.5 flex flex-col gap-0.5">
+                              {getEligibilityIcon(comp.eligibility_status)}
+                              {comp.eligibility_reason && (
+                                <p className="text-[9px] text-muted-foreground uppercase leading-normal mt-0.5">{comp.eligibility_reason}</p>
+                              )}
+                            </div>
                           </div>
                           <span className="text-[8px] font-black bg-amber-950/60 border border-amber-500/50 text-amber-400 px-1.5 py-0.5 uppercase shrink-0">
                             PENDING

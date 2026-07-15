@@ -108,3 +108,55 @@ def detect_db_changes(session, flush_context):
         logger = logging.getLogger("nextup.db_event")
         logger.warning(f"Error in detect_db_changes cache listener: {e}")
 
+
+@event.listens_for(SessionLocal, "before_flush")
+def sync_notifications_listener(session, flush_context, instances):
+    try:
+        from app.models.models import Notification, CompanyEvent, OpportunityState
+        from sqlalchemy.inspection import inspect
+
+        # 1. Sync notifications when OpportunityState changes state
+        for obj in session.new | session.dirty:
+            if obj.__class__.__name__ == "OpportunityState":
+                is_new = obj in session.new
+                state_changed = False
+                if not is_new:
+                    state_history = inspect(obj).attrs.state.history
+                    state_changed = state_history.has_changes()
+                
+                if is_new or state_changed:
+                    target_scope = "ARCHIVED" if obj.state in ("archived", "auto_archived") else "ACTIVE"
+                    
+                    # Query all notifications for this user and company
+                    notifications = (
+                        session.query(Notification)
+                        .join(CompanyEvent)
+                        .filter(
+                            Notification.user_id == obj.user_id,
+                            CompanyEvent.company_id == obj.company_id
+                        )
+                        .all()
+                    )
+                    for notif in notifications:
+                        notif.notification_scope = target_scope
+
+        # 2. Check if a new Notification should be archived from the start
+        for obj in session.new:
+            if obj.__class__.__name__ == "Notification":
+                # Find its company_id
+                event = session.query(CompanyEvent).filter(CompanyEvent.id == obj.company_event_id).first()
+                if event:
+                    # Check OpportunityState
+                    os_record = session.query(OpportunityState).filter(
+                        OpportunityState.user_id == obj.user_id,
+                        OpportunityState.company_id == event.company_id
+                    ).first()
+                    if os_record and os_record.state in ("archived", "auto_archived"):
+                        obj.notification_scope = "ARCHIVED"
+
+    except Exception as e:
+        import logging
+        logger = logging.getLogger("nextup.db_event")
+        logger.warning(f"Error in sync_notifications_listener: {e}")
+
+

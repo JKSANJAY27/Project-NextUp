@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from "react";
-import { Bell, Check, CheckCheck, AlertCircle, Building2 } from "lucide-react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
+import { Bell, Check, CheckCheck, AlertCircle, Building2, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import api from "@/lib/api";
 
@@ -26,6 +26,7 @@ export default function NotificationsDropdown() {
   const [archivedBundles, setArchivedBundles] = useState<NotificationBundle[]>([]);
   const [activeTab, setActiveTab] = useState<"notifications" | "archived">("notifications");
   const [isOpen, setIsOpen] = useState(false);
+  const [readInSession, setReadInSession] = useState<string[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const fetchNotifications = async () => {
@@ -47,11 +48,6 @@ export default function NotificationsDropdown() {
   };
 
   useEffect(() => {
-    fetchNotifications();
-    if (activeTab === "archived") {
-      fetchArchivedNotifications();
-    }
-
     // Subscribe to realtime database changes for notifications
     const channel = supabase
       .channel("realtime-notifications-dropdown")
@@ -68,7 +64,19 @@ export default function NotificationsDropdown() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [activeTab]);
+  }, []);
+
+  // Fetch when dropdown is opened or active tab changes, and clear readInSession when closed
+  useEffect(() => {
+    if (isOpen) {
+      fetchNotifications();
+      if (activeTab === "archived") {
+        fetchArchivedNotifications();
+      }
+    } else {
+      setReadInSession([]);
+    }
+  }, [isOpen, activeTab]);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -86,6 +94,7 @@ export default function NotificationsDropdown() {
   const handleMarkAsRead = async (id: string, companyId: string) => {
     try {
       await api.patch(`/notifications/${id}/read`);
+      setReadInSession((prev) => [...prev, id]);
 
       setBundles((prev) =>
         prev.map((b) => {
@@ -110,6 +119,12 @@ export default function NotificationsDropdown() {
     try {
       await api.post(`/notifications/company/${companyId}/read`);
 
+      const companyBundle = bundles.find((b) => b.company_id === companyId);
+      if (companyBundle) {
+        const ids = companyBundle.notifications.map((n) => n.id);
+        setReadInSession((prev) => [...prev, ...ids]);
+      }
+
       setBundles((prev) =>
         prev.map((b) => {
           if (b.company_id === companyId) {
@@ -131,6 +146,9 @@ export default function NotificationsDropdown() {
     try {
       await api.post("/notifications/read-all");
 
+      const allIds = bundles.flatMap((b) => b.notifications.map((n) => n.id));
+      setReadInSession((prev) => [...prev, ...allIds]);
+
       setBundles((prev) =>
         prev.map((b) => ({
           ...b,
@@ -142,6 +160,42 @@ export default function NotificationsDropdown() {
       console.error("Failed to mark all as read:", error);
     }
   };
+
+  const handleDeleteNotification = async (id: string, companyId: string) => {
+    try {
+      await api.delete(`/notifications/${id}`);
+
+      setArchivedBundles((prev) =>
+        prev
+          .map((b) => {
+            if (b.company_id === companyId) {
+              return {
+                ...b,
+                notifications: b.notifications.filter((n) => n.id !== id),
+              };
+            }
+            return b;
+          })
+          .filter((b) => b.notifications.length > 0)
+      );
+    } catch (error) {
+      console.error("Failed to delete notification:", error);
+    }
+  };
+
+  const visibleBundles = useMemo(() => {
+    return bundles
+      .map((bundle) => {
+        const visibleNotifs = bundle.notifications.filter(
+          (notif) => !notif.is_read || readInSession.includes(notif.id)
+        );
+        return {
+          ...bundle,
+          notifications: visibleNotifs,
+        };
+      })
+      .filter((bundle) => bundle.notifications.length > 0);
+  }, [bundles, readInSession]);
 
   return (
     <div className="relative" ref={dropdownRef}>
@@ -205,14 +259,14 @@ export default function NotificationsDropdown() {
           {/* List */}
           <div className="overflow-y-auto divide-y divide-border">
             {activeTab === "notifications" ? (
-              bundles.length === 0 ? (
+              visibleBundles.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-muted-foreground gap-2">
                   <AlertCircle size={24} className="stroke-1" />
                   <span className="text-xs font-bold uppercase tracking-wider">ALL CLEAR</span>
                   <span className="text-[10px] uppercase">No new alerts at this time.</span>
                 </div>
               ) : (
-                bundles.map((bundle) => (
+                visibleBundles.map((bundle) => (
                   <div key={bundle.company_id} className="flex flex-col bg-card">
                     {/* Bundle Header */}
                     <div className="flex items-center justify-between px-3 py-2 bg-accent/10 border-b border-border sticky top-0 z-10">
@@ -249,15 +303,22 @@ export default function NotificationsDropdown() {
                             <p className="text-xs font-medium text-foreground leading-relaxed">
                               {notif.message}
                             </p>
-                            {!notif.is_read && (
-                              <button
-                                onClick={() => handleMarkAsRead(notif.id, bundle.company_id)}
-                                className="flex-shrink-0 mt-0.5 border border-border p-1 bg-card hover:bg-accent hover:text-black transition-colors rounded-none"
-                                title="Mark as read"
-                              >
-                                <Check size={10} />
-                              </button>
-                            )}
+                            <button
+                              onClick={() => {
+                                if (!notif.is_read) {
+                                  handleMarkAsRead(notif.id, bundle.company_id);
+                                }
+                              }}
+                              disabled={notif.is_read}
+                              className={`flex-shrink-0 mt-0.5 border p-1 rounded-none transition-all duration-200 ${
+                                notif.is_read
+                                  ? "border-muted-foreground/30 text-muted-foreground/40 bg-muted/10 cursor-not-allowed"
+                                  : "border-border bg-card hover:bg-accent hover:text-black active:scale-95"
+                              }`}
+                              title={notif.is_read ? "Read" : "Mark as read"}
+                            >
+                              <Check size={10} />
+                            </button>
                           </div>
                           <span className="text-[9px] text-muted-foreground font-mono">
                             {new Date(notif.created_at).toLocaleString("en-IN", {
@@ -307,6 +368,13 @@ export default function NotificationsDropdown() {
                             <p className="text-xs text-muted-foreground leading-relaxed">
                               {notif.message}
                             </p>
+                            <button
+                              onClick={() => handleDeleteNotification(notif.id, bundle.company_id)}
+                              className="flex-shrink-0 mt-0.5 border border-border p-1 bg-card hover:bg-red-500/10 hover:text-red-500 hover:border-red-500 transition-colors rounded-none"
+                              title="Delete notification"
+                            >
+                              <Trash2 size={10} />
+                            </button>
                           </div>
                           <span className="text-[9px] text-muted-foreground/60 font-mono">
                             {new Date(notif.created_at).toLocaleString("en-IN", {
