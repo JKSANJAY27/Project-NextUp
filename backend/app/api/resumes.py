@@ -189,6 +189,9 @@ class ResumeGenerateRequest(BaseModel):
     company_id: UUID
     custom_prompt: Optional[str] = None
     latex_template: str = "Classic"
+    # Which of the drive's roles to tailor for (multi-role drives like ION
+    # announce several roles, each with its own JD PDF). None = primary role.
+    target_role: Optional[str] = None
 
 class AcceptChangesRequest(BaseModel):
     job_id: UUID
@@ -254,7 +257,13 @@ def start_resume_tailoring_job(
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to decrypt your master resume.")
 
-    input_payload_enc = server_encrypt_field(json.dumps({"resume_data": resume_data}))
+    # target_role rides in the snapshot (no schema change needed): the
+    # pipeline reads it to pick the role-specific JD on multi-role drives.
+    target_role = (req.target_role or "").strip()[:255] or None
+    input_payload_enc = server_encrypt_field(json.dumps({
+        "resume_data": resume_data,
+        "target_role": target_role,
+    }))
 
     # 5. Create queued job. custom_prompt is user free-text destined for the
     # LLM prompt — sanitize against prompt injection before persisting.

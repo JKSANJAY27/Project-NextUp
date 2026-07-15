@@ -62,6 +62,88 @@ def clean_company_name_key(name: str) -> str:
     ).strip().lower()
     return re.sub(r'\s+', ' ', cleaned)
 
+def company_role_names(company) -> list:
+    """All role names for a drive: the structured roles list when present,
+    else the display `role` string split on the join separator."""
+    names = []
+    for r in (company.roles or []):
+        if isinstance(r, dict) and r.get("role"):
+            names.append(str(r["role"]))
+    if not names and company.role:
+        names = [p.strip() for p in str(company.role).split(" / ") if p.strip()]
+    return names
+
+
+def upsert_company_role(company, role: str, ctc=None, stipend=None,
+                        jd_text=None, jd_strategy=None) -> dict:
+    """Add or update a role entry on a drive's roles list.
+
+    One drive can hire for several roles (ION announced Software Developer
+    AND Technical Product Analyst in one mail, each with its own JD PDF).
+    Tracking stays per-drive; the per-role JD only matters for resume
+    tailoring. Also refreshes the display `role` string (joined names).
+    Caller must commit; JSON mutation is flagged here.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+    from app.services.validator import normalize_role_name as _nrn
+
+    roles = list(company.roles or [])
+    entry = None
+    for r in roles:
+        if isinstance(r, dict) and _nrn(r.get("role", "")) == _nrn(role):
+            entry = r
+            break
+    if entry is None:
+        entry = {"role": role.strip()}
+        roles.append(entry)
+    elif len(role.strip()) > len(entry.get("role") or ""):
+        # Same normalized role, more specific name (e.g. the generic
+        # 'Software Engineer' fallback vs the JD PDF's 'Software Developer')
+        entry["role"] = role.strip()
+
+    if ctc and not entry.get("ctc"):
+        entry["ctc"] = str(ctc)
+    if stipend and not entry.get("stipend"):
+        entry["stipend"] = str(stipend)
+    if jd_text and len(jd_text) > len(entry.get("jd_text") or ""):
+        entry["jd_text"] = jd_text
+        entry.pop("jd_strategy", None)  # stale strategy for old JD
+    if jd_strategy:
+        entry["jd_strategy"] = jd_strategy
+
+    company.roles = roles
+    flag_modified(company, "roles")
+
+    display = " / ".join(str(r.get("role", "")) for r in roles if r.get("role"))
+    if display and display != company.role:
+        company.role = display[:252] + "..." if len(display) > 255 else display
+    return entry
+
+
+def match_jd_pdf_to_role(role_names: list, filename: str, jd_text: str):
+    """Which of the drive's roles does this JD PDF belong to?
+
+    CDC JD PDFs carry the role in the filename ('ION Group_Software
+    Developer Job Description_2027.pdf') and/or as the document heading.
+    Returns the matched role name or None (ambiguous / single-role drive).
+    """
+    fn = (filename or "").lower()
+    head = (jd_text or "")[:1500].lower()
+    best, best_score = None, 0
+    for rn in role_names:
+        rl = rn.strip().lower()
+        if not rl:
+            continue
+        score = 0
+        if rl in fn:
+            score += 2
+        if rl in head:
+            score += 1
+        if score > best_score:
+            best, best_score = rn, score
+    return best if best_score > 0 else None
+
+
 def _key_in_text(key: str, text: str) -> bool:
     """Word-boundary containment check for company-name keys.
 
@@ -1685,9 +1767,11 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                     ext_name_clean = clean_company_name_key(company_name).lower()
 
                     role_score = 0
-                    if normalize_role_name(c.role) == normalize_role_name(role):
+                    c_role_names = company_role_names(c)
+                    if any(normalize_role_name(rn) == normalize_role_name(role) for rn in c_role_names):
                         role_score = 20
-                    elif len(c.role) >= 3 and (c.role.lower() in role.lower() or role.lower() in c.role.lower()):
+                    elif any(len(rn) >= 3 and (rn.lower() in role.lower() or role.lower() in rn.lower())
+                             for rn in c_role_names):
                         role_score = 10
                     elif db_name_clean != ext_name_clean:
                         # Role mismatch is only disqualifying when the company
@@ -1765,7 +1849,8 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                     # schedule/update mail, not a second drive — route it as
                     # an update so it can't overwrite drive metadata.
                     if (is_announcement
-                            and normalize_role_name(role) != normalize_role_name(company.role)
+                            and not any(normalize_role_name(role) == normalize_role_name(rn)
+                                        for rn in company_role_names(company))
                             and normalize_role_name(role) == normalize_role_name("Software Engineer")):
                         _subj_l = (subject or "").lower()
                         if any(k in _subj_l for k in OA_SUBJECT_KEYWORDS):
@@ -1792,22 +1877,19 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             norm_company_key_for_dedup = clean_company_name_key(company_name)
             if not company and is_announcement and norm_company_key_for_dedup in companies_created_this_job:
                 company = companies_created_this_job[norm_company_key_for_dedup]
-                # Prefer the more specific / longer role name
-                if role and (not company.role or len(role) > len(company.role or "")):
-                    logger.info(
-                        f"Same-email dedup: reusing existing company '{company.name}' (ID: {company.id}), "
-                        f"updating role from '{company.role}' -> '{role}'."
-                    )
-                    company.role = role
+                # Register this as an ADDITIONAL role on the same drive
+                # (one drive, several roles — tracking stays unified; the
+                # per-role JD matters only for resume tailoring).
+                if role:
+                    upsert_company_role(company, role, ctc=ctc, stipend=stipend)
                     db.flush()
-                else:
-                    logger.info(
-                        f"Same-email dedup: reusing existing company '{company.name}' (ID: {company.id}). "
-                        f"Role '{role}' not adopted (existing '{company.role}' is equally or more specific)."
-                    )
+                logger.info(
+                    f"Same-email dedup: reusing company '{company.name}' (ID: {company.id}); "
+                    f"role '{role}' registered on the same drive (roles: {company.role})."
+                )
                 log_execution_stage(
                     db, job.id, "COMPANY_MATCHED", "SUCCESS",
-                    f"Same-email dedup reused company workspace: {company.name} (Role: {company.role})"
+                    f"Same-email dedup reused company workspace: {company.name} (Roles: {company.role})"
                 )
 
             # -----------------------------------------------------------------
@@ -1913,6 +1995,7 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                 company = Company(
                     name=company_name,
                     role=role,
+                    roles=[{"role": role, "ctc": ctc, "stipend": stipend}],
                     category=category,
                     ctc=ctc,
                     stipend=stipend,
@@ -1938,6 +2021,11 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             else:
                 log_execution_stage(db, job.id, "COMPANY_MATCHED", "SUCCESS", f"Matched company ID: {company.id}")
                 if is_announcement:
+                    # A genuine announcement naming a role for this company —
+                    # register it on the drive's roles list (a second role
+                    # announced in a separate mail joins the SAME drive).
+                    if role:
+                        upsert_company_role(company, role, ctc=ctc, stipend=stipend)
                     # Announcement mail updating an existing company workspace:
                     # allow CTC, eligibility, branches, deadline, link to be refreshed.
                     current_deadline = registration_deadline_utc
@@ -2387,21 +2475,46 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                         jd_info = parse_job_description(file_bytes)
                         jd_text = jd_info.get("jd_text", "")
                         required_skills = jd_info.get("skills", [])
-                        
-                        company.jd_text = jd_text
-                        
-                        # Store in jd_analysis JSON column
-                        company.jd_analysis = {
-                            "required_skills": required_skills,
-                            "ats_keywords": jd_info.get("ats_keywords", []),
-                            "preferred_skills": [],
-                            "interview_topics": []
-                        }
-                        
+
+                        # Per-role JD: a multi-role drive gets one PDF per
+                        # role (role name in the filename/heading). Attach
+                        # the text to THAT role so resume tailoring targets
+                        # the right JD — blind `company.jd_text = jd_text`
+                        # made the LAST PDF win (ION's Software Developer
+                        # resumes were tailored to the Product Analyst JD).
+                        matched_role = match_jd_pdf_to_role(
+                            company_role_names(company), filename, jd_text)
+                        if matched_role and jd_text:
+                            upsert_company_role(company, matched_role, jd_text=jd_text)
+                            logger.info(
+                                f"JD PDF {filename!r} assigned to role "
+                                f"'{matched_role}' of {company.name}."
+                            )
+                        # Drive-level jd_text: keep the richest text, never
+                        # clobber a longer JD with a shorter/later one.
+                        if jd_text and len(jd_text) > len(company.jd_text or ""):
+                            company.jd_text = jd_text
+
+                        # Merge (union) into jd_analysis instead of overwrite —
+                        # with several JD PDFs each overwrite erased the
+                        # previous role's keywords.
+                        analysis = dict(company.jd_analysis or {})
                         jd_intel = precompute_jd_intelligence_deterministic(jd_text, required_skills)
-                        company.jd_analysis["preferred_skills"] = jd_intel.get("preferred_skills", [])
-                        company.jd_analysis["interview_topics"] = jd_intel.get("interview_topics", [])
-                        
+                        for key, new_vals in (
+                            ("required_skills", required_skills),
+                            ("ats_keywords", jd_info.get("ats_keywords", [])),
+                            ("preferred_skills", jd_intel.get("preferred_skills", [])),
+                            ("interview_topics", jd_intel.get("interview_topics", [])),
+                        ):
+                            existing = [str(v) for v in (analysis.get(key) or [])]
+                            seen = {v.lower() for v in existing}
+                            for v in new_vals or []:
+                                if str(v).lower() not in seen:
+                                    existing.append(str(v))
+                                    seen.add(str(v).lower())
+                            analysis[key] = existing
+                        company.jd_analysis = analysis
+
                         from sqlalchemy.orm.attributes import flag_modified
                         flag_modified(company, "jd_analysis")
                         

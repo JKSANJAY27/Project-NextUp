@@ -39,6 +39,9 @@ class ResumeGenerationPipeline:
         self.company: Optional[Company] = None
         self.master_resume_data: Dict[str, Any] = {}
         self.jd_strategy: Dict[str, Any] = {}
+        # Multi-role drives: which role this tailoring targets (None = primary)
+        self.target_role: Optional[str] = None
+        self.role_entry: Optional[Dict[str, Any]] = None
 
     def run(self):
         logger.info(f"Running pipeline for resume job {self.job_id}")
@@ -71,6 +74,10 @@ class ResumeGenerationPipeline:
             logger.error(f"Hallucination validation failed: {error_str}")
             raise ValueError(f"AI suggested hallucinated/ungrounded information: {error_str}")
 
+        # Stage 4.2: Quality gate — a rewrite that drops metrics or merely
+        # truncates the original is worse than no rewrite; revert those.
+        self._quality_gate(suggestions)
+
         # Stage 4.5: ATS coverage report — which JD keywords the tailored
         # resume now hits, and which are genuinely missing from the student's
         # experience (so they know what to upskill, not what to fake).
@@ -100,6 +107,8 @@ class ResumeGenerationPipeline:
             try:
                 snapshot = json.loads(server_decrypt_field(self.job.input_payload_enc))
                 self.master_resume_data = snapshot.get("resume_data", {})
+                self.target_role = snapshot.get("target_role") or None
+                self._resolve_role_entry()
                 if self.master_resume_data:
                     return
             except Exception as e:
@@ -122,25 +131,65 @@ class ResumeGenerationPipeline:
             logger.error(f"Decryption failed for user {self.job.user_id} resume: {e}")
             raise ValueError("Failed to decrypt secure resume database records.")
 
+    def _resolve_role_entry(self):
+        """Find the roles-list entry matching target_role (multi-role drives)."""
+        if not self.company or not self.target_role:
+            return
+        from app.services.validator import normalize_role_name
+        for r in (self.company.roles or []):
+            if isinstance(r, dict) and normalize_role_name(r.get("role", "")) \
+                    == normalize_role_name(self.target_role):
+                self.role_entry = r
+                return
+
+    @property
+    def _display_role(self) -> str:
+        return self.target_role or self.company.role or "Software Engineer"
+
     def _load_jd_strategy(self):
-        # Fetch cached jd_strategy or generate if missing
-        if self.company.jd_strategy and isinstance(self.company.jd_strategy, dict) and self.company.jd_strategy.get("required_skills"):
+        import hashlib as _hashlib
+        from sqlalchemy.orm.attributes import flag_modified
+        from app.services.ai_service import generate_jd_strategy
+
+        # Role-specific JD when this drive hires for several roles (each
+        # announced with its own JD PDF) — tailoring against the wrong
+        # role's JD produced product-analyst resumes for a developer role.
+        role_jd = (self.role_entry or {}).get("jd_text") or ""
+        jd_text = role_jd or self.company.jd_text or ""
+        jd_hash = _hashlib.sha256(jd_text.encode("utf-8")).hexdigest()[:16]
+
+        # 1. Cached strategy on the role entry (multi-role path)
+        if self.role_entry:
+            cached = self.role_entry.get("jd_strategy")
+            if isinstance(cached, dict) and cached.get("required_skills") \
+                    and cached.get("jd_hash") == jd_hash:
+                self.jd_strategy = cached
+                logger.info(f"Using cached role-specific JD strategy for '{self._display_role}'.")
+                return
+
+        # 2. Cached drive-level strategy (single-role path)
+        if not self.role_entry and isinstance(self.company.jd_strategy, dict) \
+                and self.company.jd_strategy.get("required_skills"):
             self.jd_strategy = self.company.jd_strategy
             logger.info("Using cached JD strategy.")
+            return
+
+        logger.info(f"JD strategy missing for role '{self._display_role}'. Generating...")
+        # Use the resume gateway here: this code runs inside the resume
+        # worker and must not compete with email parsing for the parser
+        # container's CPU.
+        self.jd_strategy = generate_jd_strategy(
+            jd_text,
+            gateway=get_resume_gateway(),
+            role=self._display_role,
+            company_name=self.company.name,
+        )
+        if self.role_entry is not None:
+            self.role_entry["jd_strategy"] = self.jd_strategy
+            flag_modified(self.company, "roles")
         else:
-            logger.info("JD strategy missing. Generating on-the-fly...")
-            from app.services.ai_service import generate_jd_strategy
-            # Use the resume gateway here: this code runs inside the resume
-            # worker and must not compete with email parsing for the parser
-            # container's CPU.
-            self.jd_strategy = generate_jd_strategy(
-                self.company.jd_text or "",
-                gateway=get_resume_gateway(),
-                role=self.company.role,
-                company_name=self.company.name,
-            )
             self.company.jd_strategy = self.jd_strategy
-            self.db.commit()
+        self.db.commit()
 
     def _compact_resume_view(self) -> Dict[str, Any]:
         """Trim the master resume to only the sections the AI may rewrite.
@@ -177,9 +226,12 @@ class ResumeGenerationPipeline:
 
     def _compact_strategy_view(self) -> Dict[str, Any]:
         s = self.jd_strategy or {}
+        noise = self._company_noise_tokens()
         def _lst(key, cap):
             vals = s.get(key) or []
-            return [str(v) for v in vals][:cap] if isinstance(vals, list) else []
+            if not isinstance(vals, list):
+                return []
+            return [str(v) for v in vals if str(v).strip().lower() not in noise][:cap]
         return {
             "required_skills": _lst("required_skills", 15),
             "preferred_skills": _lst("preferred_skills", 10),
@@ -268,9 +320,71 @@ class ResumeGenerationPipeline:
             suggestions["optimized_summary"] = summary[:MAX_SUMMARY_CHARS]
         return suggestions
 
+    @staticmethod
+    def _metrics_in(text: str) -> set:
+        """Numbers/metrics in a text ('sub-1.2s', '200+', '20%', '10+')."""
+        import re
+        return set(re.findall(r"\d+(?:\.\d+)?(?:\s*%|\+|s\b|x\b)?", text or ""))
+
+    def _quality_gate(self, suggestions: Dict[str, Any]):
+        """Revert AI rewrites that lose information instead of tailoring.
+
+        The observed failure mode of small models is 'lazy shortening':
+        copying the original text minus a bullet or a metric. Such output
+        reads identical to the master but is strictly worse — keep the
+        student's original wording in that case.
+        """
+        originals = {
+            p.get("title", "").strip().lower(): p.get("description", "")
+            for p in (self.master_resume_data.get("projects") or [])
+            if isinstance(p, dict)
+        }
+        kept, reverted = [], 0
+        for op in suggestions.get("optimized_projects") or []:
+            orig = originals.get(op.get("title", "").strip().lower(), "")
+            new_desc = (op.get("description") or "").strip()
+            if not new_desc:
+                continue
+            # Capitalize each bullet's first letter (models emit 'designed a...')
+            parts = [b.strip() for b in new_desc.split("•") if b.strip()]
+            parts = [b[0].upper() + b[1:] if b else b for b in parts]
+            new_desc = " • ".join(parts) if len(parts) > 1 else (parts[0] if parts else new_desc)
+
+            lost_metrics = self._metrics_in(orig) - self._metrics_in(new_desc)
+            too_short = orig and len(new_desc) < 0.55 * len(orig)
+            if lost_metrics or too_short:
+                reverted += 1
+                logger.info(
+                    f"Quality gate: reverting '{op.get('title')}' rewrite "
+                    f"(lost metrics: {sorted(lost_metrics)[:5]}, too_short={too_short})."
+                )
+                op["description"] = orig
+            else:
+                op["description"] = new_desc
+            kept.append(op)
+        suggestions["optimized_projects"] = kept
+        if reverted:
+            suggestions["quality_note"] = (
+                f"{reverted} project rewrite(s) were reverted to your original "
+                "wording because the AI dropped metrics or content."
+            )
+
+        summary = (suggestions.get("optimized_summary") or "").strip()
+        if summary:
+            suggestions["optimized_summary"] = summary[0].upper() + summary[1:]
+
+    def _company_noise_tokens(self) -> set:
+        """Company-name tokens that must not count as ATS keywords."""
+        import re
+        name = (self.company.name if self.company else "") or ""
+        toks = {t for t in re.split(r"[^a-z0-9]+", name.lower()) if len(t) >= 3}
+        toks.add(name.strip().lower())
+        return toks
+
     def _ats_coverage(self, suggestions: Dict[str, Any]) -> Dict[str, Any]:
         """Deterministic keyword-coverage report for the tailored resume."""
         s = self.jd_strategy or {}
+        noise = self._company_noise_tokens()
         keywords: List[str] = []
         seen = set()
         for key in ("required_skills", "ats_keywords"):
@@ -278,7 +392,8 @@ class ResumeGenerationPipeline:
             if isinstance(vals, list):
                 for v in vals:
                     k = str(v).strip()
-                    if k and k.lower() not in seen:
+                    # 'ION Group' is not an ATS keyword — drop company-name noise
+                    if k and k.lower() not in seen and k.lower() not in noise:
                         seen.add(k.lower())
                         keywords.append(k)
         if not keywords:
@@ -331,16 +446,18 @@ class ResumeGenerationPipeline:
                     f'"{safe_note}"\n'
                 )
 
-        prompt = f"""Rewrite ONLY the summary and project descriptions of a student's resume for a specific job. Follow the RULES exactly.
+        prompt = f"""Rewrite ONLY the summary and project descriptions of a student's resume to target a specific job. Follow the RULES exactly.
 
 RULES:
 1. Only rephrase existing content. NEVER invent metrics, tools, projects, certifications, or experience the student did not list.
 2. Keep every project title EXACTLY as given. Do not add or remove projects.
-3. No buzzwords (spearheaded, synergized, leveraged, cutting-edge...). Simple, direct, impact-focused wording.
-4. Weave the JD's ATS keywords into the summary and project descriptions ONLY where the student's real experience supports them.
-5. Keep each project description under 60 words.
+3. PRESERVE every number, percentage and metric from the original text (e.g. "sub-1.2s", "200+ users", "20%"). Dropping a metric is an error.
+4. Do NOT merely shorten or copy the text — actively rework each description so the JD's keywords appear where the student's real work supports them, and lead with the aspects most relevant to the TARGET role.
+5. Each description stays a bullet list: separate bullets with "• " and start each bullet with a capitalized strong verb (Built, Engineered, Designed...).
+6. No buzzwords (spearheaded, synergized, leveraged, cutting-edge...). Simple, direct, impact-focused wording.
+7. The summary must be 2-3 sentences, name the student's strongest JD-relevant skills, and read like it was written for the TARGET role — not a generic profile.
 
-TARGET: {self.company.role} at {self.company.name}
+TARGET ROLE: {self._display_role} at {self.company.name}
 JD STRATEGY: {json.dumps(strategy_view, ensure_ascii=False)}
 
 STUDENT RESUME (editable sections only):
@@ -350,9 +467,9 @@ STUDENT PROFILE: branch={self.profile.branch}, specialization={self.profile.spec
 {custom}
 Return ONLY this JSON (no markdown, no explanations):
 {{
-  "optimized_summary": "2-3 sentence professional summary tailored to the role",
+  "optimized_summary": "2-3 sentence professional summary tailored to the TARGET role",
   "optimized_projects": [
-    {{"title": "EXACT original title", "description": "rephrased ATS-friendly description"}}
+    {{"title": "EXACT original title", "description": "• bullet one • bullet two"}}
   ]
 }}"""
 

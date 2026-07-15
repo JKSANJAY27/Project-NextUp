@@ -13,6 +13,7 @@ interface SuggestionsResult {
   optimized_projects?: ProjectSuggestion[];
   tailoring_mode?: string;
   tailoring_note?: string;
+  quality_note?: string;
   ats_coverage?: {
     matched: string[];
     missing: string[];
@@ -90,6 +91,13 @@ export default function ReviewChanges({
             {suggestions.tailoring_note ||
               "AI providers were unavailable — your skills and projects were re-ordered to match the JD keywords instead. All wording is your own."}
           </span>
+        </div>
+      )}
+
+      {suggestions.quality_note && (
+        <div className="flex items-start gap-3 p-3 rounded-lg border border-border bg-muted/10 text-muted-foreground text-xs">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          <span>{suggestions.quality_note}</span>
         </div>
       )}
 

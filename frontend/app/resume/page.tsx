@@ -20,6 +20,13 @@ import {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+interface CompanyRole {
+  role: string;
+  ctc?: string | null;
+  stipend?: string | null;
+  jd_text?: string | null;
+}
+
 interface Company {
   id: string;
   name: string;
@@ -32,6 +39,7 @@ interface Company {
   jd_preferred_skills?: string[];
   jd_ats_keywords?: string[];
   interview_topics?: string[];
+  roles?: CompanyRole[];
 }
 
 interface ResumeData {
@@ -65,6 +73,8 @@ export default function ResumePage() {
   });
   const [loadingCompanies, setLoadingCompanies] = useState(true);
   const [customPrompt, setCustomPrompt] = useState("");
+  // Multi-role drives: which role's JD the tailoring should target
+  const [targetRole, setTargetRole] = useState<string>("");
 
   // File upload
   const [uploading, setUploading] = useState(false);
@@ -268,7 +278,8 @@ export default function ResumePage() {
       const res = await api.post("/resumes/generate", {
         company_id: selectedCompanyId,
         latex_template: currentTemplate,
-        custom_prompt: customPrompt.trim() || undefined
+        custom_prompt: customPrompt.trim() || undefined,
+        target_role: targetRole || undefined
       });
       setActiveJobId(res.data.job_id);
       setView("progress");
@@ -332,6 +343,17 @@ export default function ResumePage() {
   // ─── Selected Company ─────────────────────────────────────────────────────
 
   const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
+  const driveRoles: CompanyRole[] = (selectedCompany?.roles || []).filter((r) => r.role);
+  const selectedRoleEntry = driveRoles.find((r) => r.role === targetRole);
+
+  // Default the target role whenever the selected drive changes
+  useEffect(() => {
+    setTargetRole((current) => {
+      if (driveRoles.some((r) => r.role === current)) return current;
+      return driveRoles[0]?.role || "";
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCompanyId, companies]);
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -347,7 +369,7 @@ export default function ResumePage() {
               <p className="text-xs text-muted-foreground mt-1">
                 Targeting{" "}
                 <span className="text-accent font-bold">{selectedCompany.name}</span>
-                {selectedCompany.role ? ` — ${selectedCompany.role}` : ""}
+                {(targetRole || selectedCompany.role) ? ` — ${targetRole || selectedCompany.role}` : ""}
               </p>
             )}
           </div>
@@ -665,12 +687,37 @@ export default function ResumePage() {
                 </div>
               )}
 
+              {/* Target role — drives can hire for several roles, each with
+                  its own JD; the resume is tailored to the one picked here */}
+              {driveRoles.length > 1 && (
+                <div>
+                  <p className="text-[10px] font-mono text-muted-foreground uppercase mb-1.5">
+                    Applying for role
+                  </p>
+                  <div className="relative">
+                    <select
+                      value={targetRole}
+                      onChange={(e) => setTargetRole(e.target.value)}
+                      style={{ colorScheme: "dark" }}
+                      className="w-full appearance-none bg-background text-foreground border border-accent/40 rounded-xl px-4 py-3 pr-10 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent transition [&>option]:bg-background [&>option]:text-foreground"
+                    >
+                      {driveRoles.map((r) => (
+                        <option key={r.role} value={r.role}>
+                          {r.role}{r.jd_text ? " — JD available" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                  </div>
+                </div>
+              )}
+
               {selectedCompany && (
                 <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
-                  {selectedCompany.role && (
+                  {(targetRole || selectedCompany.role) && (
                     <div className="bg-muted/10 border border-border/30 rounded-lg p-2.5">
                       <p className="text-muted-foreground mb-0.5">ROLE</p>
-                      <p className="text-foreground font-bold truncate">{selectedCompany.role}</p>
+                      <p className="text-foreground font-bold truncate">{targetRole || selectedCompany.role}</p>
                     </div>
                   )}
                   {selectedCompany.ctc && (
@@ -753,14 +800,15 @@ export default function ResumePage() {
                   </p>
                 )}
 
-                {selectedCompany.jd_text && (
+                {(selectedRoleEntry?.jd_text || selectedCompany.jd_text) && (
                   <details className="group border-t border-border/40 pt-3">
                     <summary className="cursor-pointer text-[11px] font-mono font-bold text-accent select-none list-none flex items-center gap-1.5">
                       <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
-                      View full Job Description
+                      View Job Description
+                      {selectedRoleEntry?.jd_text && targetRole ? ` — ${targetRole}` : ""}
                     </summary>
                     <pre className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap text-[10px] leading-relaxed font-mono text-muted-foreground bg-muted/10 border border-border/30 rounded-lg p-3">
-                      {selectedCompany.jd_text}
+                      {selectedRoleEntry?.jd_text || selectedCompany.jd_text}
                     </pre>
                   </details>
                 )}

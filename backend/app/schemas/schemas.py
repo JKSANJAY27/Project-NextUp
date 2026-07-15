@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from uuid import UUID
@@ -81,6 +81,22 @@ class CompanyOut(CompanyCreate):
     # Label for registration_deadline (which is effective_deadline: the next
     # crucial date — registration, then OA/PPT/interview once it passes).
     deadline_label: Optional[str] = None
+    # Multi-role drives: [{"role", "ctc", "stipend", "jd_text", ...}] — the
+    # resume tailor lets the student pick which role's JD to target.
+    roles: Optional[List[dict]] = None
+
+    @field_validator("roles", mode="before")
+    @classmethod
+    def _trim_role_entries(cls, v):
+        """Strip the cached jd_strategy blob — server-side only, bloats payloads."""
+        if not v:
+            return v
+        return [
+            {k: r.get(k) for k in ("role", "ctc", "stipend", "jd_text")
+             if r.get(k) is not None}
+            if isinstance(r, dict) else r
+            for r in v
+        ]
 
     class Config:
         from_attributes = True

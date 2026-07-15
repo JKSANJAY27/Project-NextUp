@@ -91,6 +91,12 @@ class Company(Base):
     requires_review = Column(Boolean, default=False)
     eligibility_raw_text = Column(String, nullable=True)
     jd_strategy = Column(JSON, default=dict)
+    # One drive can hire for several roles announced in the same mail (e.g.
+    # ION: Software Developer + Technical Product Analyst, each with its own
+    # JD PDF). List of {"role", "ctc", "stipend", "jd_text", "jd_strategy"}.
+    # The `role` column stays as the display string (joined role names);
+    # per-role data lives here and is what resume tailoring targets.
+    roles = Column(JSON, default=list)
 
     applications = relationship("Application", back_populates="company", cascade="all, delete-orphan")
     events = relationship("CompanyEvent", back_populates="company", cascade="all, delete-orphan")

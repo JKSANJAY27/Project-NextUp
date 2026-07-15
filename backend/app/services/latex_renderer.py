@@ -185,17 +185,40 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
                 })
             state["y"] += line_height
 
+    def split_bullets(desc):
+        """Normalize a description into logical bullets.
+
+        PDF-parsed resumes carry the ORIGINAL line wrapping: a newline is
+        usually mid-sentence, not a new bullet. Splitting on raw newlines
+        printed a stray '·' at the start of every wrapped line. A new bullet
+        starts only at a bullet marker (•, -, *, ▪); marker-less lines are
+        continuations of the previous bullet. Inline '•' separators (the AI
+        emits single-line '• a • b' strings) also split.
+        """
+        if isinstance(desc, list):
+            raw = [str(b) for b in desc]
+        else:
+            bullets = []
+            for line in str(desc).split("\n"):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stripped[0] in "•-*▪·" or not bullets:
+                    bullets.append(stripped.lstrip("•-*▪·").strip())
+                else:
+                    bullets[-1] += " " + stripped
+            raw = bullets
+        final = []
+        for b in raw:
+            parts = [p.strip() for p in re.split(r"\s*•\s*", b) if p.strip()]
+            final.extend(parts if parts else [b.strip()])
+        return [b for b in final if b]
+
     def draw_bullets(desc, indent: float = 12):
         """desc may be a newline-joined string or a list of bullet strings."""
-        if isinstance(desc, list):
-            bullets = [str(b) for b in desc]
-        else:
-            bullets = str(desc).split("\n")
-        for b in bullets:
-            b_clean = b.strip().lstrip("-*•▪").strip()
-            if b_clean:
-                draw_wrapped(f"•  {b_clean}", x=MARGIN + indent, fontsize=9,
-                             line_height=12)
+        for b_clean in split_bullets(desc):
+            draw_wrapped(f"•  {b_clean}", x=MARGIN + indent, fontsize=9,
+                         line_height=12)
 
     def section_header(title: str):
         ensure_space(34)
