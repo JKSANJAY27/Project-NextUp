@@ -78,6 +78,9 @@ class CompanyOut(CompanyCreate):
     id: UUID
     created_at: Optional[datetime] = None
     latest_event: Optional[LatestEventSchema] = None
+    # Label for registration_deadline (which is effective_deadline: the next
+    # crucial date — registration, then OA/PPT/interview once it passes).
+    deadline_label: Optional[str] = None
 
     class Config:
         from_attributes = True

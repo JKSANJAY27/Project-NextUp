@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import Column, String, Integer, Numeric, Boolean, DateTime, ForeignKey, JSON, UniqueConstraint, Index, LargeBinary
 from sqlalchemy.orm import relationship, deferred
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
@@ -158,50 +158,68 @@ class Company(Base):
         sorted_events = sorted(self.events, key=_ts, reverse=True)
         return sorted_events[0]
 
-    @property
-    def effective_deadline(self):
-        """Return the nearest upcoming pending timeline event date.
-        
-        Scans all CompanyEvents for this company looking for:
-          status == 'pending' (or null/unset) AND date >= today
-        Returns the minimum such date (next upcoming milestone).
-        Falls back to registration_deadline_db if no upcoming events found.
+    def _next_pending_milestone(self):
+        """The nearest upcoming timeline MILESTONE (stage set, real date).
+
+        Only structured milestone events count. Plain email-trail events
+        (stage=None, date=None) must never drive the deadline — the old code
+        fell back to `e.timestamp`, so the arrival time of the latest email
+        was shown as the 'Registration Deadline'.
         """
         now = datetime.utcnow()
-        upcoming_dates = []
+        best = None
+        for e in (self.events or []):
+            if not getattr(e, 'stage', None):
+                continue
+            # Treat NULL status as 'pending' for backward compat
+            if getattr(e, 'status', None) not in (None, 'pending', 'rescheduled'):
+                continue
+            d = getattr(e, 'date', None)
+            if not d:
+                continue
+            cmp_date = d.replace(tzinfo=None) if d.tzinfo else d
+            if cmp_date >= now and (best is None or cmp_date < best[0]):
+                best = (cmp_date, e)
+        return best
 
-        if self.events:
-            for e in self.events:
-                event_status = getattr(e, 'status', None)
-                # Treat NULL status as 'pending' for backward compat
-                if event_status in (None, 'pending', 'rescheduled'):
-                    event_date = getattr(e, 'date', None) or e.timestamp
-                    if event_date:
-                        # Strip tzinfo for naive comparison
-                        cmp_date = event_date.replace(tzinfo=None) if event_date.tzinfo else event_date
-                        if cmp_date >= now:
-                            upcoming_dates.append(cmp_date)
+    @property
+    def effective_deadline(self):
+        """The company's next crucial date-time, as an IST-aware datetime.
 
-        if upcoming_dates:
-            return min(upcoming_dates)
-
-        # Fall back to the old parsed_metadata.deadline_iso for events that predate new columns
-        if self.events:
-            def _ts(e):
-                t = e.timestamp
-                if t is None:
-                    return datetime.min
-                return t.replace(tzinfo=None) if t.tzinfo else t
-            for e in sorted(self.events, key=_ts, reverse=True):
-                if e.parsed_metadata and isinstance(e.parsed_metadata, dict):
-                    ev_date = e.parsed_metadata.get("deadline_iso")
-                    if ev_date:
-                        try:
-                            return datetime.fromisoformat(ev_date)
-                        except ValueError:
-                            pass
-
+        While registration is open this is the registration deadline; once
+        it passes, the next upcoming milestone (OA, PPT, interview...) takes
+        over. Milestone dates and the deadline column are stored in UTC;
+        returning an IST-aware value serializes with +05:30 so the frontend
+        renders the exact written time (naive UTC used to render as '1:30 pm'
+        for a 7:00 pm IST deadline).
+        """
+        ist = timezone(timedelta(hours=5, minutes=30))
+        best = self._next_pending_milestone()
+        if best:
+            return best[0].replace(tzinfo=timezone.utc).astimezone(ist)
+        if self.registration_deadline_db is not None and self.registration_deadline_db.tzinfo:
+            return self.registration_deadline_db.astimezone(ist)
         return self.registration_deadline_db
+
+    @property
+    def deadline_label(self):
+        """Human label for effective_deadline ('Registration Deadline',
+        'Online Test', 'Technical Interview', ...)."""
+        best = self._next_pending_milestone()
+        if best:
+            stage_labels = {
+                "REGISTRATION": "Registration Deadline",
+                "ONLINE_ASSESSMENT": "Online Test",
+                "PRE_PLACEMENT_TALK": "Pre-Placement Talk",
+                "TECHNICAL_INTERVIEW": "Technical Interview",
+                "HR_INTERVIEW": "HR Interview",
+                "OFFER": "Offer / Results",
+                "REJECTION": "Results",
+            }
+            return stage_labels.get(best[1].stage, "Next Milestone")
+        if self.registration_deadline_db:
+            return "Registration Deadline"
+        return None
 
     @property
     def registration_deadline(self):

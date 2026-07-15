@@ -486,8 +486,15 @@ Compensation rules:
 
 Deadline rules:
 - Convert deadline to ISO 8601 format: YYYY-MM-DDTHH:MM:SS
-- If only a date is given (no time), use T23:59:00 unless another time is stated.
-- If deadline says e.g. "7.00 pm", include the time: T19:00:00
+- deadline_iso is ONLY the REGISTRATION deadline (the "Last date for Registration" value). NEVER use the Date of Visit, drive date, test date, or interview date as deadline_iso.
+- If only a date is given (no time), use T00:00:00. NEVER invent a time that is not written in the email.
+- If deadline says e.g. "7.00 pm", include the time exactly as written: T19:00:00. Copy the written time verbatim — do not round, shift, or guess.
+- If the email has no explicit registration deadline, set deadline_iso.value = null. Do NOT guess one from other dates in the email.
+
+Date/time grounding rules (CRITICAL — applies to deadline_iso, date_of_visit, and every events[].date_iso):
+- Every date and time you output MUST be literally written in the email text. If you cannot point to the exact words in the email that state a date/time, output null for it.
+- If the email gives only a vague window (e.g. "16th & 17th July 2026 by 9.00 am") without saying which activity happens when, put that text in date_of_visit and do NOT fabricate per-stage dates or times.
+- venue: if the email states a place for a test/PPT/interview (e.g. "@ Pearl Research Park (PRP) - VIT Vellore campus", "at their office location", "Virtual mode"), copy it into that event's venue field. Otherwise null.
 
 Confidence rules:
 - Use 0.95+ when info is explicitly stated in the text.

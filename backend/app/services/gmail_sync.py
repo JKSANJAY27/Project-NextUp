@@ -4,6 +4,7 @@ import json
 import logging
 import base64
 import hashlib
+import dateparser
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from uuid import UUID
@@ -61,6 +62,40 @@ def clean_company_name_key(name: str) -> str:
     ).strip().lower()
     return re.sub(r'\s+', ' ', cleaned)
 
+def _key_in_text(key: str, text: str) -> bool:
+    """Word-boundary containment check for company-name keys.
+
+    Plain substring matching caused cross-company contamination: the key
+    'ion' (from 'ION Group' after suffix stripping) is a substring of
+    words like 'selection' and 'attention', so Danfoss/Valeo update mails
+    attached to the ION workspace. A key only matches as whole word(s).
+    """
+    if not key or len(key) < 3 or not text:
+        return False
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", text))
+
+
+def company_grounded_in_email(company_name: str, email_text_lower: str) -> bool:
+    """True when the company's name actually appears (word-bounded) in the
+    email text. Used as a hard gate before attaching an email to an existing
+    company workspace — an email that never mentions 'ION' must not land in
+    the ION Group workspace no matter what the fuzzy score says."""
+    if not company_name or not email_text_lower:
+        return False
+    full_key = clean_company_name_key(company_name).lower()
+    if _key_in_text(full_key, email_text_lower):
+        return True
+    # Fall back to significant individual tokens ('Valuelabs LLP' → 'valuelabs')
+    GENERIC_TOKENS = {
+        "technologies", "technology", "solutions", "systems", "software",
+        "services", "labs", "ltd", "limited", "pvt", "private", "inc", "llp",
+        "corp", "corporation", "company", "group", "india", "global", "the",
+    }
+    tokens = [t for t in re.split(r"[^a-z0-9]+", full_key)
+              if len(t) >= 3 and t not in GENERIC_TOKENS]
+    return any(_key_in_text(t, email_text_lower) for t in tokens)
+
+
 def is_company_name_match(name1: str, name2: str) -> bool:
     if not name1 or not name2:
         return False
@@ -68,18 +103,19 @@ def is_company_name_match(name1: str, name2: str) -> bool:
     k2 = clean_company_name_key(name2)
     if not k1 or not k2:
         return False
-    
+
     if k1 == k2:
         return True
-        
-    if (len(k1) >= 3 and k1 in k2) or (len(k2) >= 3 and k2 in k1):
+
+    # Word-boundary containment only ('ion' must never match 'attention')
+    if _key_in_text(k1, k2) or _key_in_text(k2, k1):
         overlap_ratio = len(k1) / len(k2) if len(k2) > 0 else 0
         if overlap_ratio > 1:
             overlap_ratio = 1 / overlap_ratio
         score = int(70 * overlap_ratio) + 20
         if score >= 60:
             return True
-            
+
     return False
 
 # Global scheduler
@@ -291,7 +327,12 @@ def _date_mentioned_in_text(dt: datetime, text_lower: str) -> bool:
     d, m = dt.day, dt.month
     mon = _MONTH_ABBR[m]
     patterns = [
-        rf"\b0?{d}\s*(?:st|nd|rd|th)?\s*(?:of\s+)?(?:\*+\s*)?{mon}",  # 8th July / 08 Jul
+        # 8th July / 08 Jul — also matches the first day of a written range
+        # like '16th and 17th July' or '16, 17 & 18 July' (the day may be
+        # separated from the month by a short list of other day numbers).
+        rf"\b0?{d}\s*(?:st|nd|rd|th)?"
+        rf"(?:\s*(?:,|and|&|to|[-–—])\s*\d{{1,2}}\s*(?:st|nd|rd|th)?){{0,4}}"
+        rf"\s*(?:of\s+)?(?:\*+\s*)?{mon}",
         rf"{mon}[a-z]*\.?\s+0?{d}\b",                                  # July 8
         rf"\b0?{d}\s*[-/.]\s*0?{m}\s*[-/.]\s*(?:20)?\d{{2}}",          # 08-07-2026, 8/7/26
         rf"\b0?{d}\s*[-/.]\s*0?{m}\b",                                 # 8/7, 08-07
@@ -367,6 +408,145 @@ def refine_midnight_time_from_text(dt_ist: datetime, text: str) -> datetime:
             hour = 0
         return dt_ist.replace(hour=hour, minute=minute)
     return dt_ist
+
+
+def _time_mentioned_in_text(dt_ist: datetime, text_lower: str) -> bool:
+    """Check whether a specific time-of-day is actually written in the email.
+
+    Guards against hallucinated times: the model once turned a '15-07-2026
+    7pm' deadline into 13:30. A kept time must appear in some written form:
+    '7pm', '7 pm', '7.00 pm', '7:00 PM', '19:00', '19.00'.
+    """
+    if not dt_ist or not text_lower:
+        return False
+    h24, minute = dt_ist.hour, dt_ist.minute
+    h12 = h24 % 12 or 12
+    meridiem = "am" if h24 < 12 else "pm"
+    patterns = [
+        # 12-hour with explicit minutes: 7.00 pm / 7:00 pm / 07:00pm
+        rf"\b0?{h12}[:.]{minute:02d}\s*(?:{meridiem}|hrs)\b",
+        # 24-hour: 19:00 / 19.00
+        rf"\b{h24:02d}[:.]{minute:02d}\b",
+    ]
+    if minute == 0:
+        # Bare hour forms: '7pm', '7 pm'
+        patterns.append(rf"\b0?{h12}\s*{meridiem}\b")
+    return any(re.search(p, text_lower) for p in patterns)
+
+
+# Label patterns that explicitly introduce a registration deadline in CDC mails
+_REG_DEADLINE_LABEL_RE = re.compile(
+    r"(?:last\s*date\s*(?:for|of|to)?\s*(?:registration|register|apply)"
+    r"|registration\s*deadline"
+    r"|register\s*(?:in\s+the\s+neo\s*pat[^\n]{0,40}?)?on\s*or\s*before)"
+    r"[\s:*_\-–—]*"
+    r"([^\n]{0,120}(?:\n[\s*_]*){0,6}[^\n]{0,120})",
+    re.IGNORECASE,
+)
+
+_DEADLINE_DATE_RE = re.compile(
+    r"(\d{1,2}\s*(?:st|nd|rd|th)?[\s\-/.]*(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[\s,]*\d{2,4}"
+    r"|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}"
+    r"|\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
+
+
+def extract_registration_deadline_ist(subject: str, body: str,
+                                      email_timestamp=None) -> Optional[datetime]:
+    """Deterministically extract the registration deadline from the email text.
+
+    Finds an explicit 'Last date for Registration'-style label, takes the
+    date written after it, and merges in a time-of-day written in the same
+    window. Returns a naive IST datetime, or None when no labeled deadline
+    exists. This is always preferred over the LLM's deadline_iso — the model
+    hallucinates both dates (copying the date-of-visit) and times (7pm→1:30pm).
+    """
+    text = f"{subject}\n{body}"
+    m = _REG_DEADLINE_LABEL_RE.search(text)
+    if not m:
+        return None
+    window = m.group(1) or ""
+    date_m = _DEADLINE_DATE_RE.search(window)
+    if not date_m:
+        return None
+
+    dp_settings = {
+        'TIMEZONE': 'Asia/Kolkata',
+        'RETURN_AS_TIMEZONE_AWARE': False,
+        'DATE_ORDER': 'DMY',
+        'PREFER_DAY_OF_MONTH': 'first',
+    }
+    if email_timestamp:
+        dp_settings['RELATIVE_BASE'] = (
+            email_timestamp.replace(tzinfo=None)
+            if hasattr(email_timestamp, 'tzinfo') else email_timestamp
+        )
+    parsed = dateparser.parse(date_m.group(1), settings=dp_settings)
+    if not parsed:
+        return None
+    deadline_ist = parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Merge a time written in the same window ('7pm', '(10.00 am)', '19:00')
+    t = _TIME_NEAR_DATE_RE.search(window)
+    if t:
+        if t.group(1) is not None:
+            hour, minute, ampm = int(t.group(1)), int(t.group(2)), t.group(3)
+        else:
+            hour, minute, ampm = int(t.group(4)), 0, t.group(5)
+        ampm = (ampm or "").lower()
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            if ampm == "pm" and hour != 12:
+                hour += 12
+            elif ampm == "am" and hour == 12:
+                hour = 0
+            if hour <= 23:
+                deadline_ist = deadline_ist.replace(hour=hour, minute=minute)
+    if (deadline_ist.hour, deadline_ist.minute) == (0, 0):
+        # No time in the immediate window — try the wider grounded search
+        deadline_ist = refine_midnight_time_from_text(deadline_ist, text)
+    return deadline_ist
+
+
+def ground_registration_deadline(deadline_ist: Optional[datetime], subject: str,
+                                 body: str, email_timestamp=None) -> Optional[datetime]:
+    """Return a source-grounded registration deadline (naive IST) or None.
+
+    Order of trust:
+      1. Deterministic extraction from an explicit 'Last date …' label.
+      2. The LLM value — but only if its calendar day is written in the email;
+         a non-midnight time is kept only if that time is also written.
+      3. None. A missing deadline is shown as 'Will be announced later',
+         which is always better than a fabricated one.
+    """
+    det = extract_registration_deadline_ist(subject, body, email_timestamp)
+    if det is not None:
+        if deadline_ist is not None and det != deadline_ist:
+            logger.info(
+                f"Registration deadline overridden by deterministic extraction: "
+                f"LLM={deadline_ist} → text={det}"
+            )
+        return det
+
+    if deadline_ist is None:
+        return None
+
+    text_lower = f"{subject}\n{body}".lower()
+    if not _date_mentioned_in_text(deadline_ist, text_lower):
+        logger.warning(
+            f"Dropping ungrounded registration deadline {deadline_ist} — "
+            f"its calendar day is not written in the email."
+        )
+        return None
+    if (deadline_ist.hour, deadline_ist.minute) != (0, 0) \
+            and not _time_mentioned_in_text(deadline_ist, text_lower):
+        logger.warning(
+            f"Registration deadline time {deadline_ist.time()} not written in the "
+            f"email — resetting to a text-grounded time."
+        )
+        deadline_ist = deadline_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        deadline_ist = refine_midnight_time_from_text(deadline_ist, f"{subject}\n{body}")
+    return deadline_ist
 
 
 def extract_neo_ids_from_text(text_val: str) -> list:
@@ -1332,6 +1512,21 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             # recover the written time so specs/milestones show 5:30 PM.
             registration_deadline = refine_midnight_time_from_text(
                 registration_deadline, f"{subject}\n{body}")
+        # HALLUCINATION GUARD: the deadline must be written in the email.
+        # Prefers a deterministic 'Last date for Registration' extraction;
+        # otherwise keeps the LLM value only if its day (and time) are
+        # actually present in the text. Kills both the '7pm → 1:30pm' time
+        # hallucination and 'date of visit copied as deadline' errors.
+        registration_deadline = ground_registration_deadline(
+            registration_deadline, subject, body, email_timestamp)
+        # The companies.registration_deadline column is timestamptz (UTC).
+        # registration_deadline is naive IST wall time — convert for storage,
+        # otherwise a 7:00 PM IST deadline is stored as 7:00 PM UTC (5.5h late).
+        registration_deadline_utc = None
+        if registration_deadline is not None:
+            from datetime import timezone as _tzu
+            registration_deadline_utc = (
+                registration_deadline - IST_OFFSET).replace(tzinfo=_tzu.utc)
         registration_link = ext_data.get("registration_link", {}).get("value")
         requires_review = validated_info.get("parser_metadata", {}).get("requires_review", False)
 
@@ -1505,28 +1700,27 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                     score = role_score
                     name_matched = False
 
+                    # NOTE: all containment checks are word-bounded (_key_in_text).
+                    # Raw substring matching let 'ion' (ION Group) match inside
+                    # 'selection'/'attention' and pulled Danfoss/Valeo emails
+                    # into the ION workspace.
                     # 1. Exact name match
                     if db_name_clean == ext_name_clean:
                         score += 60
                         name_matched = True
-                    # 2. Substring name match (parsed company name contains/is-contained-by DB name)
-                    elif (len(db_name_clean) >= 3 and db_name_clean in ext_name_clean) or (len(ext_name_clean) >= 3 and ext_name_clean in db_name_clean):
+                    # 2. Word-bounded name containment (parsed company name contains/is-contained-by DB name)
+                    elif _key_in_text(db_name_clean, ext_name_clean) or _key_in_text(ext_name_clean, db_name_clean):
                         overlap_ratio = len(db_name_clean) / len(ext_name_clean) if len(ext_name_clean) > 0 else 0
                         if overlap_ratio > 1:
                             overlap_ratio = 1 / overlap_ratio
                         score += int(30 * overlap_ratio) + 20
                         name_matched = True
-                    # 3. DB company name appears in the email subject (catches cases where the parser
-                    #    returned the subject line as the company name, e.g., regex fallback failures)
-                    elif len(db_name_clean) >= 3 and db_name_clean in subject_clean:
+                    # 3. DB company name appears (word-bounded) in the email subject (catches cases where
+                    #    the parser returned the subject line as the company name, e.g., regex fallback failures)
+                    elif _key_in_text(db_name_clean, subject_clean):
                         score += 45
                         name_matched = True
-                    # 4. Parsed company name appears in the DB company name (handles partial matches
-                    #    like 'Resmed Technology' matching 'ResMed Technology Pvt Ltd')
-                    elif len(ext_name_clean) >= 3 and ext_name_clean in db_name_clean:
-                        score += 40
-                        name_matched = True
-                        
+
                     if not name_matched:
                         continue
                     
@@ -1547,6 +1741,21 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                 # we prefer attaching to an existing company over creating a new one.
                 # For announcements, keep the higher threshold (50) to avoid merging distinct drives.
                 fuzzy_threshold = 40 if not is_announcement else 50
+
+                # GROUNDING GATE: regardless of the fuzzy score, an email may
+                # only attach to an existing workspace if that company's name
+                # is actually written in the email (subject or body). This is
+                # the final defense against cross-company contamination.
+                if best_score >= fuzzy_threshold and best_match is not None:
+                    email_haystack = f"{subject}\n{body}".lower()
+                    if not company_grounded_in_email(best_match.name, email_haystack):
+                        logger.warning(
+                            f"Job {job.id}: fuzzy match '{best_match.name}' (score {best_score}) "
+                            f"REJECTED — company name not found in email text. Subject: {subject!r}"
+                        )
+                        best_match = None
+                        best_score = -1
+
                 if best_score >= fuzzy_threshold:
                     company = best_match
                     logger.info(f"Fuzzy matched incoming email to existing company: {company.name} (ID: {company.id}, Match Score: {best_score})")
@@ -1711,7 +1920,7 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                     eligible_branches=eligible_branches,
                     eligibility_rules=eligibility_rules,
                     eligibility_raw_text=eligibility_raw_text,
-                    registration_deadline=registration_deadline,
+                    registration_deadline=registration_deadline_utc,
                     registration_link=registration_link,
                     recruitment_cycle=recruitment_cycle,
                     fingerprint=fingerprint,
@@ -1731,7 +1940,7 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                 if is_announcement:
                     # Announcement mail updating an existing company workspace:
                     # allow CTC, eligibility, branches, deadline, link to be refreshed.
-                    current_deadline = registration_deadline
+                    current_deadline = registration_deadline_utc
                     current_link = registration_link
                     if event_type not in ("REGISTRATION", "DEADLINE_EXTENSION", "NEW_DRIVE"):
                         current_deadline = None
@@ -1867,6 +2076,21 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                         f"not found in email text — dropping hallucinated date."
                     )
                     ev_date = None
+
+                # HALLUCINATION GUARD (time): the day is real, but the model
+                # may still have invented the time-of-day. Keep a non-midnight
+                # time only if it is written in the email; otherwise reset to
+                # midnight — the refine step below recovers only text-grounded
+                # times.
+                if ev_date is not None:
+                    _ev_ist = ev_date + IST_OFFSET
+                    if (_ev_ist.hour, _ev_ist.minute) != (0, 0) \
+                            and not _time_mentioned_in_text(_ev_ist, milestone_ground_text):
+                        logger.warning(
+                            f"Job {job.id}: milestone '{ev_item.get('label')}' time "
+                            f"{_ev_ist.time()} IST not found in email text — resetting to date-only."
+                        )
+                        ev_date = _ev_ist.replace(hour=0, minute=0, second=0, microsecond=0) - IST_OFFSET
                 ev_round = ev_item.get("round_number")
                 ev_sequence = ev_item.get("sequence")
                 ev_mandatory = ev_item.get("mandatory", True)
@@ -2063,6 +2287,22 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                 if event_deadline_iso:
                     try:
                         new_deadline_dt = datetime.fromisoformat(event_deadline_iso)
+                        # Ground against the email text before letting an
+                        # update mail overwrite the company deadline.
+                        from datetime import timezone as _tz3
+                        _dl_ist = new_deadline_dt
+                        if _dl_ist.tzinfo is not None:
+                            _dl_ist = _dl_ist.astimezone(
+                                _tz3(IST_OFFSET)).replace(tzinfo=None)
+                        grounded_dl = ground_registration_deadline(
+                            _dl_ist, subject, body, email_timestamp)
+                        if grounded_dl is None:
+                            raise ValueError(
+                                f"update-event deadline {event_deadline_iso} is not "
+                                f"grounded in the email text — skipped")
+                        # grounded_dl is naive IST; the column is timestamptz (UTC)
+                        new_deadline_dt = (grounded_dl - IST_OFFSET).replace(
+                            tzinfo=_tz3.utc)
                         company.registration_deadline_db = new_deadline_dt
                         # Store a human-readable label for this deadline in event metadata
                         if event.parsed_metadata is None:

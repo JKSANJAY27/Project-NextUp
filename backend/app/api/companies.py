@@ -292,9 +292,13 @@ def list_companies(
         comp_res["eligibility_reason"] = reason
         comp_res["eligibility_explanation"] = explanation
         
-        latest_evt = comp_res.get("latest_event")
-        if latest_evt and latest_evt.get("parsed_metadata"):
-            comp_res["deadline_label"] = latest_evt["parsed_metadata"].get("deadline_label")
+        # deadline_label is computed by the Company model (stage of the next
+        # upcoming milestone). Fall back to the latest event's stored label
+        # only when the model produced none.
+        if not comp_res.get("deadline_label"):
+            latest_evt = comp_res.get("latest_event")
+            if latest_evt and latest_evt.get("parsed_metadata"):
+                comp_res["deadline_label"] = latest_evt["parsed_metadata"].get("deadline_label")
         if not comp_res.get("deadline_label") and comp_res.get("registration_deadline"):
             comp_res["deadline_label"] = "Registration Deadline"
             
@@ -333,9 +337,10 @@ def get_company(
     company_res["eligibility_reason"] = reason_elig
     company_res["eligibility_explanation"] = explanation_elig
     
-    latest_evt = company_res.get("latest_event")
-    if latest_evt and latest_evt.get("parsed_metadata"):
-        company_res["deadline_label"] = latest_evt["parsed_metadata"].get("deadline_label")
+    if not company_res.get("deadline_label"):
+        latest_evt = company_res.get("latest_event")
+        if latest_evt and latest_evt.get("parsed_metadata"):
+            company_res["deadline_label"] = latest_evt["parsed_metadata"].get("deadline_label")
     if not company_res.get("deadline_label") and company_res.get("registration_deadline"):
         company_res["deadline_label"] = "Registration Deadline"
         

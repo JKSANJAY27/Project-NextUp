@@ -477,12 +477,21 @@ export default function CompanyWorkspaceModal({
                       <span className="text-sm font-bold text-foreground block">{selectedCompany.stipend || "Will be announced later"}</span>
                     </div>
                     <div className="space-y-1">
-                      <span className="text-[9px] font-black text-muted-foreground uppercase block">Registration Deadline</span>
+                      <span className="text-[9px] font-black text-muted-foreground uppercase block">
+                        {selectedCompany.deadline_label || "Registration Deadline"}
+                      </span>
                       <span className="text-sm font-bold text-foreground block">
-                        {selectedCompany.registration_deadline 
-                          ? new Date(selectedCompany.registration_deadline).toLocaleString("en-IN", { 
-                              day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true 
-                            }) 
+                        {selectedCompany.registration_deadline
+                          ? (() => {
+                              const d = new Date(selectedCompany.registration_deadline);
+                              // Midnight = the email gave a date but no time;
+                              // showing "12:00 am" would be an invented time.
+                              const dateOnly = d.getHours() === 0 && d.getMinutes() === 0;
+                              return d.toLocaleString("en-IN", {
+                                day: 'numeric', month: 'short', year: 'numeric',
+                                ...(dateOnly ? {} : { hour: '2-digit', minute: '2-digit', hour12: true }),
+                              });
+                            })()
                           : "Will be announced later"}
                       </span>
                     </div>
@@ -495,9 +504,9 @@ export default function CompanyWorkspaceModal({
                     <div className="space-y-1 md:col-span-2">
                       <span className="text-[9px] font-black text-muted-foreground uppercase block">Eligible Branches</span>
                       <span className="text-sm font-bold text-foreground block">
-                        {selectedCompany.eligible_branches && selectedCompany.eligible_branches.length > 0 
-                          ? selectedCompany.eligible_branches.join(", ") 
-                          : "All Branches"}
+                        {selectedCompany.eligible_branches && selectedCompany.eligible_branches.length > 0
+                          ? selectedCompany.eligible_branches.join(", ")
+                          : "Not specified — verify source email"}
                       </span>
                     </div>
                     <div className="space-y-1">
@@ -658,29 +667,6 @@ export default function CompanyWorkspaceModal({
                             )}
                           </div>
                         </div>
-
-                        {evt.confidence_scores && Object.keys(evt.confidence_scores).length > 0 && (
-                          <div className="flex flex-wrap gap-1.5">
-                            {Object.entries(evt.confidence_scores || {}).map(([field, score]: [string, any]) => {
-                              // Some events store 0-1 fractions, others 0-100
-                              // percents (showed as "5000% CONFIDENCE")
-                              const pct = Math.min(100, Math.round(score > 1 ? score : score * 100));
-                              const frac = pct / 100;
-                              return (
-                              <span
-                                key={field}
-                                className={`text-[8px] font-mono font-bold px-1.5 py-0.5 border ${
-                                  frac >= 0.85 ? 'bg-emerald-950/25 border-emerald-500/50 text-emerald-400' :
-                                  frac >= 0.70 ? 'bg-amber-950/25 border-amber-500/50 text-amber-400' :
-                                  'bg-red-950/25 border-red-500/50 text-red-400'
-                                }`}
-                              >
-                                {field.toUpperCase()}: {pct}% CONFIDENCE
-                              </span>
-                              );
-                            })}
-                          </div>
-                        )}
 
                         {evt.attachments && evt.attachments.length > 0 && (
                           <div className="flex flex-wrap gap-1.5">
@@ -857,9 +843,11 @@ export default function CompanyWorkspaceModal({
                           <AlertTriangle size={10} /> VERIFY FROM SOURCE
                         </span>
                       )}
-                      <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">REGISTRATION DEADLINE</span>
+                      <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">
+                        {(selectedCompany.deadline_label || "Registration Deadline").toUpperCase()}
+                      </span>
                       <span className="text-xs font-mono font-bold text-foreground">
-                        {selectedCompany.registration_deadline 
+                        {selectedCompany.registration_deadline
                           ? new Date(selectedCompany.registration_deadline).toLocaleString("en-IN")
                           : "—"}
                       </span>
