@@ -940,8 +940,11 @@ function DashboardPageContent() {
     const app = applications[c.id];
 
     if (activeTab === "opportunities") {
-      // Hide archived/auto_archived
-      if (effectiveState === "archived" || effectiveState === "auto_archived") return false;
+      // Hide archived/auto_archived — the application's own user_decision
+      // counts too: archiving from the tracking page sets it there, and a
+      // drive must never show in Opportunities and Archived simultaneously.
+      if (effectiveState === "archived" || effectiveState === "auto_archived"
+          || app?.user_decision === "archived") return false;
       // Hide confirmed tracking workspaces (they live in Tracking tab)
       if (app && app.user_decision === "tracking") return false;
       // Hide decision_pending — deadline passed, card belongs in Action Center

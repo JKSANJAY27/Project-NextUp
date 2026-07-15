@@ -71,6 +71,11 @@ class ResumeGenerationPipeline:
             logger.error(f"Hallucination validation failed: {error_str}")
             raise ValueError(f"AI suggested hallucinated/ungrounded information: {error_str}")
 
+        # Stage 4.5: ATS coverage report — which JD keywords the tailored
+        # resume now hits, and which are genuinely missing from the student's
+        # experience (so they know what to upskill, not what to fake).
+        suggestions["ats_coverage"] = self._ats_coverage(suggestions)
+
         # Stage 5: Save suggestions
         self._save_suggestions(suggestions)
         logger.info(f"Pipeline completed successfully for resume job {self.job_id}")
@@ -262,6 +267,43 @@ class ResumeGenerationPipeline:
         if len(summary) >= 20:
             suggestions["optimized_summary"] = summary[:MAX_SUMMARY_CHARS]
         return suggestions
+
+    def _ats_coverage(self, suggestions: Dict[str, Any]) -> Dict[str, Any]:
+        """Deterministic keyword-coverage report for the tailored resume."""
+        s = self.jd_strategy or {}
+        keywords: List[str] = []
+        seen = set()
+        for key in ("required_skills", "ats_keywords"):
+            vals = s.get(key)
+            if isinstance(vals, list):
+                for v in vals:
+                    k = str(v).strip()
+                    if k and k.lower() not in seen:
+                        seen.add(k.lower())
+                        keywords.append(k)
+        if not keywords:
+            return {"matched": [], "missing": [], "coverage_pct": None}
+
+        data = self.master_resume_data or {}
+        parts = [
+            suggestions.get("optimized_summary") or data.get("summary") or "",
+            " ".join(suggestions.get("optimized_skills") or []),
+        ]
+        for p in suggestions.get("optimized_projects") or []:
+            if isinstance(p, dict):
+                parts.append(f"{p.get('title', '')} {p.get('description', '')}")
+        for e in data.get("experience") or []:
+            if isinstance(e, dict):
+                parts.append(str(e.get("description", "")))
+        haystack = " ".join(parts).lower()
+
+        matched = [k for k in keywords if k.lower() in haystack]
+        missing = [k for k in keywords if k.lower() not in haystack]
+        return {
+            "matched": matched[:25],
+            "missing": missing[:15],
+            "coverage_pct": round(100 * len(matched) / len(keywords)),
+        }
 
     def _generate_suggestions(self) -> Dict[str, Any]:
         resume_view = self._compact_resume_view()

@@ -274,6 +274,34 @@ def start_resume_tailoring_job(
     logger.info(f"Queued resume tailoring job {job.id} for user {current_user.id} targeting company {req.company_id}.")
     return {"status": "success", "job_id": job.id}
 
+@router.get("/jobs-latest")
+def get_latest_resume_job(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """The user's most recent tailoring job — lets the resume page re-attach
+    to an in-flight generation after navigating away (the job runs server-side
+    and its suggestions persist in result_json, so nothing is lost)."""
+    job = db.query(AiGenerationJob).filter(
+        AiGenerationJob.user_id == current_user.id,
+        AiGenerationJob.job_type == "resume_tailor",
+    ).order_by(AiGenerationJob.created_at.desc()).first()
+
+    if not job:
+        return {"job": None}
+
+    return {
+        "job": {
+            "job_id": str(job.id),
+            "company_id": str(job.company_id) if job.company_id else None,
+            "status": job.status,
+            "created_at": job.created_at,
+            "completed_at": job.completed_at,
+            "result": job.result_json if job.status == "completed" else None,
+        }
+    }
+
+
 @router.get("/jobs/{job_id}")
 def get_resume_job_status(
     job_id: UUID,
@@ -403,11 +431,15 @@ def accept_resume_changes(
             Application.company_id == job.company_id
         ).first()
         if not application:
+            # user_decision MUST stay 'unseen': tailoring a resume is not
+            # applying. Creating this row as 'tracking' silently moved the
+            # drive out of Opportunities into Active Tracking even though
+            # the student never registered.
             application = Application(
                 user_id=current_user.id,
                 company_id=job.company_id,
                 status="Applied",
-                user_decision="tracking"
+                user_decision="unseen"
             )
             db.add(application)
         try:

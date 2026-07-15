@@ -777,6 +777,22 @@ def get_branches_from_text(text: str, strict: bool = False) -> List[str]:
     
     return list(branches)
 
+def extract_degree_types_deterministic(email_body: str) -> List[str]:
+    """Degree types (BTECH/MTECH/MCA/MSC) actually written in the mail.
+
+    Prefers the isolated 'Eligible Branches' block — degree mentions
+    elsewhere in a CDC mail (e.g. the boilerplate 'in UG (for PGs)'
+    eligibility line) do NOT mean the drive accepts PG students.
+    Shared by parse-time grounding and the DB repair script.
+    """
+    block = _extract_eligible_branches_block(email_body)
+    if block:
+        found = _extract_degree_types_from_block(block)
+        if found:
+            return found
+    return _extract_degree_types_from_block(email_body or "")
+
+
 def extract_multiple_roles_from_body(email_body: str) -> List[Dict[str, Any]]:
     """
     Detects and parses multi-role CTC/Stipend blocks from email bodies.
@@ -1185,19 +1201,53 @@ def ground_eligibility_in_source(
             continue
 
         # --- degree_types ---
+        # The deterministic extraction ALWAYS wins when it found evidence.
+        # Only-fill-when-empty was not enough: the model returned
+        # ["MSC","MTECH"] for ION's B.Tech-only drive (misreading the
+        # boilerplate 'in UG (for PGs)' line), which flipped eligibility
+        # for every student. When there is no deterministic evidence,
+        # keep only AI degrees whose token is actually written in the mail.
         dt_field = role.get("degree_types", {})
         dt_val = dt_field.get("value") if isinstance(dt_field, dict) else dt_field
-        if not dt_val and det_degrees:  # AI returned null / empty → override
-            role["degree_types"] = {"value": det_degrees, "confidence": 0.85}
-            logger.info(
-                "[eligibility_grounding] degree_types overridden with regex result: %s",
-                det_degrees,
-            )
+        if det_degrees:
+            if sorted(dt_val or []) != sorted(det_degrees):
+                logger.info(
+                    "[eligibility_grounding] degree_types %s overridden with grounded %s",
+                    dt_val, det_degrees,
+                )
+            role["degree_types"] = {"value": list(det_degrees), "confidence": 0.95}
+        elif isinstance(dt_val, list) and dt_val:
+            _DEGREE_TOKENS = {
+                "BTECH": r'\bb\.?\s*tech\b|\bbachelor\s+of\s+tech',
+                "MTECH": r'\bm\.?\s*tech\b|\bmaster\s+of\s+tech',
+                "MCA": r'\bm\.?\s*c\.?\s*a\b|\bmaster\s+of\s+computer\s+app',
+                "MSC": r'\bm\.?\s*sc\b|\bmaster\s+of\s+sci',
+            }
+            _body_l = (email_body or "").lower()
+            kept = [d for d in dt_val if isinstance(d, str) and re.search(
+                _DEGREE_TOKENS.get(d.strip().upper(), r'(?!x)x'), _body_l)]
+            if kept != dt_val:
+                logger.warning(
+                    "[eligibility_grounding] dropping ungrounded degree_types %s -> %s",
+                    dt_val, kept,
+                )
+                role["degree_types"] = {"value": kept, "confidence": 0.85}
 
         # --- eligible_branches ---
+        # When the mail has an explicit 'Eligible Branches' block, the
+        # deterministic scan of that block beats the model (which emitted
+        # junk entries like 'MTECH' as a branch). Without a block, only
+        # fill when the model returned nothing.
         eb_field = role.get("eligible_branches", {})
         eb_val = eb_field.get("value") if isinstance(eb_field, dict) else eb_field
-        if not eb_val and det_branches:  # AI returned null / empty → override
+        if branch_block and det_branches:
+            if sorted(eb_val or []) != sorted(det_branches):
+                logger.info(
+                    "[eligibility_grounding] eligible_branches %s overridden with grounded %s",
+                    eb_val, det_branches,
+                )
+            role["eligible_branches"] = {"value": det_branches, "confidence": 0.90}
+        elif not eb_val and det_branches:
             role["eligible_branches"] = {"value": det_branches, "confidence": 0.85}
             logger.info(
                 "[eligibility_grounding] eligible_branches overridden with regex result: %s",

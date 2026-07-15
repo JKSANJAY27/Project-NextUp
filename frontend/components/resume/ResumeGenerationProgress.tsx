@@ -10,6 +10,23 @@ interface ResumeGenerationProgressProps {
 
 type JobStatus = "queued" | "processing" | "completed" | "failed" | "cancelled";
 
+// Typical duration on the free-tier inference Space. Used only for the soft
+// progress bar / countdown — the real signal is the job status poll.
+const EXPECTED_SECONDS = 240;
+
+// Rotating status lines so a multi-minute generation never looks frozen.
+const PROCESSING_STAGES = [
+  "Loading your master resume snapshot...",
+  "Reading the company's JD strategy and ATS keywords...",
+  "Ranking your skills against the JD (deterministic, no AI)...",
+  "Selecting your most JD-relevant projects...",
+  "Rewriting the professional summary on the inference Space...",
+  "Rephrasing project impact bullets with JD terminology...",
+  "Running anti-hallucination checks against your real resume...",
+  "Computing the ATS keyword coverage report...",
+  "Almost there — finalizing suggestions...",
+];
+
 export default function ResumeGenerationProgress({
   jobId,
   onComplete,
@@ -18,6 +35,22 @@ export default function ResumeGenerationProgress({
   const [status, setStatus] = useState<JobStatus>("queued");
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [cancelling, setCancelling] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+
+  // Elapsed-seconds ticker (drives the stage text, progress % and ETA)
+  useEffect(() => {
+    const t = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const stageIdx = Math.min(
+    PROCESSING_STAGES.length - 1,
+    Math.floor(elapsed / (EXPECTED_SECONDS / PROCESSING_STAGES.length))
+  );
+  // Asymptotic progress: fills to ~95% over the expected duration, never 100
+  const progressPct = Math.min(95, Math.round((elapsed / EXPECTED_SECONDS) * 90));
+  const remaining = Math.max(0, EXPECTED_SECONDS - elapsed);
+  const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
   useEffect(() => {
     const checkJobStatus = async () => {
@@ -74,7 +107,8 @@ export default function ResumeGenerationProgress({
               JOB IN QUEUE
             </h3>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              Waiting for an active resume tailoring worker thread. Do not close this page — your job will be picked up momentarily.
+              Waiting for a resume tailoring worker to pick this up (usually under a minute).
+              You can leave this page — the job runs on the server and will be here when you return.
             </p>
           </div>
           <button
@@ -101,16 +135,31 @@ export default function ResumeGenerationProgress({
             </div>
           </div>
           <div className="space-y-2">
-            <h3 className="font-mono text-base font-bold tracking-tight text-accent animate-pulse">
+            <h3 className="font-mono text-base font-bold tracking-tight text-accent">
               TAILORING RESUME...
             </h3>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              AI is aligning your skills, summary, and experience highlights against the target JD strategy. Applying strict verification rules to prevent hallucinations.
+            {/* Rotating stage line — changes every ~25s so it's visibly alive */}
+            <p className="text-xs text-foreground font-mono min-h-[2rem] transition-all">
+              {PROCESSING_STAGES[stageIdx]}
+            </p>
+            <p className="text-[10px] text-muted-foreground font-mono">
+              Elapsed {fmt(elapsed)}
+              {remaining > 0
+                ? ` · est. ~${fmt(remaining)} remaining`
+                : " · taking longer than usual (free-tier hardware) — still working"}
             </p>
           </div>
           <div className="w-full bg-border h-1.5 rounded-full overflow-hidden">
-            <div className="bg-accent h-full w-2/3 rounded-full animate-shimmer" />
+            <div
+              className="bg-accent h-full rounded-full transition-all duration-1000"
+              style={{ width: `${progressPct}%` }}
+            />
           </div>
+          <p className="text-[10px] text-muted-foreground leading-relaxed border border-border/40 bg-muted/10 rounded-lg p-2.5">
+            💡 You can safely leave this page — generation continues on the server.
+            When you come back to the Resume page, it will re-attach to this job
+            (or show the finished result) automatically.
+          </p>
         </>
       )}
 

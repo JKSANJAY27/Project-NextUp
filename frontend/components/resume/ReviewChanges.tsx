@@ -13,6 +13,11 @@ interface SuggestionsResult {
   optimized_projects?: ProjectSuggestion[];
   tailoring_mode?: string;
   tailoring_note?: string;
+  ats_coverage?: {
+    matched: string[];
+    missing: string[];
+    coverage_pct: number | null;
+  };
 }
 
 interface ReviewChangesProps {
@@ -85,6 +90,56 @@ export default function ReviewChanges({
             {suggestions.tailoring_note ||
               "AI providers were unavailable — your skills and projects were re-ordered to match the JD keywords instead. All wording is your own."}
           </span>
+        </div>
+      )}
+
+      {/* ATS keyword coverage — what the tailored resume hits vs. genuinely lacks */}
+      {suggestions.ats_coverage && suggestions.ats_coverage.coverage_pct !== null && (
+        <div className="border border-border rounded-xl p-4 bg-card/25 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-xs font-bold tracking-tight">ATS Keyword Coverage</span>
+            <span className={`font-mono text-sm font-black ${
+              suggestions.ats_coverage.coverage_pct >= 70 ? "text-emerald-500" :
+              suggestions.ats_coverage.coverage_pct >= 40 ? "text-amber-500" : "text-destructive"
+            }`}>
+              {suggestions.ats_coverage.coverage_pct}%
+            </span>
+          </div>
+          <div className="w-full bg-border h-1.5 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full ${
+                suggestions.ats_coverage.coverage_pct >= 70 ? "bg-emerald-500" :
+                suggestions.ats_coverage.coverage_pct >= 40 ? "bg-amber-500" : "bg-destructive"
+              }`}
+              style={{ width: `${suggestions.ats_coverage.coverage_pct}%` }}
+            />
+          </div>
+          {suggestions.ats_coverage.matched.length > 0 && (
+            <div>
+              <p className="text-[10px] font-mono text-muted-foreground uppercase mb-1.5">Matched JD keywords</p>
+              <div className="flex flex-wrap gap-1.5">
+                {suggestions.ats_coverage.matched.map((k) => (
+                  <span key={k} className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/5 text-emerald-500">
+                    {k}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {suggestions.ats_coverage.missing.length > 0 && (
+            <div>
+              <p className="text-[10px] font-mono text-muted-foreground uppercase mb-1.5">
+                Not in your resume (never faked — consider learning these)
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {suggestions.ats_coverage.missing.map((k) => (
+                  <span key={k} className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-border bg-muted/20 text-muted-foreground">
+                    {k}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

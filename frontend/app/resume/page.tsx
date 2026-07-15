@@ -122,10 +122,58 @@ export default function ResumePage() {
     }
   }, []);
 
+  // Completed-but-unreviewed job found on page load (user navigated away
+  // while generating; the suggestions live in the DB job row, nothing lost)
+  const [recoverableJob, setRecoverableJob] = useState<{
+    job_id: string;
+    company_id: string | null;
+    result: Record<string, unknown>;
+  } | null>(null);
+
+  // Re-assert the workspace deep link (?company=<id>) on mount. The state
+  // initializer usually catches it, but SSR/hydration edge cases could leave
+  // the selection empty — this effect makes the preselect deterministic.
+  useEffect(() => {
+    const param = new URLSearchParams(window.location.search).get("company");
+    if (param) setSelectedCompanyId(param);
+  }, []);
+
   useEffect(() => {
     loadResume();
     loadCompanies();
   }, [loadResume, loadCompanies]);
+
+  // Re-attach to the user's latest tailoring job after navigation/reload.
+  // Runs once on mount: an in-flight job reopens the progress view; a job
+  // completed in the last 6h surfaces a "review it" banner.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const res = await api.get("/resumes/jobs-latest");
+        const job = res.data?.job;
+        if (!active || !job) return;
+        if (job.status === "queued" || job.status === "processing") {
+          if (job.company_id) setSelectedCompanyId(job.company_id);
+          setActiveJobId(job.job_id);
+          setView("progress");
+        } else if (job.status === "completed" && job.result && job.completed_at) {
+          const ageMs = Date.now() - new Date(job.completed_at).getTime();
+          if (ageMs < 6 * 60 * 60 * 1000) {
+            setRecoverableJob({
+              job_id: job.job_id,
+              company_id: job.company_id,
+              result: job.result,
+            });
+          }
+        }
+      } catch {
+        /* non-critical — page works without recovery */
+      }
+    })();
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ─── PDF Upload ───────────────────────────────────────────────────────────
 
@@ -418,6 +466,41 @@ export default function ResumePage() {
           <div className="flex items-center gap-3 p-3 rounded-xl border border-destructive/20 bg-destructive/5 text-destructive text-xs">
             <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{resumeError}</span>
+          </div>
+        )}
+
+        {/* Finished-while-away recovery banner */}
+        {recoverableJob && (
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-xl border border-accent/40 bg-accent/5 text-xs">
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-accent" />
+            <span className="flex-1 text-foreground">
+              A tailored resume you generated
+              {(() => {
+                const c = companies.find((x) => x.id === recoverableJob.company_id);
+                return c ? ` for ${c.name}` : "";
+              })()}{" "}
+              finished while you were away. Its suggestions are saved and ready to review.
+            </span>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => {
+                  if (recoverableJob.company_id) setSelectedCompanyId(recoverableJob.company_id);
+                  setActiveJobId(recoverableJob.job_id);
+                  setJobResult(recoverableJob.result);
+                  setRecoverableJob(null);
+                  setView("review");
+                }}
+                className="bg-accent text-accent-foreground font-mono font-bold px-3 py-1.5 rounded-lg hover:bg-accent/90 transition"
+              >
+                Review Suggestions
+              </button>
+              <button
+                onClick={() => setRecoverableJob(null)}
+                className="border border-border font-mono px-3 py-1.5 rounded-lg hover:border-muted-foreground transition"
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 
