@@ -125,24 +125,27 @@ def _escape_dict_recursive(data: Any) -> Any:
         return data
 
 def _render_fallback_pdf(content_json: dict) -> bytes:
-    """PDF renderer using PyMuPDF (the production path — no TeX on the Space).
+    """Professional PyMuPDF renderer (the production path — no TeX installed).
 
-    Renders EVERY section of the resume JSON with proper word-wrapping and
-    automatic page breaks. The previous version drew single-line text capped
-    at 90 chars on one page, which truncated every bullet and silently
-    dropped links, patents, recognition and anything past ~750pt.
+    Layout mirrors the classic single-column LaTeX resume: centered name and
+    contact header, uppercase section titles over full-width rules, bold entry
+    headers with right-aligned dates/tech, and hanging-indent bullets. Every
+    section of the resume JSON is rendered with real word-wrapping and
+    automatic page breaks.
     """
     import fitz
     logger.info("Generating resume PDF using PyMuPDF renderer.")
 
     PAGE_W, PAGE_H = 595, 842  # A4
-    MARGIN = 50
-    BOTTOM = PAGE_H - 50
+    MARGIN = 46
+    BOTTOM = PAGE_H - 46
+    CONTENT_W = PAGE_W - 2 * MARGIN
 
-    INK = (0.1, 0.1, 0.1)
-    BODY = (0.2, 0.2, 0.2)
-    MUTED = (0.4, 0.4, 0.4)
-    ACCENT = (0.2, 0.2, 0.5)
+    INK = (0.08, 0.08, 0.08)
+    BODY = (0.15, 0.15, 0.15)
+    MUTED = (0.38, 0.38, 0.38)
+    ACCENT = (0.15, 0.15, 0.35)
+    LINK_BLUE = (0.05, 0.25, 0.55)
 
     doc = fitz.open()
     state = {"page": doc.new_page(width=PAGE_W, height=PAGE_H), "y": MARGIN}
@@ -152,13 +155,18 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
             state["page"] = doc.new_page(width=PAGE_W, height=PAGE_H)
             state["y"] = MARGIN
 
+    def text_w(s: str, fontname: str, fontsize: float) -> float:
+        return fitz.get_text_length(str(s), fontname=fontname, fontsize=fontsize)
+
     def wrap(text_val: str, fontsize: float, fontname: str, width: float):
         """Greedy word-wrap using real glyph metrics."""
-        words = str(text_val).split()
+        # Base-14 Helvetica lacks em/en-dash glyphs (they render as '·')
+        text_val = str(text_val).replace("—", "-").replace("–", "-")
+        words = text_val.split()
         lines, current = [], ""
         for word in words:
             candidate = f"{current} {word}".strip()
-            if fitz.get_text_length(candidate, fontname=fontname, fontsize=fontsize) <= width:
+            if text_w(candidate, fontname, fontsize) <= width:
                 current = candidate
             else:
                 if current:
@@ -168,32 +176,65 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
             lines.append(current)
         return lines or [""]
 
-    def draw_wrapped(text_val: str, *, x: float = MARGIN, fontsize: float = 9.5,
+    def draw_wrapped(text_val: str, *, x: float = MARGIN, fontsize: float = 9.3,
                      fontname: str = "helv", color=BODY, width: float = None,
                      line_height: float = None, link_uri: str = None):
         width = width or (PAGE_W - MARGIN - x)
-        line_height = line_height or (fontsize + 3)
+        line_height = line_height or (fontsize + 2.6)
         for line in wrap(text_val, fontsize, fontname, width):
             ensure_space(line_height)
             state["page"].insert_text((x, state["y"]), line, fontsize=fontsize,
                                       fontname=fontname, color=color)
             if link_uri:
-                text_w = fitz.get_text_length(line, fontname=fontname, fontsize=fontsize)
+                lw = text_w(line, fontname, fontsize)
                 state["page"].insert_link({
                     "kind": fitz.LINK_URI, "uri": link_uri,
-                    "from": fitz.Rect(x, state["y"] - fontsize, x + text_w, state["y"] + 2),
+                    "from": fitz.Rect(x, state["y"] - fontsize, x + lw, state["y"] + 2),
                 })
             state["y"] += line_height
+
+    def draw_centered(text_val: str, *, fontsize: float, fontname: str = "helv",
+                      color=BODY, line_height: float = None):
+        line_height = line_height or (fontsize + 3)
+        for line in wrap(text_val, fontsize, fontname, CONTENT_W):
+            ensure_space(line_height)
+            lw = text_w(line, fontname, fontsize)
+            state["page"].insert_text(((PAGE_W - lw) / 2, state["y"]), line,
+                                      fontsize=fontsize, fontname=fontname, color=color)
+            state["y"] += line_height
+
+    def draw_row(left: str, right: str = "", *, left_font: str = "hebo",
+                 left_size: float = 10, right_font: str = "helv",
+                 right_size: float = 8.8, right_color=MUTED, gap_after: float = 2):
+        """Entry header: bold left text with right-aligned muted text (dates,
+        tech stack) on the same line — the signature look of LaTeX resumes."""
+        ensure_space(left_size + 4)
+        right = str(right or "").replace("—", "-").replace("–", "-").strip()
+        rw = text_w(right, right_font, right_size) if right else 0
+        left_width = CONTENT_W - rw - (10 if right else 0)
+        lines = wrap(left, left_size, left_font, left_width)
+        state["page"].insert_text((MARGIN, state["y"]), lines[0],
+                                  fontsize=left_size, fontname=left_font, color=INK)
+        if right:
+            state["page"].insert_text((PAGE_W - MARGIN - rw, state["y"]), right,
+                                      fontsize=right_size, fontname=right_font,
+                                      color=right_color)
+        state["y"] += left_size + 2.5
+        for extra in lines[1:]:
+            ensure_space(left_size + 3)
+            state["page"].insert_text((MARGIN, state["y"]), extra,
+                                      fontsize=left_size, fontname=left_font, color=INK)
+            state["y"] += left_size + 2.5
+        state["y"] += gap_after
 
     def split_bullets(desc):
         """Normalize a description into logical bullets.
 
         PDF-parsed resumes carry the ORIGINAL line wrapping: a newline is
-        usually mid-sentence, not a new bullet. Splitting on raw newlines
-        printed a stray '·' at the start of every wrapped line. A new bullet
-        starts only at a bullet marker (•, -, *, ▪); marker-less lines are
-        continuations of the previous bullet. Inline '•' separators (the AI
-        emits single-line '• a • b' strings) also split.
+        usually mid-sentence, not a new bullet. A new bullet starts only at a
+        bullet marker (•, -, *, ▪); marker-less lines are continuations of the
+        previous bullet. Inline '•' separators (the AI emits single-line
+        '• a • b' strings) also split.
         """
         if isinstance(desc, list):
             raw = [str(b) for b in desc]
@@ -214,23 +255,43 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
             final.extend(parts if parts else [b.strip()])
         return [b for b in final if b]
 
-    def draw_bullets(desc, indent: float = 12):
-        """desc may be a newline-joined string or a list of bullet strings."""
+    def draw_bullets(desc, indent: float = 10):
+        """Hanging-indent bullets: wrapped lines align under the text, not
+        under the bullet marker."""
+        bullet_x = MARGIN + indent
+        body_x = bullet_x + 9
+        fontsize, line_height = 9.2, 11.8
         for b_clean in split_bullets(desc):
-            draw_wrapped(f"•  {b_clean}", x=MARGIN + indent, fontsize=9,
-                         line_height=12)
+            first = True
+            for line in wrap(b_clean, fontsize, "helv", PAGE_W - MARGIN - body_x):
+                ensure_space(line_height)
+                if first:
+                    # A drawn disc beats the font's bullet glyph (WinAnsi
+                    # Helvetica renders '•' as a faint mid-dot).
+                    shape = state["page"].new_shape()
+                    shape.draw_circle(
+                        fitz.Point(bullet_x + 1.4, state["y"] - fontsize * 0.32), 1.15)
+                    shape.finish(color=BODY, fill=BODY)
+                    shape.commit()
+                    first = False
+                state["page"].insert_text((body_x, state["y"]), line,
+                                          fontsize=fontsize, fontname="helv",
+                                          color=BODY)
+                state["y"] += line_height
+            state["y"] += 0.8
 
     def section_header(title: str):
-        ensure_space(34)
-        state["y"] += 10
-        state["page"].insert_text((MARGIN, state["y"]), title.upper(), fontsize=11,
+        ensure_space(30)
+        state["y"] += 9
+        state["page"].insert_text((MARGIN, state["y"]), title.upper(), fontsize=10.5,
                                   fontname="hebo", color=ACCENT)
-        state["y"] += 8
+        state["y"] += 4.5
         shape = state["page"].new_shape()
-        shape.draw_line(fitz.Point(MARGIN, state["y"]), fitz.Point(MARGIN + 130, state["y"]))
-        shape.finish(color=ACCENT, width=1.5)
+        shape.draw_line(fitz.Point(MARGIN, state["y"]),
+                        fitz.Point(PAGE_W - MARGIN, state["y"]))
+        shape.finish(color=(0.55, 0.55, 0.62), width=0.8)
         shape.commit()
-        state["y"] += 12
+        state["y"] += 11
 
     def first_of(d: dict, *keys) -> str:
         for k in keys:
@@ -239,75 +300,92 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
                 return str(v)
         return ""
 
-    # ── 1. Header: name + contact + links ─────────────────────────────
+    # ── 1. Header: centered name + contact + links ─────────────────────
     personal = content_json.get("personal", {}) or {}
     name = str(personal.get("name") or "Student Resume").upper()
-    ensure_space(24)
-    state["page"].insert_text((MARGIN, state["y"] + 12), name, fontsize=16,
-                              fontname="hebo", color=INK)
-    state["y"] += 30
+    ensure_space(26)
+    state["y"] += 14
+    nw = text_w(name, "hebo", 19)
+    state["page"].insert_text(((PAGE_W - nw) / 2, state["y"]), name,
+                              fontsize=19, fontname="hebo", color=INK)
+    state["y"] += 15
 
-    contact_parts = [p for p in (personal.get("email"), personal.get("phone"),
-                                 personal.get("location")) if p]
+    contact_parts = [str(p) for p in (personal.get("email"), personal.get("phone"),
+                                      personal.get("location")) if p]
     if contact_parts:
-        draw_wrapped("  |  ".join(str(p) for p in contact_parts),
-                     fontsize=9, color=MUTED, line_height=13)
+        draw_centered("  |  ".join(contact_parts), fontsize=8.8, color=MUTED,
+                      line_height=12)
 
-    # Profile links — clickable, one line
+    # Profile links — clickable, centered on one row
     links = []
     for label, key in (("Portfolio", "website"), ("LinkedIn", "linkedin"), ("GitHub", "github")):
         url = str(personal.get(key) or "").strip()
         if url:
             full_url = url if url.startswith("http") else f"https://{url}"
-            links.append((f"{label}: {url}", full_url))
+            links.append((label, full_url))
     if links:
-        x = MARGIN
-        ensure_space(13)
-        for i, (label_text, uri) in enumerate(links):
-            display = label_text + ("   " if i < len(links) - 1 else "")
-            text_w = fitz.get_text_length(display, fontname="helv", fontsize=8.5)
-            if x + text_w > PAGE_W - MARGIN:  # wrap link row if needed
-                state["y"] += 12
-                ensure_space(13)
-                x = MARGIN
-            state["page"].insert_text((x, state["y"]), display, fontsize=8.5,
-                                      fontname="helv", color=(0.1, 0.3, 0.6))
+        sep = "   |   "
+        row_parts = [lbl for lbl, _ in links]
+        row_text = sep.join(row_parts)
+        total = text_w(row_text, "helv", 8.8)
+        x = (PAGE_W - total) / 2
+        ensure_space(12)
+        for i, (lbl, uri) in enumerate(links):
+            lw = text_w(lbl, "helv", 8.8)
+            state["page"].insert_text((x, state["y"]), lbl, fontsize=8.8,
+                                      fontname="helv", color=LINK_BLUE)
             state["page"].insert_link({
                 "kind": fitz.LINK_URI, "uri": uri,
-                "from": fitz.Rect(x, state["y"] - 8.5, x + text_w, state["y"] + 2),
+                "from": fitz.Rect(x, state["y"] - 8.8, x + lw, state["y"] + 2),
             })
-            x += text_w
-        state["y"] += 13
+            x += lw
+            if i < len(links) - 1:
+                state["page"].insert_text((x, state["y"]), sep, fontsize=8.8,
+                                          fontname="helv", color=MUTED)
+                x += text_w(sep, "helv", 8.8)
+        state["y"] += 12
 
-    state["y"] += 4
-    shape = state["page"].new_shape()
-    shape.draw_line(fitz.Point(MARGIN, state["y"]), fitz.Point(PAGE_W - MARGIN, state["y"]))
-    shape.finish(color=(0.8, 0.8, 0.8), width=1)
-    shape.commit()
-    state["y"] += 6
+    state["y"] += 2
 
     # ── 2. Summary ─────────────────────────────────────────────────────
     summary = content_json.get("summary", "")
     if summary:
         section_header("Summary")
-        draw_wrapped(summary)
+        draw_wrapped(str(summary), fontsize=9.3, line_height=12.2)
 
     # ── 3. Skills (categorized when available) ─────────────────────────
     skills = content_json.get("skills", [])
     skills_categories = content_json.get("skills_categories") or {}
-    if skills_categories or skills:
+    cat_source = None
+    if isinstance(skills_categories, dict) and skills_categories:
+        cat_source = skills_categories
+    elif isinstance(skills, dict):
+        cat_source = skills
+    if cat_source or skills:
         section_header("Skills")
-        if isinstance(skills_categories, dict) and skills_categories:
-            for category, items in skills_categories.items():
-                if isinstance(items, list) and items:
-                    draw_wrapped(f"{category}: {', '.join(str(i) for i in items)}",
-                                 fontsize=9, line_height=12.5)
-        elif isinstance(skills, dict):
-            for category, items in skills.items():
-                draw_wrapped(f"{category}: {', '.join(str(i) for i in items)}",
-                             fontsize=9, line_height=12.5)
+        if cat_source:
+            for category, items in cat_source.items():
+                if not (isinstance(items, list) and items):
+                    continue
+                # Bold category label, regular items — mixed fonts inline
+                label = f"{category}: "
+                lw = text_w(label, "hebo", 9.2)
+                items_text = ", ".join(str(i) for i in items)
+                lines = wrap(items_text, 9.2, "helv", CONTENT_W - lw)
+                ensure_space(12)
+                state["page"].insert_text((MARGIN, state["y"]), label,
+                                          fontsize=9.2, fontname="hebo", color=INK)
+                state["page"].insert_text((MARGIN + lw, state["y"]), lines[0],
+                                          fontsize=9.2, fontname="helv", color=BODY)
+                state["y"] += 11.8
+                for extra in lines[1:]:
+                    ensure_space(12)
+                    state["page"].insert_text((MARGIN + lw, state["y"]), extra,
+                                              fontsize=9.2, fontname="helv", color=BODY)
+                    state["y"] += 11.8
         elif isinstance(skills, list) and skills:
-            draw_wrapped(", ".join(str(s) for s in skills))
+            draw_wrapped(", ".join(str(s) for s in skills), fontsize=9.2,
+                         line_height=12)
 
     # ── 4. Experience ──────────────────────────────────────────────────
     experience = content_json.get("experience", [])
@@ -320,14 +398,11 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
             comp = first_of(exp, "company", "organization")
             dates = first_of(exp, "dates", "period", "duration", "year")
             header = " — ".join(p for p in (role, comp) if p)
-            if dates:
-                header += f"  ({dates})"
-            ensure_space(16)
-            draw_wrapped(header, fontname="hebo", line_height=14)
+            draw_row(header, dates)
             desc = exp.get("description") or exp.get("bullets") or ""
             if desc:
                 draw_bullets(desc)
-            state["y"] += 4
+            state["y"] += 3
 
     # ── 5. Projects ────────────────────────────────────────────────────
     projects = content_json.get("projects", [])
@@ -338,13 +413,11 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
                 continue
             title = first_of(proj, "title", "name")
             tech = first_of(proj, "tech", "stack", "technologies")
-            header = title + (f"  [{tech}]" if tech else "")
-            ensure_space(16)
-            draw_wrapped(header, fontname="hebo", line_height=14)
+            draw_row(title, tech, right_color=ACCENT)
             desc = proj.get("description") or proj.get("bullets") or ""
             if desc:
                 draw_bullets(desc)
-            state["y"] += 4
+            state["y"] += 3
 
     # ── 6. Education ───────────────────────────────────────────────────
     education = content_json.get("education", [])
@@ -358,12 +431,13 @@ def _render_fallback_pdf(content_json: dict) -> bytes:
             dates = first_of(edu, "dates", "year", "years", "period")
             score = first_of(edu, "gpa", "cgpa", "score", "percentage")
             line = " — ".join(p for p in (deg, inst) if p)
-            if dates:
-                line += f"  ({dates})"
-            draw_wrapped(line, fontname="hebo", line_height=14)
+            score_str = ""
             if score:
                 score_str = score if any(c.isalpha() for c in score) else f"Score: {score}"
-                draw_wrapped(score_str, x=MARGIN + 12, fontsize=9, line_height=12)
+            draw_row(line, dates)
+            if score_str:
+                draw_wrapped(score_str, x=MARGIN + 10, fontsize=9,
+                             line_height=11.5, color=MUTED)
             state["y"] += 2
 
     # ── 7. Extra sections: patents, achievements, certifications, awards ─
