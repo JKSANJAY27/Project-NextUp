@@ -19,13 +19,6 @@ ENV SPACE_MODEL=qwen2.5:3b
 COPY ./requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
-# Bake the model into the image at BUILD time so a Space restart never has to
-# re-download ~2GB (which made the first requests after boot time out).
-RUN ollama serve & \
-    sleep 6 && \
-    ollama pull ${SPACE_MODEL} && \
-    pkill ollama
-
 COPY . .
 
 RUN chmod +x start.sh
