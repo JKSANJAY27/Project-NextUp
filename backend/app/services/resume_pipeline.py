@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.models import AiGenerationJob, StudentProfile, Company, Resume
-from app.services.ai_provider import get_resume_gateway
+from app.services.ai_provider import get_resume_gateway, AIUnavailableError
 from app.services.ai_service import sanitize_tailored_resume
 from app.core.gmail_token_cache import get_session_key
 from app.core.security import decrypt_field, server_decrypt_field
@@ -16,12 +16,18 @@ logger = logging.getLogger("nextup.resume_pipeline")
 # Free-tier Space CPUs evaluate ~10-20 prompt tokens/sec and generate ~3-5
 # tokens/sec, so BOTH input and output must stay small for jobs to finish
 # in minutes. These caps keep the prompt ≈1200-1800 tokens.
-MAX_PROJECTS = 6
-MAX_PROJECT_DESC_CHARS = 500
-MAX_EXPERIENCE = 4
+#
+# The AI's job is deliberately minimal: it only REPHRASES the summary and the
+# most JD-relevant project descriptions. Skills ordering is deterministic
+# (pure keyword matching — an LLM adds nothing but hallucination risk), and
+# education / personal details / certifications are rendered verbatim from
+# the master resume and never sent to the model at all.
+MAX_PROJECTS = 4
+MAX_PROJECT_DESC_CHARS = 400
+MAX_EXPERIENCE = 3
 MAX_SKILLS = 30
-MAX_SUMMARY_CHARS = 700
-MAX_OUTPUT_TOKENS = 900
+MAX_SUMMARY_CHARS = 600
+MAX_OUTPUT_TOKENS = 600
 
 
 class ResumeGenerationPipeline:
@@ -43,8 +49,20 @@ class ResumeGenerationPipeline:
         # Stage 2: Load JD Strategy
         self._load_jd_strategy()
 
-        # Stage 3: Generate suggestions
-        suggestions = self._generate_suggestions()
+        # Stage 3: Generate suggestions. When every AI provider is down
+        # (Space cold, HF credits depleted), degrade to a deterministic
+        # tailoring pass instead of failing the job — the student still gets
+        # a JD-ordered, fully grounded resume.
+        try:
+            suggestions = self._generate_suggestions()
+        except AIUnavailableError as e:
+            logger.warning(
+                f"Job {self.job_id}: all AI providers failed ({str(e)[:300]}). "
+                f"Falling back to deterministic tailoring."
+            )
+            suggestions = self._deterministic_suggestions()
+            self.job.model_used = "deterministic-fallback"
+            self.db.commit()
 
         # Stage 4: Validate suggestions (Hallucination check)
         errors = self._validate_hallucinations(suggestions)
@@ -165,9 +183,96 @@ class ResumeGenerationPipeline:
             "role_summary": str(s.get("role_summary", ""))[:200],
         }
 
+    # ------------------------------------------------------------------
+    # Deterministic tailoring — no AI required.
+    # ------------------------------------------------------------------
+
+    def _jd_keywords(self) -> List[str]:
+        s = self.jd_strategy or {}
+        keywords: List[str] = []
+        for key in ("required_skills", "preferred_skills", "ats_keywords"):
+            vals = s.get(key)
+            if isinstance(vals, list):
+                keywords.extend(str(v) for v in vals if v)
+        return keywords
+
+    @staticmethod
+    def _match_score(text: str, keywords: List[str]) -> int:
+        """How strongly a piece of resume text matches the JD keywords."""
+        tl = (text or "").lower()
+        if not tl:
+            return 0
+        score = 0
+        for kw in keywords:
+            k = kw.strip().lower()
+            if not k:
+                continue
+            if tl == k:
+                score += 100
+            elif k in tl or tl in k:
+                score += 10
+        return score
+
+    def _rank_skills(self, skills: List[str]) -> List[str]:
+        """Reorder the student's own skills so JD-matched ones come first.
+
+        Pure string matching against the JD strategy keywords — this is what
+        ATS systems do, so an LLM adds nothing here except hallucination risk
+        and tokens. The list content never changes, only the order.
+        """
+        keywords = self._jd_keywords()
+        return sorted(
+            skills,
+            key=lambda s: -self._match_score(s, keywords),
+        )
+
+    def _rank_projects(self, projects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        keywords = self._jd_keywords()
+        return sorted(
+            projects,
+            key=lambda p: -self._match_score(
+                f"{p.get('title', '')} {p.get('description', '')}", keywords),
+        )
+
+    def _deterministic_suggestions(self) -> Dict[str, Any]:
+        """Grounded tailoring without any model call.
+
+        - skills: JD-keyword-ordered subset of the student's own skills
+        - projects: original titles/descriptions, most JD-relevant first
+        - summary: the student's own summary (never synthesized text)
+        """
+        data = self.master_resume_data or {}
+        skills = [str(s) for s in (data.get("skills") or [])]
+        projects = [
+            {"title": str(p.get("title", "")),
+             "description": str(p.get("description", ""))}
+            for p in (data.get("projects") or []) if isinstance(p, dict)
+        ]
+
+        suggestions: Dict[str, Any] = {
+            "optimized_skills": self._rank_skills(skills),
+            "optimized_projects": self._rank_projects(projects)[:MAX_PROJECTS],
+            "tailoring_mode": "deterministic",
+            "tailoring_note": (
+                "AI providers were unavailable — skills and projects were "
+                "re-ordered to match the JD keywords; all wording is your own."
+            ),
+        }
+        summary = (data.get("summary") or "").strip()
+        if len(summary) >= 20:
+            suggestions["optimized_summary"] = summary[:MAX_SUMMARY_CHARS]
+        return suggestions
+
     def _generate_suggestions(self) -> Dict[str, Any]:
         resume_view = self._compact_resume_view()
         strategy_view = self._compact_strategy_view()
+
+        # Send the model only the MOST JD-relevant projects — fewer prompt
+        # tokens and fewer output tokens on 2-vCPU Space hardware.
+        resume_view["projects"] = self._rank_projects(
+            resume_view.get("projects") or [])[:MAX_PROJECTS]
+        # Skills are ordered deterministically and NOT rewritten by the model.
+        deterministic_skills = self._rank_skills(resume_view.pop("skills", []))
 
         custom = ""
         if self.job.custom_prompt:
@@ -184,14 +289,14 @@ class ResumeGenerationPipeline:
                     f'"{safe_note}"\n'
                 )
 
-        prompt = f"""Tailor a student's resume for a specific job. Follow the RULES exactly.
+        prompt = f"""Rewrite ONLY the summary and project descriptions of a student's resume for a specific job. Follow the RULES exactly.
 
 RULES:
-1. Only rephrase and reorder existing content. NEVER invent metrics, tools, projects, certifications, or experience the student did not list.
-2. Keep every project title EXACTLY as given.
-3. optimized_skills must only contain skills from the student's list (you may reorder to put JD-matching skills first, and drop irrelevant ones).
-4. No buzzwords (spearheaded, synergized, leveraged, cutting-edge...). Simple, direct, impact-focused wording.
-5. Weave the JD's ATS keywords into the summary and project descriptions ONLY where the student's real experience supports them.
+1. Only rephrase existing content. NEVER invent metrics, tools, projects, certifications, or experience the student did not list.
+2. Keep every project title EXACTLY as given. Do not add or remove projects.
+3. No buzzwords (spearheaded, synergized, leveraged, cutting-edge...). Simple, direct, impact-focused wording.
+4. Weave the JD's ATS keywords into the summary and project descriptions ONLY where the student's real experience supports them.
+5. Keep each project description under 60 words.
 
 TARGET: {self.company.role} at {self.company.name}
 JD STRATEGY: {json.dumps(strategy_view, ensure_ascii=False)}
@@ -204,7 +309,6 @@ STUDENT PROFILE: branch={self.profile.branch}, specialization={self.profile.spec
 Return ONLY this JSON (no markdown, no explanations):
 {{
   "optimized_summary": "2-3 sentence professional summary tailored to the role",
-  "optimized_skills": ["reordered", "subset", "of the student's skills"],
   "optimized_projects": [
     {{"title": "EXACT original title", "description": "rephrased ATS-friendly description"}}
   ]
@@ -230,6 +334,11 @@ Return ONLY this JSON (no markdown, no explanations):
 
         # Scrub buzzwords
         suggestions = sanitize_tailored_resume(suggestions)
+
+        # Skills are ALWAYS the deterministic JD-keyword ordering of the
+        # student's own list — never model output.
+        suggestions["optimized_skills"] = deterministic_skills
+        suggestions["tailoring_mode"] = "ai"
 
         # Save model details
         self.job.model_used = f"{result.provider}/{result.model}"

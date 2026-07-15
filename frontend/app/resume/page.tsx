@@ -25,6 +25,13 @@ interface Company {
   name: string;
   role: string;
   ctc: string | null;
+  category?: string | null;
+  job_location?: string | null;
+  jd_text?: string | null;
+  jd_required_skills?: string[];
+  jd_preferred_skills?: string[];
+  jd_ats_keywords?: string[];
+  interview_topics?: string[];
 }
 
 interface ResumeData {
@@ -101,15 +108,19 @@ export default function ResumePage() {
       const res = await api.get("/companies");
       const list: Company[] = (res.data || []).filter((c: { archived?: boolean }) => !c.archived);
       setCompanies(list);
-      if (list.length > 0 && !selectedCompanyId) {
-        setSelectedCompanyId(list[0].id);
-      }
+      // Keep the workspace deep-link (?company=<id>) selection when it exists
+      // in the list; otherwise fall back to the first drive so the select is
+      // never left pointing at an id it can't render.
+      setSelectedCompanyId((current) => {
+        if (current && list.some((c) => c.id === current)) return current;
+        return list.length > 0 ? list[0].id : "";
+      });
     } catch (err) {
       console.error("Failed to load companies:", err);
     } finally {
       setLoadingCompanies(false);
     }
-  }, [selectedCompanyId]);
+  }, []);
 
   useEffect(() => {
     loadResume();
@@ -553,7 +564,12 @@ export default function ResumePage() {
                   <select
                     value={selectedCompanyId}
                     onChange={(e) => setSelectedCompanyId(e.target.value)}
-                    className="w-full appearance-none bg-muted/20 border border-border rounded-xl px-4 py-3 pr-10 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent transition"
+                    // colorScheme keeps the NATIVE select chrome (closed box +
+                    // dropdown list) matched to the app theme — without it the
+                    // browser paints a white control while the text inherits
+                    // the theme's light foreground: white-on-white.
+                    style={{ colorScheme: "dark" }}
+                    className="w-full appearance-none bg-background text-foreground border border-border rounded-xl px-4 py-3 pr-10 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent transition [&>option]:bg-background [&>option]:text-foreground"
                   >
                     {companies.map((c) => (
                       <option key={c.id} value={c.id}>
@@ -580,9 +596,93 @@ export default function ResumePage() {
                       <p className="text-foreground font-bold">{selectedCompany.ctc}</p>
                     </div>
                   )}
+                  {selectedCompany.job_location && (
+                    <div className="bg-muted/10 border border-border/30 rounded-lg p-2.5">
+                      <p className="text-muted-foreground mb-0.5">LOCATION</p>
+                      <p className="text-foreground font-bold truncate">{selectedCompany.job_location}</p>
+                    </div>
+                  )}
+                  {selectedCompany.category && (
+                    <div className="bg-muted/10 border border-border/30 rounded-lg p-2.5">
+                      <p className="text-muted-foreground mb-0.5">CATEGORY</p>
+                      <p className="text-foreground font-bold truncate">{selectedCompany.category}</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
+
+            {/* JD Intelligence — everything parsed from the drive's emails,
+                shown here so the student sees exactly what the tailoring
+                targets (and can sanity-check the ATS keywords). */}
+            {selectedCompany && (
+              <div className="border border-border rounded-2xl bg-card/30 backdrop-blur p-5 space-y-4">
+                <div className="flex items-center gap-2.5">
+                  <FileText className="h-4 w-4 text-accent" />
+                  <h2 className="text-sm font-mono font-bold tracking-tight">JD Intelligence</h2>
+                  <span className="ml-auto text-[9px] text-muted-foreground font-mono uppercase">
+                    parsed from CDC emails
+                  </span>
+                </div>
+
+                {(selectedCompany.jd_required_skills?.length || selectedCompany.jd_ats_keywords?.length) ? (
+                  <div className="space-y-3">
+                    {selectedCompany.jd_required_skills && selectedCompany.jd_required_skills.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-mono text-muted-foreground uppercase mb-1.5">Required Skills</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {selectedCompany.jd_required_skills.slice(0, 15).map((s) => (
+                            <span key={s} className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-accent/40 bg-accent/10 text-accent">
+                              {s}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {selectedCompany.jd_ats_keywords && selectedCompany.jd_ats_keywords.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-mono text-muted-foreground uppercase mb-1.5">ATS Keywords</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {selectedCompany.jd_ats_keywords.slice(0, 20).map((s) => (
+                            <span key={s} className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-border bg-muted/20 text-foreground">
+                              {s}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {selectedCompany.interview_topics && selectedCompany.interview_topics.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-mono text-muted-foreground uppercase mb-1.5">Likely Interview Topics</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {selectedCompany.interview_topics.slice(0, 8).map((s) => (
+                            <span key={s} className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/5 text-emerald-500">
+                              {s}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-muted-foreground font-mono">
+                    No JD keywords parsed for this drive yet — tailoring will use a role-typical strategy.
+                  </p>
+                )}
+
+                {selectedCompany.jd_text && (
+                  <details className="group border-t border-border/40 pt-3">
+                    <summary className="cursor-pointer text-[11px] font-mono font-bold text-accent select-none list-none flex items-center gap-1.5">
+                      <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+                      View full Job Description
+                    </summary>
+                    <pre className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap text-[10px] leading-relaxed font-mono text-muted-foreground bg-muted/10 border border-border/30 rounded-lg p-3">
+                      {selectedCompany.jd_text}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
 
             {/* Custom Prompt (Optional) */}
             <div className="border border-border rounded-2xl bg-card/30 backdrop-blur p-5 space-y-3">

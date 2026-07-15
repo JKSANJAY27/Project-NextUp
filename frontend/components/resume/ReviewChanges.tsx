@@ -11,6 +11,8 @@ interface SuggestionsResult {
   optimized_summary?: string;
   optimized_skills?: string[];
   optimized_projects?: ProjectSuggestion[];
+  tailoring_mode?: string;
+  tailoring_note?: string;
 }
 
 interface ReviewChangesProps {
@@ -73,6 +75,16 @@ export default function ReviewChanges({
         <div className="flex items-center gap-3 p-3 rounded-lg border border-destructive/20 bg-destructive/5 text-destructive text-xs">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{errorMsg}</span>
+        </div>
+      )}
+
+      {suggestions.tailoring_mode === "deterministic" && (
+        <div className="flex items-start gap-3 p-3 rounded-lg border border-amber-500/20 bg-amber-500/5 text-amber-500 text-xs">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          <span>
+            {suggestions.tailoring_note ||
+              "AI providers were unavailable — your skills and projects were re-ordered to match the JD keywords instead. All wording is your own."}
+          </span>
         </div>
       )}
 

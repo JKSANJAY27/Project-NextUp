@@ -87,6 +87,19 @@ def health():
 @app.post("/api/generate")
 def generate(req: GenerateRequest, _: None = Depends(check_auth)):
     global _active
+    # Readiness preflight: uvicorn now starts BEFORE Ollama finishes
+    # bootstrapping (see start.sh), so requests can arrive while the model is
+    # still loading. Shed them with 503 instead of letting them 502 downstream.
+    try:
+        models = _ollama_models()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Ollama still starting: {e}")
+    if not any(m.startswith(DEFAULT_MODEL) for m in models):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Model {DEFAULT_MODEL} still loading — retry shortly.",
+        )
+
     # Only honour explicit Ollama-style model names (e.g. "qwen2.5:3b");
     # anything else (HF paths like "Qwen/Qwen2.5-7B-Instruct") maps to default.
     model = req.model if (req.model or "").count(":") else DEFAULT_MODEL
