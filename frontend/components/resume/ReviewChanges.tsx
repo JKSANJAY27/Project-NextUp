@@ -19,6 +19,17 @@ interface SuggestionsResult {
     missing: string[];
     coverage_pct: number | null;
   };
+  readability?: {
+    score: number;
+    issues: string[];
+  };
+}
+
+function scoreColor(v: number): string {
+  return v >= 70 ? "text-emerald-500" : v >= 40 ? "text-amber-500" : "text-destructive";
+}
+function scoreBar(v: number): string {
+  return v >= 70 ? "bg-emerald-500" : v >= 40 ? "bg-amber-500" : "bg-destructive";
 }
 
 interface ReviewChangesProps {
@@ -101,24 +112,44 @@ export default function ReviewChanges({
         </div>
       )}
 
+      {/* Two separate scores by design: keyword-stuffing can raise ATS while
+          hurting readability, and prettier wording can drop keywords. */}
+      {suggestions.readability && (
+        <div className="border border-border rounded-xl p-4 bg-card/25 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-xs font-bold tracking-tight">Human Readability</span>
+            <span className={`font-mono text-sm font-black ${scoreColor(suggestions.readability.score)}`}>
+              {suggestions.readability.score}%
+            </span>
+          </div>
+          <div className="w-full bg-border h-1.5 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full ${scoreBar(suggestions.readability.score)}`}
+              style={{ width: `${suggestions.readability.score}%` }}
+            />
+          </div>
+          {suggestions.readability.issues.length > 0 && (
+            <ul className="text-[10px] font-mono text-muted-foreground space-y-0.5 pt-1">
+              {suggestions.readability.issues.map((iss) => (
+                <li key={iss}>⚠ {iss}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {/* ATS keyword coverage — what the tailored resume hits vs. genuinely lacks */}
       {suggestions.ats_coverage && suggestions.ats_coverage.coverage_pct !== null && (
         <div className="border border-border rounded-xl p-4 bg-card/25 space-y-3">
           <div className="flex items-center justify-between">
             <span className="font-mono text-xs font-bold tracking-tight">ATS Keyword Coverage</span>
-            <span className={`font-mono text-sm font-black ${
-              suggestions.ats_coverage.coverage_pct >= 70 ? "text-emerald-500" :
-              suggestions.ats_coverage.coverage_pct >= 40 ? "text-amber-500" : "text-destructive"
-            }`}>
+            <span className={`font-mono text-sm font-black ${scoreColor(suggestions.ats_coverage.coverage_pct)}`}>
               {suggestions.ats_coverage.coverage_pct}%
             </span>
           </div>
           <div className="w-full bg-border h-1.5 rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full ${
-                suggestions.ats_coverage.coverage_pct >= 70 ? "bg-emerald-500" :
-                suggestions.ats_coverage.coverage_pct >= 40 ? "bg-amber-500" : "bg-destructive"
-              }`}
+              className={`h-full rounded-full ${scoreBar(suggestions.ats_coverage.coverage_pct)}`}
               style={{ width: `${suggestions.ats_coverage.coverage_pct}%` }}
             />
           </div>

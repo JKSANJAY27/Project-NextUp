@@ -1,7 +1,10 @@
+import hashlib
 import json
 import logging
+import re
+import time
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -9,7 +12,7 @@ from app.models.models import AiGenerationJob, StudentProfile, Company, Resume
 from app.services.ai_provider import get_resume_gateway, AIUnavailableError
 from app.services.ai_service import sanitize_tailored_resume
 from app.core.gmail_token_cache import get_session_key
-from app.core.security import decrypt_field, server_decrypt_field
+from app.core.security import decrypt_field, server_decrypt_field, server_encrypt_field
 
 logger = logging.getLogger("nextup.resume_pipeline")
 
@@ -38,6 +41,18 @@ MAX_JD_CHARS = 5000
 SUMMARY_OUTPUT_TOKENS = 160
 PROJECTS_OUTPUT_TOKENS = 700
 
+# Only the projects that actually overlap the JD get AI budget — rewriting a
+# compiler project for a web-dev JD wastes minutes of CPU on output that will
+# never rank. Zero-relevance projects keep their original wording.
+MAX_AI_PROJECTS = 3
+
+# Bump whenever a generation prompt changes — it is part of the cache key, so
+# stale cached outputs from older prompts are never served.
+PROMPT_VERSION = "v3"
+# Identical (resume, JD, strategy, role, note) inputs within a week reuse the
+# previous structured output instead of re-running 5 minutes of inference.
+GEN_CACHE_TTL_SECONDS = 7 * 24 * 3600
+
 
 class ResumeGenerationPipeline:
     def __init__(self, db: Session, job_id: str):
@@ -54,12 +69,32 @@ class ResumeGenerationPipeline:
 
     def run(self):
         logger.info(f"Running pipeline for resume job {self.job_id}")
+        t0 = time.monotonic()
+        self.metrics: Dict[str, Any] = {
+            "job_id": str(self.job_id),
+            "prompt_version": PROMPT_VERSION,
+            "cache_hit": False,
+            "fallback_used": False,
+        }
 
         # Stage 1: Load context
         self._load_context()
 
         # Stage 2: Load JD Strategy
         self._load_jd_strategy()
+
+        # Stage 2.5: Generation cache — Generate → Cancel → Generate with
+        # identical inputs must not burn another 5 minutes of inference.
+        cache_key = self._gen_cache_key()
+        cached = self._gen_cache_get(cache_key)
+        if cached is not None:
+            self.metrics["cache_hit"] = True
+            self.metrics["latency_s"] = round(time.monotonic() - t0, 2)
+            self.job.model_used = cached.get("_model") or "cache"
+            self._save_suggestions(cached)
+            self._log_metrics(cached)
+            logger.info(f"Job {self.job_id}: served from generation cache.")
+            return
 
         # Stage 3: Generate suggestions. When every AI provider is down
         # (Space cold, HF credits depleted), degrade to a deterministic
@@ -74,6 +109,7 @@ class ResumeGenerationPipeline:
             )
             suggestions = self._deterministic_suggestions()
             self.job.model_used = "deterministic-fallback"
+            self.metrics["fallback_used"] = True
             self.db.commit()
 
         # Stage 4: Validate suggestions (Hallucination check)
@@ -83,8 +119,8 @@ class ResumeGenerationPipeline:
             logger.error(f"Hallucination validation failed: {error_str}")
             raise ValueError(f"AI suggested hallucinated/ungrounded information: {error_str}")
 
-        # Stage 4.2: Quality gate — a rewrite that drops metrics or merely
-        # truncates the original is worse than no rewrite; revert those.
+        # Stage 4.2: Quality gate — a rewrite that drops metrics, invents
+        # numbers, or merely truncates the original is worse than no rewrite.
         # (AI mode only: the deterministic fallback keeps originals by design.)
         if suggestions.get("tailoring_mode") != "deterministic":
             self._quality_gate(suggestions)
@@ -94,9 +130,74 @@ class ResumeGenerationPipeline:
         # experience (so they know what to upskill, not what to fake).
         suggestions["ats_coverage"] = self._ats_coverage(suggestions)
 
+        # Stage 4.6: Readability score — separate from ATS on purpose:
+        # keyword-stuffed bullets can score high on ATS while reading badly,
+        # and vice versa. Showing both keeps the trade-off visible.
+        suggestions["readability"] = self._readability(suggestions)
+
+        # Stage 4.7: Cache the final gated output (never the degraded
+        # fallback — a later retry should get real AI output).
+        if not self.metrics["fallback_used"]:
+            suggestions["_model"] = getattr(self, "_last_model", None)
+            self._gen_cache_set(cache_key, suggestions)
+
         # Stage 5: Save suggestions
+        self.metrics["latency_s"] = round(time.monotonic() - t0, 2)
         self._save_suggestions(suggestions)
+        self._log_metrics(suggestions)
         logger.info(f"Pipeline completed successfully for resume job {self.job_id}")
+
+    # ------------------------------------------------------------------
+    # Generation cache + observability
+    # ------------------------------------------------------------------
+
+    def _gen_cache_key(self) -> str:
+        """Fingerprint of everything that shapes the output. Any change —
+        resume edit, new JD, different role, new custom note, prompt bump —
+        produces a different key."""
+        payload = json.dumps([
+            self.master_resume_data,
+            self._role_jd_text(),
+            self._compact_strategy_view(),
+            self.target_role,
+            self.job.custom_prompt or "",
+            PROMPT_VERSION,
+        ], sort_keys=True, ensure_ascii=False, default=str)
+        return "resume:gen:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _gen_cache_get(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        try:
+            from app.core.redis import get_cache
+            wrapped = get_cache(cache_key)
+            if isinstance(wrapped, dict) and wrapped.get("enc"):
+                # Resume content is personal data — cached ciphertext only.
+                return json.loads(server_decrypt_field(wrapped["enc"]))
+        except Exception as e:
+            logger.warning(f"Generation cache read failed (non-critical): {e}")
+        return None
+
+    def _gen_cache_set(self, cache_key: str, suggestions: Dict[str, Any]):
+        try:
+            from app.core.redis import set_cache
+            enc = server_encrypt_field(json.dumps(suggestions, ensure_ascii=False))
+            set_cache(cache_key, {"enc": enc}, expire_seconds=GEN_CACHE_TTL_SECONDS)
+        except Exception as e:
+            logger.warning(f"Generation cache write failed (non-critical): {e}")
+
+    def _log_metrics(self, suggestions: Dict[str, Any]):
+        """One structured line per job — the only way to see why quality
+        drifts over time (gate failure spikes, provider changes, latency)."""
+        m = dict(self.metrics)
+        m["model"] = self.job.model_used
+        m["mode"] = suggestions.get("tailoring_mode", "ai")
+        cov = suggestions.get("ats_coverage") or {}
+        m["coverage_pct"] = cov.get("coverage_pct")
+        m["readability"] = (suggestions.get("readability") or {}).get("score")
+        m["projects_kept"] = len(suggestions.get("optimized_projects") or [])
+        try:
+            logger.info("RESUME_METRICS %s", json.dumps(m, default=str))
+        except Exception:
+            logger.info("RESUME_METRICS %s", m)
 
     def _load_context(self):
         self.job = self.db.query(AiGenerationJob).filter(AiGenerationJob.id == self.job_id).first()
@@ -317,6 +418,32 @@ class ResumeGenerationPipeline:
                 f"{p.get('title', '')} {p.get('description', '')}", keywords),
         )
 
+    def _select_projects_for_ai(
+        self, projects: List[Dict[str, Any]]
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """Relevance-gated selection: score every project against the JD and
+        send only the top MAX_AI_PROJECTS relevant ones to the model.
+
+        A compiler project scored 0 against a web-dev JD gets no inference
+        budget — its original wording is kept and the review says so.
+        Returns (selected, skipped_titles)."""
+        keywords = self._jd_keywords()
+        scored = sorted(
+            ((self._match_score(
+                f"{p.get('title', '')} {p.get('description', '')}", keywords), p)
+             for p in projects),
+            key=lambda t: -t[0],
+        )
+        selected = [p for score, p in scored if score > 0][:MAX_AI_PROJECTS]
+        if not selected:
+            # No JD strategy / no overlap at all — still tailor the top 2 so
+            # the student gets role-typical phrasing rather than nothing.
+            selected = [p for _, p in scored[:2]]
+        selected_ids = {id(p) for p in selected}
+        skipped = [str(p.get("title", "")) for _, p in scored
+                   if id(p) not in selected_ids and p.get("title")]
+        return selected, skipped
+
     def _deterministic_suggestions(self) -> Dict[str, Any]:
         """Grounded tailoring without any model call.
 
@@ -349,8 +476,13 @@ class ResumeGenerationPipeline:
     @staticmethod
     def _metrics_in(text: str) -> set:
         """Numbers/metrics in a text ('sub-1.2s', '200+', '20%', '10+')."""
-        import re
         return set(re.findall(r"\d+(?:\.\d+)?(?:\s*%|\+|s\b|x\b)?", text or ""))
+
+    @staticmethod
+    def _bare_nums(text: str) -> set:
+        """Numeric cores only ('1.2', '200') — reformatting a unit ('1.2s' →
+        '1.2-second') must not read as an invented metric."""
+        return set(re.findall(r"\d+(?:\.\d+)?", text or ""))
 
     @staticmethod
     def _norm_text(text: str) -> str:
@@ -381,6 +513,21 @@ class ResumeGenerationPipeline:
         "track record", "well-versed",
     )
 
+    def _evidence_corpus(self) -> str:
+        """Everything the student actually claims — the source every generated
+        number must trace back to."""
+        data = self.master_resume_data or {}
+        parts = [json.dumps(data, ensure_ascii=False, default=str)]
+        if self.profile is not None:
+            if self.profile.cgpa is not None:
+                # Cover both '9.34' and a model rounding to '9.3'
+                parts.append(f"{float(self.profile.cgpa)} {float(self.profile.cgpa):.1f}")
+            for attr in ("tenth_marks", "twelfth_marks"):
+                v = getattr(self.profile, attr, None)
+                if v is not None:
+                    parts.append(str(float(v)))
+        return " ".join(parts)
+
     def _summary_gate(self, suggestions: Dict[str, Any]) -> Optional[str]:
         """Reject generic-slop summaries; returns a note when reverted."""
         s = (suggestions.get("optimized_summary") or "").strip()
@@ -398,6 +545,12 @@ class ResumeGenerationPipeline:
         skill_hits = sum(1 for sk in skills if len(sk) >= 3 and sk in sl)
         if not any(ch.isdigit() for ch in s) and skill_hits < 2:
             reasons.append("no concrete facts (no numbers, <2 real skills)")
+        # Evidence grounding: every number in the summary must exist somewhere
+        # in the student's own resume or profile. '400+ users' with no source
+        # is a hallucination, however plausible it sounds.
+        ungrounded = self._bare_nums(s) - self._bare_nums(self._evidence_corpus())
+        if ungrounded:
+            reasons.append(f"ungrounded number(s): {', '.join(sorted(ungrounded)[:3])}")
         if reasons:
             logger.info(f"Summary gate: reverting AI summary — {'; '.join(reasons)}")
             if master:
@@ -431,26 +584,39 @@ class ResumeGenerationPipeline:
             parts = [b[0].upper() + b[1:] if b else b for b in parts]
             new_desc = " • ".join(parts) if len(parts) > 1 else (parts[0] if parts else new_desc)
 
+            # Evidence grounding, both directions: a rewrite may neither LOSE
+            # the student's real metrics nor INVENT new ones. A number that
+            # doesn't exist in the source project ("improved latency by 42%")
+            # is a hallucination even if it looks impressive.
             lost_metrics = self._metrics_in(orig) - self._metrics_in(new_desc)
+            invented_metrics = self._bare_nums(new_desc) - self._bare_nums(orig)
             too_short = orig and len(new_desc) < 0.55 * len(orig)
             truncated = self._is_truncated(new_desc)
             # Near-copies (the model changed a word or two) are not
             # optimizations — showing identical before/after cards reads as
             # a broken feature. Drop the card; the original wording is kept
-            # in the tailored copy automatically.
+            # in the tailored copy automatically. EXCEPTION: a high-overlap
+            # rewrite that introduces new JD terminology ("Designed SCALABLE
+            # REST APIs...") is a real ATS gain despite the word overlap.
             orig_norm, new_norm = self._norm_text(orig), self._norm_text(new_desc)
             a, b = set(orig_norm.split()), set(new_norm.split())
             jaccard = (len(a & b) / len(a | b)) if (a or b) else 0.0
-            near_copy = bool(orig_norm) and (
+            ol, nl = orig.lower(), new_desc.lower()
+            jd_gain = any(
+                len(k) >= 3 and k in nl and k not in ol
+                for k in (kw.strip().lower() for kw in self._jd_keywords())
+            )
+            near_copy = bool(orig_norm) and not jd_gain and (
                 jaccard >= 0.90 or new_norm == orig_norm
                 or orig_norm.startswith(new_norm))
 
-            if lost_metrics or too_short or truncated:
+            if lost_metrics or invented_metrics or too_short or truncated:
                 reverted += 1
                 logger.info(
                     f"Quality gate: dropping '{op.get('title')}' rewrite "
-                    f"(lost_metrics={sorted(lost_metrics)[:5]}, too_short={too_short}, "
-                    f"truncated={truncated})."
+                    f"(lost_metrics={sorted(lost_metrics)[:5]}, "
+                    f"invented_metrics={sorted(invented_metrics)[:5]}, "
+                    f"too_short={too_short}, truncated={truncated})."
                 )
                 continue
             if near_copy:
@@ -463,17 +629,25 @@ class ResumeGenerationPipeline:
             op["description"] = new_desc
             kept.append(op)
         suggestions["optimized_projects"] = kept
+        if hasattr(self, "metrics"):
+            self.metrics["gate_dropped"] = reverted
+            self.metrics["gate_near_copy"] = already_aligned
+            self.metrics["gate_kept"] = len(kept)
         notes = []
         if reverted:
             notes.append(
                 f"{reverted} project rewrite(s) were discarded because the AI "
-                "dropped metrics or cut a sentence short — your original wording is kept."
+                "dropped or invented metrics, or cut a sentence short — your "
+                "original wording is kept."
             )
         if already_aligned:
             notes.append(
                 f"{already_aligned} project(s) are shown unchanged — the AI "
                 "could not meaningfully improve them for this JD."
             )
+        skipped_note = suggestions.pop("skipped_projects_note", None)
+        if skipped_note:
+            notes.append(skipped_note)
 
         summary_note = self._summary_gate(suggestions)
         if summary_note:
@@ -532,6 +706,54 @@ class ResumeGenerationPipeline:
             "coverage_pct": round(100 * len(matched) / len(keywords)),
         }
 
+    _BUZZWORDS = (
+        "spearheaded", "synergized", "leveraged", "cutting-edge",
+        "state-of-the-art", "utilized", "seamlessly", "robustly",
+    ) + _SLOP_PHRASES
+
+    def _readability(self, suggestions: Dict[str, Any]) -> Dict[str, Any]:
+        """Human-readability score for the FINAL tailored text (suggestions
+        merged over the master). Deliberately separate from ATS coverage:
+        keyword-stuffed bullets can hit 90% ATS and still read terribly —
+        showing both scores keeps that trade-off visible to the student."""
+        data = self.master_resume_data or {}
+        overrides = {
+            (p.get("title") or "").strip().lower(): p.get("description", "")
+            for p in suggestions.get("optimized_projects") or []
+            if isinstance(p, dict)
+        }
+        summary = (suggestions.get("optimized_summary")
+                   or data.get("summary") or "").strip()
+        bullets: List[str] = []
+        for p in data.get("projects") or []:
+            if not isinstance(p, dict):
+                continue
+            desc = overrides.get((p.get("title") or "").strip().lower()) \
+                or p.get("description", "")
+            bullets.extend(b.strip() for b in str(desc).split("•") if b.strip())
+
+        score, issues = 100, []
+        text_all = (summary + " " + " ".join(bullets)).lower()
+        buzz = sorted({b for b in self._BUZZWORDS if b in text_all})
+        if buzz:
+            score -= 8 * len(buzz)
+            issues.append(f"buzzwords: {', '.join(buzz[:4])}")
+        incomplete = [b for b in bullets if self._is_truncated(b)]
+        if incomplete:
+            score -= 10 * len(incomplete)
+            issues.append(f"{len(incomplete)} bullet(s) don't end as complete sentences")
+        run_ons = [b for b in bullets if len(b) > 260]
+        if run_ons:
+            score -= 5 * len(run_ons)
+            issues.append(f"{len(run_ons)} bullet(s) are run-on (>260 chars)")
+        if bullets and not any(self._bare_nums(b) for b in bullets):
+            score -= 10
+            issues.append("no measurable outcomes (numbers) in any project bullet")
+        if summary and len(summary) > 600:
+            score -= 5
+            issues.append("summary is longer than recruiters read (~4 lines)")
+        return {"score": max(0, min(100, score)), "issues": issues[:5]}
+
     # ------------------------------------------------------------------
     # AI passes. Two narrow prompts (summary / projects) beat one combined
     # mega-prompt on a 3B model, and they run in parallel on the Space.
@@ -570,11 +792,13 @@ class ResumeGenerationPipeline:
                 anchors.extend(str(v)[:150] for v in vals[:2] if str(v).strip())
         return " | ".join(anchors[:3])
 
-    def _gen_summary(self, jd_text: str, strategy_view: Dict[str, Any]) -> Optional[str]:
+    def _gen_summary(self, jd_text: str, strategy_view: Dict[str, Any],
+                     headline_projects: Optional[List[str]] = None) -> Optional[str]:
         data = self.master_resume_data or {}
         top_skills = ", ".join(self._rank_skills(
             [str(s) for s in (data.get("skills") or [])])[:10])
         anchors = self._achievement_anchors()
+        headline = ", ".join(t for t in (headline_projects or []) if t)
         prompt = f"""Rewrite a student's resume summary for a specific job. Follow the RULES exactly.
 
 RULES:
@@ -596,6 +820,7 @@ STUDENT FACTS:
 - Degree: {self.profile.branch or 'B.Tech'}, CGPA {float(self.profile.cgpa) if self.profile.cgpa else 'N/A'}
 - Top skills: {top_skills}
 - Standout facts: {anchors or 'none listed'}
+- Projects headlining this resume (mention themes from these only): {headline or 'not specified'}
 {self._custom_note()}
 Return ONLY this JSON: {{"optimized_summary": "..."}}"""
 
@@ -663,22 +888,32 @@ Return ONLY this JSON (no markdown):
     def _generate_suggestions(self) -> Dict[str, Any]:
         from concurrent.futures import ThreadPoolExecutor
 
+        if not hasattr(self, "metrics"):
+            self.metrics = {}
         strategy_view = self._compact_strategy_view()
         jd_text = self._role_jd_text()
         # Skills are ordered deterministically and NOT rewritten by the model.
         deterministic_skills = self._rank_skills(
             [str(s) for s in (self.master_resume_data.get("skills") or [])][:MAX_SKILLS])
 
-        # Micro-batched passes in parallel — the Space accepts 2 concurrent
-        # generations, so the summary + N project batches finish in ~2 waves.
-        ranked_projects = self._rank_projects(
-            self._compact_resume_view().get("projects") or [])[:MAX_PROJECTS]
-        batches = [ranked_projects[i:i + 2]
-                   for i in range(0, len(ranked_projects), 2)]
+        # Relevance-gated selection, then micro-batched passes in parallel —
+        # the Space accepts 2 concurrent generations, so the summary + N
+        # project batches finish in ~2 waves. Project selection is
+        # deterministic and happens BEFORE any AI call, so the summary prompt
+        # already knows which projects will headline this resume (a dropped
+        # rewrite later only means original wording — the project stays).
+        selected_projects, skipped_titles = self._select_projects_for_ai(
+            self._compact_resume_view().get("projects") or [])
+        batches = [selected_projects[i:i + 2]
+                   for i in range(0, len(selected_projects), 2)]
+        self.metrics["projects_selected"] = len(selected_projects)
+        self.metrics["projects_skipped"] = len(skipped_titles)
 
         summary, projects, errors = None, [], []
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="resume-pass") as pool:
-            f_summary = pool.submit(self._gen_summary, jd_text, strategy_view)
+            f_summary = pool.submit(
+                self._gen_summary, jd_text, strategy_view,
+                [str(p.get("title", "")) for p in selected_projects])
             f_batches = [pool.submit(self._gen_project_batch, jd_text, strategy_view, b)
                          for b in batches]
             try:
@@ -702,6 +937,12 @@ Return ONLY this JSON (no markdown):
             suggestions["optimized_summary"] = summary
         if projects:
             suggestions["optimized_projects"] = projects
+        if skipped_titles:
+            suggestions["skipped_projects_note"] = (
+                f"{len(skipped_titles)} project(s) kept your original wording "
+                f"({', '.join(skipped_titles[:3])}) — they don't overlap this "
+                f"JD, so rewriting them would not improve ATS ranking."
+            )
         if not jd_text:
             suggestions["tailoring_note"] = (
                 "No job description was shared for this drive yet — tailoring "
