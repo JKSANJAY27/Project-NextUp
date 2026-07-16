@@ -168,7 +168,7 @@ export default function ReviewChanges({
           {suggestions.ats_coverage.missing.length > 0 && (
             <div>
               <p className="text-[10px] font-mono text-muted-foreground uppercase mb-1.5">
-                Not in your resume (never faked — consider learning these)
+                Still not covered — the AI could not tie these to your real experience (never faked)
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {suggestions.ats_coverage.missing.map((k) => (

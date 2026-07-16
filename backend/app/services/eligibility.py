@@ -281,7 +281,39 @@ def check_eligibility(profile, company) -> Tuple[str, Optional[str], Dict[str, A
                 f"UG CGPA matched: {float(profile.ug_cgpa):.2f} >= {float(min_ug_cgpa):.2f}"
             )
 
+    # ── 8. RESTRICTED-AUDIENCE DRIVES (e.g. women-only events) ────────────────
+    # The profile has no gender field, so this can never be auto-verified —
+    # a confident ELIGIBLE here is exactly the wrong answer.
+    women_only = bool(rules.get("women_only"))
+
     # ── RESULT ────────────────────────────────────────────────────────────────
+    # Track whether ANY criterion was actually evaluated. 'No data parsed →
+    # ELIGIBLE' silently marked criteria-less drives green; the honest answer
+    # is UNKNOWN with a pointer to the source mail.
+    criteria_checked = (
+        branch_checked
+        or min_cgpa is not None
+        or min_tenth is not None
+        or min_twelfth is not None
+        or requires_no_arrears
+    )
+
+    if not failed and women_only:
+        status = "UNKNOWN"
+        reason = ("This drive is restricted (women-only event per the mail) — "
+                  "verify your eligibility against the original email.")
+        explanation = {"eligible": None, "matched": matched,
+                       "failed": [], "unverified": [reason]}
+        return status, reason, explanation
+
+    if not failed and not criteria_checked:
+        status = "UNKNOWN"
+        reason = ("No eligibility criteria could be verified from the mail — "
+                  "check the original email before registering.")
+        explanation = {"eligible": None, "matched": matched,
+                       "failed": [], "unverified": [reason]}
+        return status, reason, explanation
+
     eligible = len(failed) == 0
     status = "ELIGIBLE" if eligible else "NOT_ELIGIBLE"
     reason = "You meet all academic criteria." if eligible else failed[0]

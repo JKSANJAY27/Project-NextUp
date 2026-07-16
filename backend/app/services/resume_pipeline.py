@@ -48,7 +48,7 @@ MAX_AI_PROJECTS = 3
 
 # Bump whenever a generation prompt changes — it is part of the cache key, so
 # stale cached outputs from older prompts are never served.
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 # Identical (resume, JD, strategy, role, note) inputs within a week reuse the
 # previous structured output instead of re-running 5 minutes of inference.
 GEN_CACHE_TTL_SECONDS = 7 * 24 * 3600
@@ -136,8 +136,9 @@ class ResumeGenerationPipeline:
         suggestions["readability"] = self._readability(suggestions)
 
         # Stage 4.7: Cache the final gated output (never the degraded
-        # fallback — a later retry should get real AI output).
-        if not self.metrics["fallback_used"]:
+        # fallback or a partial-failure run — a later retry must re-run
+        # inference, not be served the same failure instantly).
+        if not self.metrics["fallback_used"] and not self.metrics.get("partial_failure"):
             suggestions["_model"] = getattr(self, "_last_model", None)
             self._gen_cache_set(cache_key, suggestions)
 
@@ -648,16 +649,84 @@ class ResumeGenerationPipeline:
         skipped_note = suggestions.pop("skipped_projects_note", None)
         if skipped_note:
             notes.append(skipped_note)
+        failure_note = suggestions.pop("gen_failure_note", None)
+        if failure_note:
+            notes.append(failure_note)
 
         summary_note = self._summary_gate(suggestions)
         if summary_note:
             notes.append(summary_note)
+
+        # Transparency for gap-keyword weaving: these terms were fed to the
+        # model as hints, not facts — unlike numbers, a technology/skill term
+        # can't be auto-verified against the source, so surface exactly which
+        # ones the AI actually claimed so the student checks them before
+        # applying, instead of discovering an inaccurate term after the fact.
+        woven = self._woven_gap_keywords(suggestions)
+        if hasattr(self, "metrics"):
+            self.metrics["gap_keywords_woven"] = len(woven)
+        if woven:
+            notes.append(
+                f"The AI wove {len(woven)} JD term(s) into your resume based on "
+                f"related experience it found in your projects/summary: "
+                f"{', '.join(woven)}. Verify each one accurately describes your "
+                f"real work before applying."
+            )
+
         if notes:
             suggestions["quality_note"] = " ".join(notes)
 
         summary = (suggestions.get("optimized_summary") or "").strip()
         if summary:
             suggestions["optimized_summary"] = summary[0].upper() + summary[1:]
+
+    def _woven_gap_keywords(self, suggestions: Dict[str, Any]) -> List[str]:
+        """Which offered gap keywords actually made it into the FINAL (gated)
+        summary/projects that the master resume didn't already have."""
+        gap = getattr(self, "_last_gap_keywords", None)
+        if not gap:
+            return []
+        data = self.master_resume_data or {}
+        master_text = " ".join([
+            data.get("summary") or "",
+            *(f"{p.get('title', '')} {p.get('description', '')}"
+              for p in data.get("projects") or [] if isinstance(p, dict)),
+        ]).lower()
+        final_text = " ".join([
+            suggestions.get("optimized_summary") or "",
+            *(f"{p.get('description', '')}"
+              for p in suggestions.get("optimized_projects") or [] if isinstance(p, dict)),
+        ]).lower()
+        return [k for k in gap if k.lower() in final_text and k.lower() not in master_text]
+
+    def _gap_keywords(self) -> List[str]:
+        """JD keywords the master resume doesn't mention yet — computed
+        deterministically BEFORE any AI call so both prompts can be told
+        'weave these in where your real work supports them' instead of the
+        student being handed a raw keyword list to bolt onto Skills after
+        the fact. Same source list as _ats_coverage, just run earlier."""
+        s = self.jd_strategy or {}
+        noise = self._company_noise_tokens()
+        keywords: List[str] = []
+        seen = set()
+        for key in ("required_skills", "ats_keywords"):
+            vals = s.get(key)
+            if isinstance(vals, list):
+                for v in vals:
+                    k = str(v).strip()
+                    if k and k.lower() not in seen and k.lower() not in noise:
+                        seen.add(k.lower())
+                        keywords.append(k)
+        data = self.master_resume_data or {}
+        parts = [data.get("summary") or "", " ".join(str(s) for s in data.get("skills") or [])]
+        for p in data.get("projects") or []:
+            if isinstance(p, dict):
+                parts.append(f"{p.get('title', '')} {p.get('description', '')}")
+        for e in data.get("experience") or []:
+            if isinstance(e, dict):
+                parts.append(str(e.get("description", "")))
+        haystack = " ".join(parts).lower()
+        return [k for k in keywords if k.lower() not in haystack][:12]
 
     def _company_noise_tokens(self) -> set:
         """Company-name tokens that must not count as ATS keywords."""
@@ -792,8 +861,16 @@ class ResumeGenerationPipeline:
                 anchors.extend(str(v)[:150] for v in vals[:2] if str(v).strip())
         return " | ".join(anchors[:3])
 
+    def _gap_keywords_prompt_block(self, gap_keywords: List[str]) -> str:
+        if not gap_keywords:
+            return ""
+        return f"""
+JD TERMS NOT YET IN THE RESUME: {", ".join(gap_keywords)}
+For each one, use it ONLY if the student's real work above genuinely involves that concept — then use its precise wording naturally in a sentence. Do NOT force a term in, do NOT claim a tool/technology the student never listed, and do NOT rename existing work to match a term that doesn't really fit. Using zero of these is fine and expected if none apply."""
+
     def _gen_summary(self, jd_text: str, strategy_view: Dict[str, Any],
-                     headline_projects: Optional[List[str]] = None) -> Optional[str]:
+                     headline_projects: Optional[List[str]] = None,
+                     gap_keywords: Optional[List[str]] = None) -> Optional[str]:
         data = self.master_resume_data or {}
         top_skills = ", ".join(self._rank_skills(
             [str(s) for s in (data.get("skills") or [])])[:10])
@@ -821,6 +898,7 @@ STUDENT FACTS:
 - Top skills: {top_skills}
 - Standout facts: {anchors or 'none listed'}
 - Projects headlining this resume (mention themes from these only): {headline or 'not specified'}
+{self._gap_keywords_prompt_block(gap_keywords or [])}
 {self._custom_note()}
 Return ONLY this JSON: {{"optimized_summary": "..."}}"""
 
@@ -841,7 +919,8 @@ Return ONLY this JSON: {{"optimized_summary": "..."}}"""
         return str(summary).strip() if summary else None
 
     def _gen_project_batch(self, jd_text: str, strategy_view: Dict[str, Any],
-                           projects: List[Dict[str, str]]) -> List[Dict[str, str]]:
+                           projects: List[Dict[str, str]],
+                           gap_keywords: Optional[List[str]] = None) -> List[Dict[str, str]]:
         """Rewrite a SMALL batch of projects (<=2) in one focused call.
 
         A 3B model given 4 projects at once returns near-verbatim copies;
@@ -865,6 +944,7 @@ JOB DESCRIPTION:
 
 STUDENT PROJECTS:
 {json.dumps(projects, ensure_ascii=False)}
+{self._gap_keywords_prompt_block(gap_keywords or [])}
 {self._custom_note()}
 Return ONLY this JSON (no markdown):
 {{"optimized_projects": [{{"title": "EXACT original title", "description": "• Complete bullet one. • Complete bullet two."}}]}}"""
@@ -909,12 +989,20 @@ Return ONLY this JSON (no markdown):
         self.metrics["projects_selected"] = len(selected_projects)
         self.metrics["projects_skipped"] = len(skipped_titles)
 
+        # Computed once, BEFORE any AI call, and handed to both prompts as a
+        # grounded hint list — the model weaves in only the terms its own
+        # real work supports, instead of the student bolting raw keywords
+        # onto Skills after the fact.
+        gap_keywords = self._gap_keywords()
+        self._last_gap_keywords = gap_keywords
+        self.metrics["gap_keywords_offered"] = len(gap_keywords)
+
         summary, projects, errors = None, [], []
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="resume-pass") as pool:
             f_summary = pool.submit(
                 self._gen_summary, jd_text, strategy_view,
-                [str(p.get("title", "")) for p in selected_projects])
-            f_batches = [pool.submit(self._gen_project_batch, jd_text, strategy_view, b)
+                [str(p.get("title", "")) for p in selected_projects], gap_keywords)
+            f_batches = [pool.submit(self._gen_project_batch, jd_text, strategy_view, b, gap_keywords)
                          for b in batches]
             try:
                 summary = f_summary.result()
@@ -931,6 +1019,8 @@ Return ONLY this JSON (no markdown):
         if summary is None and not projects and errors:
             # Everything down → let run() switch to the deterministic fallback
             raise AIUnavailableError("resume passes failed: " + " | ".join(errors))
+        # Partial failures must not be cached — a retry should re-run inference.
+        self.metrics["partial_failure"] = bool(errors)
 
         suggestions: Dict[str, Any] = {"tailoring_mode": "ai"}
         if summary:
@@ -942,6 +1032,18 @@ Return ONLY this JSON (no markdown):
                 f"{len(skipped_titles)} project(s) kept your original wording "
                 f"({', '.join(skipped_titles[:3])}) — they don't overlap this "
                 f"JD, so rewriting them would not improve ATS ranking."
+            )
+        # Never leave the user guessing why selected projects show no cards:
+        # partial pass failures (Space busy/cold) are stated explicitly.
+        returned_titles = {str(pj.get("title", "")).strip().lower()
+                           for pj in projects if isinstance(pj, dict)}
+        missing_rewrites = [str(p.get("title", "")) for p in selected_projects
+                            if str(p.get("title", "")).strip().lower() not in returned_titles]
+        if missing_rewrites and errors:
+            suggestions["gen_failure_note"] = (
+                f"The AI could not produce rewrites for {len(missing_rewrites)} "
+                f"selected project(s) ({', '.join(missing_rewrites[:3])}) this "
+                f"run — the AI service was busy. Re-generate to retry."
             )
         if not jd_text:
             suggestions["tailoring_note"] = (

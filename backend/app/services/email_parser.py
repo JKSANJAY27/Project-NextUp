@@ -1190,6 +1190,15 @@ def ground_eligibility_in_source(
         det_degrees = _extract_degree_types_from_block(email_body)
         det_branches = get_branches_from_text(email_body, strict=True)
 
+    # Degree codes are NOT branches: 'All M.Tech CSE branches' must yield
+    # degrees=[MTECH] + branches=[CSE], not branches=['MTECH','CSE'] (which
+    # both broke the eligibility branch check and displayed as 'MTECH, CSE'
+    # in the workspace).
+    _DEG_CODES = {"BTECH", "B.TECH", "MTECH", "M.TECH", "MTECH_INT",
+                  "MCA", "MSC", "M.SC", "BE", "ME", "MBA", "PHD"}
+    det_branches = [b for b in det_branches
+                    if str(b).strip().upper() not in _DEG_CODES]
+
     # Deterministically extract eligibility raw text.
     det_raw_text = _extract_eligibility_raw_text_block(email_body)
 
@@ -1199,15 +1208,38 @@ def ground_eligibility_in_source(
     elif branch_block:
         det_raw_text = f"Eligible Branches: {branch_block}"
 
-    # Update eligibility_raw_text at the top-level extracted_data if AI left it empty
+    # eligibility_raw_text must be QUOTED from the mail, never model prose.
+    # Fill-when-empty let a fabricated LLM summary ('CGPA >= 8.0, 10th/12th
+    # >= 80%' for a 60%/6.0 drive) pass through as if it were source text —
+    # when the deterministic block exists it always wins.
     current_raw = ext.get("eligibility_raw_text", {})
     current_raw_val = current_raw.get("value") if isinstance(current_raw, dict) else None
-    if not current_raw_val and det_raw_text:
-        ext["eligibility_raw_text"] = {"value": det_raw_text, "confidence": 0.80}
-        logger.info(
-            "[eligibility_grounding] eligibility_raw_text was empty — filled from regex: %r",
-            det_raw_text[:120],
-        )
+    if det_raw_text:
+        if current_raw_val and current_raw_val.strip() != det_raw_text.strip():
+            logger.info(
+                "[eligibility_grounding] eligibility_raw_text %r replaced with "
+                "grounded block %r", str(current_raw_val)[:80], det_raw_text[:80],
+            )
+        ext["eligibility_raw_text"] = {"value": det_raw_text, "confidence": 0.90}
+
+    # Deterministic 10th/12th cutoffs: the standard CDC line is
+    # '% in X and XII – 60% or 6.0 CGPA' — the model frequently misses it.
+    det_marks = extract_x_xii_marks(email_body)
+
+    # Restricted-audience drives ('women in technology', 'female candidates
+    # only') carry a criterion no academic field captures — flag it so the
+    # eligibility checker can surface 'verify manually' instead of a
+    # confident ELIGIBLE for everyone.
+    _WOMEN_ONLY = re.search(
+        r"women\s+in\s+tech|only\s+(?:for\s+)?(?:women|female)|"
+        r"(?:women|female)(?:\s+\w+){0,2}\s+(?:candidates|students|engineers)\s+only|"
+        r"exclusive(?:ly)?\s+(?:virtual\s+)?(?:event\s+)?for\s+women|"
+        r"invite[s]?\s+(?:pre-final|final)[^\n\r]{0,40}women",
+        email_body or "", re.IGNORECASE)
+    if _WOMEN_ONLY:
+        ext["women_only"] = {"value": True, "confidence": 0.90}
+        logger.info("[eligibility_grounding] women-only drive detected: %r",
+                    _WOMEN_ONLY.group(0)[:60])
 
     for role in roles:
         if not isinstance(role, dict):
@@ -1266,8 +1298,43 @@ def ground_eligibility_in_source(
                 "[eligibility_grounding] eligible_branches overridden with regex result: %s",
                 det_branches,
             )
+        elif isinstance(eb_val, list) and eb_val:
+            # Whatever the source, degree codes never belong in the branch list.
+            cleaned = [b for b in eb_val
+                       if str(b).strip().upper() not in {
+                           "BTECH", "B.TECH", "MTECH", "M.TECH", "MTECH_INT",
+                           "MCA", "MSC", "M.SC", "BE", "ME", "MBA", "PHD"}]
+            if cleaned != eb_val:
+                role["eligible_branches"] = {"value": cleaned, "confidence": 0.85}
+
+        # --- 10th/12th cutoffs (deterministic wins) ---
+        if det_marks is not None:
+            for f in ("min_tenth_marks", "min_twelfth_marks"):
+                cur = role.get(f, {})
+                cur_val = cur.get("value") if isinstance(cur, dict) else cur
+                if cur_val != det_marks:
+                    logger.info(
+                        "[eligibility_grounding] %s %s overridden with grounded %s",
+                        f, cur_val, det_marks,
+                    )
+                role[f] = {"value": det_marks, "confidence": 0.95}
 
     return parsed
+
+
+def extract_x_xii_marks(email_body: str) -> Optional[float]:
+    """Deterministic 10th/12th percentage cutoff from the standard CDC line:
+    '% in X and XII – 60% or 6.0 CGPA' / '10th & 12th - 90%'. The dash
+    between the label and the number varies (en dash, em dash, mojibake), so
+    anything short and non-numeric is skipped rather than pattern-matched."""
+    m = re.search(
+        r"(?:10th|x)\s*(?:and|&)\s*(?:12th|xii)\b[^\d\n\r]{0,20}(\d{2})(?:\.\d+)?\s*%",
+        email_body or "", re.IGNORECASE)
+    if m:
+        val = float(m.group(1))
+        if 40 <= val <= 100:
+            return val
+    return None
 
 
 def extract_explicit_deadline(email_body: str, subject: str = "") -> Optional[str]:
@@ -1544,8 +1611,10 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 
     # 10th / 12th percentages
     # Joint check: e.g. "X and XII – 75%"
+    # Dash between label and number varies (en/em dash, mojibake) — skip any
+    # short non-numeric run instead of enumerating dash characters.
     joint_match = re.search(
-        r"(?:10th\s*(?:and|&)\s*12th|x\s*(?:and|&)\s*xii)\s*[\-–—:]?\s*(\d{2})",
+        r"(?:10th\s*(?:and|&)\s*12th|x\s*(?:and|&)\s*xii)\b[^\d\n\r]{0,20}(\d{2})",
         elig_text,
         re.IGNORECASE
     )

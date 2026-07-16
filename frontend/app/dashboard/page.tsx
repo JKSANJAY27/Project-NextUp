@@ -809,7 +809,7 @@ function DashboardPageContent() {
     let score = 0;
     if (comp.eligibility_status === "ELIGIBLE") {
       score += 70;
-    } else if (comp.eligibility_status === "CHECK") {
+    } else if (comp.eligibility_status === "CHECK" || comp.eligibility_status === "UNKNOWN") {
       score += 40;
     }
     
@@ -1698,6 +1698,7 @@ function DashboardPageContent() {
                     <option value="ALL">ALL STATUSES</option>
                     <option value="ELIGIBLE">ELIGIBLE</option>
                     <option value="NOT_ELIGIBLE">INELIGIBLE</option>
+                    <option value="UNKNOWN">VERIFY MANUALLY</option>
                     <option value="CONDITIONALLY_ELIGIBLE">CONDITIONALLY</option>
                   </select>
                 </div>

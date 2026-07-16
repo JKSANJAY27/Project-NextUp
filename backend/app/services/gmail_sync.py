@@ -457,6 +457,34 @@ def milestone_stage_is_grounded(stage: str, ground_text_lower: str) -> bool:
     return bool(re.search(pattern, ground_text_lower))
 
 
+_MONTH_NAMES = ("jan", "feb", "mar", "apr", "may", "jun",
+                "jul", "aug", "sep", "oct", "nov", "dec")
+
+
+def event_date_is_grounded(dt_ist: datetime, text: str) -> bool:
+    """The calendar date attached to a milestone must actually be WRITTEN in
+    the mail. Juspay's mail gave only a registration deadline (17-07) and a
+    visit date (29-07), yet an 'Online Test 18 Jul' milestone appeared — the
+    model derived a plausible-looking date out of thin air. A milestone whose
+    stage is real but whose date is invented is worse than a dateless one."""
+    if dt_ist is None:
+        return True
+    tl = (text or "").lower()
+    d, m = dt_ist.day, dt_ist.month
+    # Numeric forms: 17-07, 17/07/2026, 17.07, 07-17 (rare US order)
+    if re.search(rf"\b0?{d}\s*[-/.]\s*0?{m}\b", tl):
+        return True
+    if re.search(rf"\b0?{m}\s*[-/.]\s*0?{d}\s*[-/.]", tl):
+        return True
+    # Written forms: '17th July', 'July 17', '17 jul'
+    mon = _MONTH_NAMES[m - 1]
+    if re.search(rf"\b0?{d}\s*(?:st|nd|rd|th)?\s*(?:of\s+)?{mon}", tl):
+        return True
+    if re.search(rf"{mon}\w*\.?\s+0?{d}\s*(?:st|nd|rd|th)?\b", tl):
+        return True
+    return False
+
+
 _TIME_NEAR_DATE_RE = re.compile(
     r"\(?\b(\d{1,2})[:.](\d{2})\s*(am|pm)\b\)?|\(?\b(\d{1,2})\s*(am|pm)\b\)?",
     re.IGNORECASE,
@@ -668,15 +696,36 @@ _STAGE_ORDER = {
 }
 
 
-def _shortlist_target_stage(event_type_hint: str, event) -> str:
-    """Where a matched student advances to. There is no separate 'Shortlisted'
+def _is_roster_list(event, filename: str = "") -> bool:
+    """True when an attached/pasted student list is a ROSTER (who applied /
+    registered / may opt out), not a selection result. Advancing stages from
+    a roster is the classic false positive: Infosys' 'final applied students
+    list' (an FYI mail about the opt-out policy) moved every applicant to OA.
+    """
+    text = f"{filename} "
+    if event is not None:
+        text += f"{getattr(event, 'subject', '') or ''} {getattr(event, 'body', '') or ''}"
+    tl = text.lower()
+    return any(k in tl for k in (
+        "applied students", "applied list", "applications received",
+        "registered students", "registration list", "registrations list",
+        "opt out", "opt-out", "withdraw", "list of students who applied",
+    ))
+
+
+def _shortlist_target_stage(event_type_hint: str, event) -> Optional[str]:
+    """Where a matched student advances to, or None when the mail gives no
+    clear signal what the list is FOR. There is no separate 'Shortlisted'
     stage — a shortlist is always FOR something (test, interview, offer):
     being on it moves you into that round directly.
 
     Priority: explicit result-type hints > the event's own classification >
-    text scan. The text scan checks OA indicators FIRST — a re-sent 'online
-    test ... and selection is scheduled' mail used to match 'selection
-    process' and bump everyone on the same OA list straight to Interview.
+    text scan > None. The text scan checks OA indicators FIRST — a re-sent
+    'online test ... and selection is scheduled' mail used to match
+    'selection process' and bump everyone on the same OA list straight to
+    Interview. And the final fallback is None, NOT 'OA': a list whose
+    purpose we can't determine must never move anyone's stage (an Infosys
+    roster mail classified REGISTRATION used to fall through to 'OA').
     """
     if event_type_hint in ("OFFER_RELEASED", "OFFER"):
         return "Offer"
@@ -688,6 +737,8 @@ def _shortlist_target_stage(event_type_hint: str, event) -> str:
         return "OA"
     if event_type_hint == "INTERVIEW":
         return "Interview"
+    if event_type_hint in ("REGISTRATION", "NEW_DRIVE", "GENERAL_UPDATE"):
+        return None  # roster/FYI mails carry lists that are not selections
     text = ""
     if event is not None:
         text = f"{getattr(event, 'subject', '') or ''} {getattr(event, 'body', '') or ''}".lower()
@@ -696,7 +747,7 @@ def _shortlist_target_stage(event_type_hint: str, event) -> str:
         return "OA"
     if "interview" in text or "selection process" in text:
         return "Interview"
-    return "OA"
+    return None
 
 
 def apply_shortlist_matches(db: Session, company: Company, event: Optional[CompanyEvent],
@@ -714,6 +765,14 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
     """
     if not neo_ids:
         return 0
+
+    # Context check BEFORE anything else: an applied/registered-students
+    # roster is matched (so new applicants get tracked at 'Applied') but
+    # never advances stages, never notifies, never infers rejection.
+    is_roster = _is_roster_list(event, source)
+    if is_roster:
+        logger.info(f"Shortlist ({source}): roster list detected for "
+                    f"{company.name} — matching without stage changes.")
 
     shortlist_hashes = set()
     for nid in neo_ids:
@@ -783,22 +842,28 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
             event_type_hint, "been shortlisted for the next round"
         )
         target_stage = _shortlist_target_stage(event_type_hint, event)
+        # Rosters (applied/registered lists, opt-out FYI mails) and lists
+        # whose purpose can't be determined NEVER move stages — being on the
+        # 'final applied students list' is not a selection.
+        is_roster = is_roster or target_stage is None
 
         for profile in profiles:
             # Application status logic: advance directly to the round the
             # shortlist is for (no intermediate 'Shortlisted' stage).
             app = apps_by_user_id.get(profile.user_id)
             if not app:
+                # recruitment_state has a DB CHECK constraint that has no
+                # 'Applied' value — roster matches sit at 'Registration'.
                 app = Application(
                     user_id=profile.user_id,
                     company_id=company.id,
-                    status=target_stage,
-                    recruitment_state=target_stage,
-                    current_round=target_stage,
+                    status=target_stage if not is_roster else 'Applied',
+                    recruitment_state=target_stage if not is_roster else 'Registration',
+                    current_round=target_stage if not is_roster else 'Applied',
                     user_decision='tracking',
                 )
                 db.add(app)
-            elif not is_repeat_list:
+            elif not is_repeat_list and not is_roster:
                 if app.status not in ('Offer', 'Rejected', 'Declined', 'Ignored'):
                     # only move forward, never demote — and a re-sent copy of
                     # an already-processed list never advances anyone.
@@ -825,8 +890,10 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
                 opp_state.archived_at = None
                 opp_state.updated_at = datetime.utcnow()
 
-            # Notification logic (skip on re-sent copies of the same list)
-            if event and not is_repeat_list and profile.user_id not in notified_user_ids:
+            # Notification logic (skip on re-sent copies and rosters — being
+            # on the applied-students list is not worth a congratulation)
+            if event and not is_repeat_list and not is_roster \
+                    and profile.user_id not in notified_user_ids:
                 notif_msg = (f"🎉 Congratulations! You have {stage_wording} in the "
                              f"{company.name} drive ({company.role}). Check the workspace "
                              f"for next-round details.")
@@ -842,6 +909,13 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
 
     # 2. Students actively tracking this drive who are NOT on the list:
     # mark Likely Rejected and ask them to verify + archive.
+    # NEVER from a roster: absence from an applied-students list is not a
+    # selection outcome (and its purpose was informational to begin with).
+    if is_roster:
+        logger.info(f"Shortlist ({source}): roster — matched {matched_count}, "
+                    f"no rejection inference for {company.name}.")
+        return matched_count
+
     active_apps = db.query(Application).filter(
         Application.company_id == company.id,
         Application.status.in_(('Applied', 'Shortlisted', 'OA', 'Interview'))
@@ -2034,6 +2108,7 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                 "min_twelfth_marks": min_twelfth_marks,
                 "requires_no_arrears": requires_no_arrears,
                 "min_ug_cgpa": min_ug_cgpa,
+                "women_only": bool(ext_data.get("women_only", {}).get("value")),
                 "date_of_visit": ext_data.get("date_of_visit", {}).get("value") or "Will be announced later"
             }
             
@@ -2289,6 +2364,20 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                         f"supporting text in the email — dropping hallucinated milestone."
                     )
                     continue
+
+                # HALLUCINATION GUARD 3: the DATE must be written in the mail.
+                # A grounded stage with an invented date (Juspay: 'Online Test
+                # 18 Jul' when the mail names no OA date) keeps the milestone
+                # but strips the date rather than showing fiction.
+                if ev_date is not None:
+                    ist_dt = ev_date + IST_OFFSET
+                    if not event_date_is_grounded(ist_dt, f"{subject}\n{body}"):
+                        logger.warning(
+                            f"Job {job.id}: milestone '{ev_label}' date "
+                            f"{ist_dt.date()} IST is not written in the email — "
+                            f"dropping the invented date (milestone kept)."
+                        )
+                        ev_date = None
 
                 # Recover a time-of-day written next to the date when the
                 # parser stored date-only midnight ('10th July 2026 (05.30 pm)').
