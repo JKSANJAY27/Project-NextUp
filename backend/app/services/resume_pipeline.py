@@ -420,7 +420,7 @@ class ResumeGenerationPipeline:
             for p in (self.master_resume_data.get("projects") or [])
             if isinstance(p, dict)
         }
-        kept, reverted = [], 0
+        kept, reverted, already_aligned = [], 0, 0
         for op in suggestions.get("optimized_projects") or []:
             orig = originals.get(op.get("title", "").strip().lower(), "")
             new_desc = (op.get("description") or "").strip()
@@ -434,28 +434,45 @@ class ResumeGenerationPipeline:
             lost_metrics = self._metrics_in(orig) - self._metrics_in(new_desc)
             too_short = orig and len(new_desc) < 0.55 * len(orig)
             truncated = self._is_truncated(new_desc)
-            # Pure copy/prefix of the original = the model did no work;
-            # showing it as an "optimization" is noise.
+            # Near-copies (the model changed a word or two) are not
+            # optimizations — showing identical before/after cards reads as
+            # a broken feature. Drop the card; the original wording is kept
+            # in the tailored copy automatically.
             orig_norm, new_norm = self._norm_text(orig), self._norm_text(new_desc)
-            no_op = bool(orig_norm) and (new_norm == orig_norm
-                                         or orig_norm.startswith(new_norm))
-            if lost_metrics or too_short or truncated or no_op:
+            a, b = set(orig_norm.split()), set(new_norm.split())
+            jaccard = (len(a & b) / len(a | b)) if (a or b) else 0.0
+            near_copy = bool(orig_norm) and (
+                jaccard >= 0.90 or new_norm == orig_norm
+                or orig_norm.startswith(new_norm))
+
+            if lost_metrics or too_short or truncated:
                 reverted += 1
                 logger.info(
-                    f"Quality gate: reverting '{op.get('title')}' rewrite "
+                    f"Quality gate: dropping '{op.get('title')}' rewrite "
                     f"(lost_metrics={sorted(lost_metrics)[:5]}, too_short={too_short}, "
-                    f"truncated={truncated}, no_op={no_op})."
+                    f"truncated={truncated})."
                 )
-                op["description"] = orig
-            else:
-                op["description"] = new_desc
+                continue
+            if near_copy:
+                already_aligned += 1
+                logger.info(
+                    f"Quality gate: dropping '{op.get('title')}' rewrite "
+                    f"(near-copy, jaccard={jaccard:.2f})."
+                )
+                continue
+            op["description"] = new_desc
             kept.append(op)
         suggestions["optimized_projects"] = kept
         notes = []
         if reverted:
             notes.append(
-                f"{reverted} project rewrite(s) were reverted to your original "
-                "wording (the AI dropped metrics, cut a sentence short, or made no real change)."
+                f"{reverted} project rewrite(s) were discarded because the AI "
+                "dropped metrics or cut a sentence short — your original wording is kept."
+            )
+        if already_aligned:
+            notes.append(
+                f"{already_aligned} project(s) are shown unchanged — the AI "
+                "could not meaningfully improve them for this JD."
             )
 
         summary_note = self._summary_gate(suggestions)
@@ -598,18 +615,22 @@ Return ONLY this JSON: {{"optimized_summary": "..."}}"""
         summary = parsed.get("optimized_summary")
         return str(summary).strip() if summary else None
 
-    def _gen_projects(self, jd_text: str, strategy_view: Dict[str, Any]) -> List[Dict[str, str]]:
-        resume_view = self._compact_resume_view()
-        projects = self._rank_projects(resume_view.get("projects") or [])[:MAX_PROJECTS]
-        prompt = f"""Rewrite a student's project descriptions to target a specific job. Follow the RULES exactly.
+    def _gen_project_batch(self, jd_text: str, strategy_view: Dict[str, Any],
+                           projects: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """Rewrite a SMALL batch of projects (<=2) in one focused call.
+
+        A 3B model given 4 projects at once returns near-verbatim copies;
+        given 1-2 it actually rewrites. The batches run through the same
+        thread pool, so latency stays ≈ two waves on the Space."""
+        prompt = f"""Rewrite the project descriptions below so they speak to a specific job. Follow the RULES exactly.
 
 RULES:
 1. Only rephrase existing content. NEVER invent metrics, tools, or work the student did not list.
-2. Keep every project title EXACTLY as given. Do not add or remove projects.
+2. Keep every project title EXACTLY as given.
 3. PRESERVE every number, percentage and metric (e.g. "sub-1.2s", "200+ users", "20%", "10+"). Dropping a metric is an error.
-4. Every bullet must be a COMPLETE sentence ending with a period. Never cut a sentence short.
-5. Rework each description so this job description's terminology appears where the student's real work supports it; lead with what matters most for the TARGET role.
-6. Keep the bullet structure: separate bullets with "• ", each starting with a capitalized strong verb (Built, Engineered, Designed...).
+4. Do NOT copy the original sentences. Restructure each bullet: new opening verb, reordered emphasis, JD terminology woven in where the student's real work supports it. Changing one word is a failure.
+5. Lead each description with the aspect most relevant to the TARGET role.
+6. Every bullet must be a COMPLETE sentence ending with a period. Separate bullets with "• ", each starting with a capitalized strong verb (Built, Engineered, Designed...).
 7. No buzzwords (spearheaded, synergized, leveraged, cutting-edge...).
 
 TARGET ROLE: {self._display_role} at {self.company.name}
@@ -627,8 +648,8 @@ Return ONLY this JSON (no markdown):
         result = gateway.generate(
             prompt,
             system="You are an ATS resume optimizer. Output only valid JSON.",
-            max_tokens=PROJECTS_OUTPUT_TOKENS,
-            temperature=0.1,
+            max_tokens=PROJECTS_OUTPUT_TOKENS // 2 + 100,
+            temperature=0.3,
             json_mode=True,
             timeout=settings.RESUME_AI_TIMEOUT_SECONDS,
             purpose="resume_projects",
@@ -648,34 +669,45 @@ Return ONLY this JSON (no markdown):
         deterministic_skills = self._rank_skills(
             [str(s) for s in (self.master_resume_data.get("skills") or [])][:MAX_SKILLS])
 
-        # Run both passes in parallel — the Space accepts 2 concurrent
-        # generations, so wall time ≈ the slower pass, not the sum.
+        # Micro-batched passes in parallel — the Space accepts 2 concurrent
+        # generations, so the summary + N project batches finish in ~2 waves.
+        ranked_projects = self._rank_projects(
+            self._compact_resume_view().get("projects") or [])[:MAX_PROJECTS]
+        batches = [ranked_projects[i:i + 2]
+                   for i in range(0, len(ranked_projects), 2)]
+
+        summary, projects, errors = None, [], []
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="resume-pass") as pool:
             f_summary = pool.submit(self._gen_summary, jd_text, strategy_view)
-            f_projects = pool.submit(self._gen_projects, jd_text, strategy_view)
-            summary, sum_err = None, None
-            projects, proj_err = [], None
+            f_batches = [pool.submit(self._gen_project_batch, jd_text, strategy_view, b)
+                         for b in batches]
             try:
                 summary = f_summary.result()
             except Exception as e:
-                sum_err = e
+                errors.append(f"summary=({e})")
                 logger.warning(f"Summary pass failed: {e}")
-            try:
-                projects = f_projects.result()
-            except Exception as e:
-                proj_err = e
-                logger.warning(f"Projects pass failed: {e}")
+            for f in f_batches:
+                try:
+                    projects.extend(f.result())
+                except Exception as e:
+                    errors.append(f"projects=({e})")
+                    logger.warning(f"Project batch failed: {e}")
 
-        if sum_err is not None and proj_err is not None:
-            # Both passes down → let run() switch to the deterministic fallback
-            raise AIUnavailableError(
-                f"resume passes failed: summary=({sum_err}) projects=({proj_err})")
+        if summary is None and not projects and errors:
+            # Everything down → let run() switch to the deterministic fallback
+            raise AIUnavailableError("resume passes failed: " + " | ".join(errors))
 
         suggestions: Dict[str, Any] = {"tailoring_mode": "ai"}
         if summary:
             suggestions["optimized_summary"] = summary
         if projects:
             suggestions["optimized_projects"] = projects
+        if not jd_text:
+            suggestions["tailoring_note"] = (
+                "No job description was shared for this drive yet — tailoring "
+                "used a typical profile for the role. Re-generate after a JD "
+                "arrives for sharper results."
+            )
 
         # Scrub buzzwords
         suggestions = sanitize_tailored_resume(suggestions)

@@ -1036,6 +1036,19 @@ def ground_role_facts_in_source(
     ctc, stipend = extract_explicit_compensation(email_body)
     min_cgpa = extract_min_cgpa(email_body)
 
+    # Deterministic job location: a labeled 'Location: Hosur, Tamil Nadu'
+    # line in the mail always beats the model's guess.
+    det_location = None
+    loc_match = re.search(
+        r"(?:^|[\n\r])\s*[\-\–\—\*Ø\d\.\s]*\s*(?:Job\s*Location|Work\s*Location|Place\s*of\s*Posting|Location)\s*[\*_]*\s*[:\-\–\—][:\-\–\—\s\*_]*\s*([^\n\r*]+)",
+        email_body, re.IGNORECASE)
+    if loc_match:
+        candidate = loc_match.group(1).strip().strip("*_ ").strip()
+        if candidate and len(candidate) <= 100 and not candidate.lower().startswith("will be"):
+            det_location = candidate
+    if det_location and isinstance(ext, dict):
+        ext["job_location"] = {"value": det_location, "confidence": 0.95}
+
     def role_key(value: Any) -> str:
         return re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
 

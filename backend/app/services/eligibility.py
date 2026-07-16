@@ -117,6 +117,16 @@ def check_eligibility(profile, company) -> Tuple[str, Optional[str], Dict[str, A
 
     branch_checked = False
 
+    # Entries in eligible_branches that are pure degree codes carry no branch
+    # information ("BTECH", "MTECH" tokens the parser sweeps up) — only real
+    # branch names ("CSE", "Mechanical Engineering") constrain the branch.
+    _PURE_DEGREE_CODES = {"BTECH", "B.TECH", "B TECH", "MTECH", "M.TECH",
+                          "M TECH", "MCA", "MSC", "M.SC", "BE", "ME"}
+    real_branch_entries = [
+        e for e in eligible_branches
+        if e.strip().upper() not in _PURE_DEGREE_CODES
+    ]
+
     if degree_types_raw:
         # Tier 1: structured — authoritative
         branch_checked = True
@@ -130,6 +140,20 @@ def check_eligibility(profile, company) -> Tuple[str, Optional[str], Dict[str, A
             )
         else:
             matched.append(f"Degree type matched: {profile.degree_type}")
+            # A matching degree is NOT enough when the mail names specific
+            # branches: 'B.Tech (MECH / EEE) related branches only' parsed as
+            # degree_types=[BTECH] + branches=[EEE, MECHANICAL ENGINEERING],
+            # and skipping the branch tier marked every B.Tech student
+            # (including CSE) eligible for a MECH/EEE-only drive.
+            if real_branch_entries:
+                if not _branch_matches(user_branch, user_deg, real_branch_entries):
+                    readable_b = ", ".join(real_branch_entries)
+                    failed.append(
+                        f"Required branches: {readable_b}. "
+                        f"Your branch: {profile.branch or 'None'}"
+                    )
+                else:
+                    matched.append(f"Branch matched: {profile.branch}")
 
     elif eligible_branches:
         # Tier 2: check each entry in the eligible_branches ARRAY

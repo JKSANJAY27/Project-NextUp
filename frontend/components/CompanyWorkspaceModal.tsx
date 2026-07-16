@@ -500,6 +500,12 @@ export default function CompanyWorkspaceModal({
                         {selectedCompany.eligibility_rules?.date_of_visit || "Will be announced later"}
                       </span>
                     </div>
+                    <div className="space-y-1">
+                      <span className="text-[9px] font-black text-muted-foreground uppercase block">Job Location</span>
+                      <span className="text-sm font-bold text-foreground block">
+                        {selectedCompany.job_location || "Not specified — verify source email"}
+                      </span>
+                    </div>
                     <div className="space-y-1 md:col-span-2">
                       <span className="text-[9px] font-black text-muted-foreground uppercase block">Eligible Branches</span>
                       <span className="text-sm font-bold text-foreground block">

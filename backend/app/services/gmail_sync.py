@@ -671,14 +671,29 @@ _STAGE_ORDER = {
 def _shortlist_target_stage(event_type_hint: str, event) -> str:
     """Where a matched student advances to. There is no separate 'Shortlisted'
     stage — a shortlist is always FOR something (test, interview, offer):
-    being on it moves you into that round directly."""
+    being on it moves you into that round directly.
+
+    Priority: explicit result-type hints > the event's own classification >
+    text scan. The text scan checks OA indicators FIRST — a re-sent 'online
+    test ... and selection is scheduled' mail used to match 'selection
+    process' and bump everyone on the same OA list straight to Interview.
+    """
     if event_type_hint in ("OFFER_RELEASED", "OFFER"):
         return "Offer"
     if event_type_hint in ("OA_RESULT", "INTERVIEW_RESULT"):
         return "Interview"
+    # The classified event type of the carrying mail is the strongest signal:
+    # an OA schedule mail's list is the list of students ATTENDING the OA.
+    if event_type_hint == "OA":
+        return "OA"
+    if event_type_hint == "INTERVIEW":
+        return "Interview"
     text = ""
     if event is not None:
         text = f"{getattr(event, 'subject', '') or ''} {getattr(event, 'body', '') or ''}".lower()
+    if any(k in text for k in ("online test", "online assessment", "aptitude test",
+                               "oa ", "ppt", "pre-placement talk")):
+        return "OA"
     if "interview" in text or "selection process" in text:
         return "Interview"
     return "OA"
@@ -703,6 +718,37 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
     shortlist_hashes = set()
     for nid in neo_ids:
         shortlist_hashes.add(generate_blind_index(nid, settings.PEPPER))
+
+    # Same-list dedup: CDC re-sends the same list ("Reminder:", "Re:") several
+    # times. Advancing on every copy pushed students up a stage per re-send
+    # (OA list sent twice => everyone jumped to Interview). Fingerprint the
+    # list content; a previously-seen list may still match NEW students but
+    # never advances stages or re-notifies.
+    import hashlib as _hl
+    list_sig = _hl.sha256("|".join(sorted(
+        n.strip().upper() for n in neo_ids)).encode()).hexdigest()[:16]
+    is_repeat_list = False
+    if event is not None:
+        prior = db.query(CompanyEvent).filter(
+            CompanyEvent.company_id == company.id,
+            CompanyEvent.id != event.id,
+        ).all()
+        for pe_evt in prior:
+            meta = pe_evt.parsed_metadata or {}
+            if isinstance(meta, dict) and meta.get("shortlist_sig") == list_sig:
+                is_repeat_list = True
+                break
+        if event.parsed_metadata is None:
+            event.parsed_metadata = {}
+        if isinstance(event.parsed_metadata, dict):
+            event.parsed_metadata["shortlist_sig"] = list_sig
+            from sqlalchemy.orm.attributes import flag_modified as _fm
+            _fm(event, "parsed_metadata")
+    if is_repeat_list:
+        logger.info(
+            f"Shortlist ({source}): identical list already processed for "
+            f"{company.name} (sig={list_sig}) — no stage advancement/notifications."
+        )
 
     # Dedup notifications per event across all users (the unique constraint
     # (user_id, company_event_id) makes duplicates a commit-time error).
@@ -752,9 +798,10 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
                     user_decision='tracking',
                 )
                 db.add(app)
-            else:
+            elif not is_repeat_list:
                 if app.status not in ('Offer', 'Rejected', 'Declined', 'Ignored'):
-                    # only move forward, never demote
+                    # only move forward, never demote — and a re-sent copy of
+                    # an already-processed list never advances anyone.
                     if _STAGE_ORDER.get(target_stage, 1) >= _STAGE_ORDER.get(app.status, 0):
                         app.status = target_stage
                         app.recruitment_state = target_stage
@@ -778,8 +825,8 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
                 opp_state.archived_at = None
                 opp_state.updated_at = datetime.utcnow()
 
-            # Notification logic
-            if event and profile.user_id not in notified_user_ids:
+            # Notification logic (skip on re-sent copies of the same list)
+            if event and not is_repeat_list and profile.user_id not in notified_user_ids:
                 notif_msg = (f"🎉 Congratulations! You have {stage_wording} in the "
                              f"{company.name} drive ({company.role}). Check the workspace "
                              f"for next-round details.")
@@ -813,7 +860,7 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
             if profile and profile.neo_id_hash not in shortlist_hashes:
                 app.status = 'Likely Rejected'
                 logger.info(f"Student {app.user_id} marked as Likely Rejected for company {company.name}")
-                if event and app.user_id not in notified_user_ids:
+                if event and not is_repeat_list and app.user_id not in notified_user_ids:
                     db.add(Notification(
                         user_id=app.user_id,
                         company_event_id=event.id,
@@ -2539,14 +2586,26 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
         # extract Neo-ID tokens from the body and run the same matching +
         # notification flow as the Excel path. Skipped when an Excel shortlist
         # was already processed for this email to avoid double notifications.
+        # OA/INTERVIEW schedule mails increasingly paste the shortlist straight
+        # into the body ('Please find the below shortlisted students list' +
+        # Neo IDs) instead of attaching an Excel — they must be scanned too.
         SHORTLIST_BODY_EVENT_TYPES = {
             "SHORTLIST_RELEASED", "OA_RESULT", "INTERVIEW_RESULT",
-            "OFFER_RELEASED", "SHORTLIST", "OFFER",
+            "OFFER_RELEASED", "SHORTLIST", "OFFER", "OA", "INTERVIEW",
         }
+        # A real pasted shortlist has many IDs; a stray ID-like token in a
+        # schedule mail must not trigger 'Likely Rejected' for everyone else.
+        MIN_BODY_SHORTLIST_IDS = 5
         if (event_type in SHORTLIST_BODY_EVENT_TYPES
                 and not excel_shortlist_processed and body and processed_events):
             try:
                 body_neo_ids = extract_neo_ids_from_text(body)
+                if body_neo_ids and len(body_neo_ids) < MIN_BODY_SHORTLIST_IDS:
+                    logger.info(
+                        f"Job {job.id}: only {len(body_neo_ids)} Neo-ID-like tokens in body "
+                        f"(<{MIN_BODY_SHORTLIST_IDS}) — not treated as a shortlist."
+                    )
+                    body_neo_ids = []
                 if body_neo_ids:
                     logger.info(f"Job {job.id}: found {len(body_neo_ids)} Neo IDs in email body — applying shortlist matches.")
                     for event in processed_events:

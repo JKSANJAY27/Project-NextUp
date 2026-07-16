@@ -84,7 +84,7 @@ export default function ReviewChanges({
         </div>
       )}
 
-      {suggestions.tailoring_mode === "deterministic" && (
+      {(suggestions.tailoring_mode === "deterministic" || suggestions.tailoring_note) && (
         <div className="flex items-start gap-3 p-3 rounded-lg border border-amber-500/20 bg-amber-500/5 text-amber-500 text-xs">
           <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
           <span>
