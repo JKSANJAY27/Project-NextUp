@@ -7,6 +7,12 @@ const api = axios.create({
   headers: {
     "Content-Type": "application/json",
   },
+  // Without a timeout a hung socket (saturated free-tier backend) never
+  // rejects, so React Query's retry/backoff never fires and the page shows
+  // a permanent empty state. 45s covers a Render cold start on a slow day;
+  // long-running work (resume generation) polls short requests, so nothing
+  // legitimate takes longer than this.
+  timeout: 45000,
 });
 
 // Request interceptor to automatically add authorization JWT token and client decryption key

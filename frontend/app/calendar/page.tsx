@@ -5,19 +5,21 @@ import api from "@/lib/api";
 
 import { useCalendarEvents, useApplications } from "@/lib/queries";
 import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
-import { 
-  ChevronLeft, 
-  ChevronRight, 
-  Plus, 
-  Trash2, 
-  Edit2, 
-  Check, 
-  X, 
-  Calendar as CalendarIcon, 
-  ShieldCheck, 
+import {
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Trash2,
+  Edit2,
+  Check,
+  X,
+  Calendar as CalendarIcon,
+  CalendarPlus,
+  ShieldCheck,
   MapPin,
   FileText
 } from "lucide-react";
+import { buildGoogleCalendarUrl } from "@/lib/gcal";
 
 interface CalendarEvent {
   id: string;
@@ -62,82 +64,11 @@ export default function CalendarPage() {
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Google Calendar integration states
-  const [googleConnected, setGoogleConnected] = useState(false);
-  const [syncingGoogle, setSyncingGoogle] = useState(false);
-  const [googleMsg, setGoogleMsg] = useState('');
-
-  // Check Google Calendar connection status
-  useEffect(() => {
-    const checkGoogleStatus = async () => {
-      try {
-        const res = await api.get("/calendar/google/status");
-        setGoogleConnected(res.data.connected);
-      } catch (err) {
-        console.error("Failed to fetch Google status:", err);
-      }
-    };
-    checkGoogleStatus();
-  }, []);
-
-  // Display feedback if redirect callback returned query params
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const urlParams = new URLSearchParams(window.location.search);
-      if (urlParams.get("connected") === "true") {
-        setGoogleConnected(true);
-        setGoogleMsg("SUCCESSFULLY CONNECTED TO GOOGLE CALENDAR!");
-        window.history.replaceState({}, document.title, window.location.pathname);
-      } else if (urlParams.get("error")) {
-        setGoogleMsg(
-          urlParams.get("error") === "system_error"
-            ? "SOMETHING WENT WRONG WHILE CONNECTING. PLEASE TRY AGAIN."
-            : "GOOGLE CALENDAR LINKING WAS CANCELLED OR FAILED. PLEASE TRY AGAIN."
-        );
-        window.history.replaceState({}, document.title, window.location.pathname);
-      }
-    }
-  }, []);
-
-  const handleLinkGoogle = async () => {
-    try {
-      const res = await api.get("/calendar/google/auth-url");
-      if (res.data.url) {
-        window.location.href = res.data.url;
-      }
-    } catch (err) {
-      console.error("Failed to get Google auth URL:", err);
-      setGoogleMsg("FAILED TO INITIALIZE GOOGLE AUTH");
-    }
-  };
-
-  const handleSyncGoogle = async () => {
-    setSyncingGoogle(true);
-    setGoogleMsg("");
-    try {
-      const res = await api.post("/calendar/google/sync");
-      setGoogleMsg(`SUCCESSFULLY SYNCED ${res.data.synced_count} EVENTS!`);
-    } catch (err) {
-      console.error("Failed to sync Google calendar:", err);
-      setGoogleMsg("FAILED TO SYNC EVENTS");
-    } finally {
-      setSyncingGoogle(false);
-    }
-  };
-
-  const handleDisconnectGoogle = async () => {
-    if (!confirm("UNLINK GOOGLE CALENDAR? THIS WILL STOP EVENT SYNCING.")) {
-      return;
-    }
-    try {
-      await api.post("/calendar/google/disconnect");
-      setGoogleConnected(false);
-      setGoogleMsg("DISCONNECTED GOOGLE CALENDAR");
-    } catch (err) {
-      console.error("Failed to disconnect Google:", err);
-      setGoogleMsg("FAILED TO DISCONNECT");
-    }
-  };
+  // Google Calendar: automatic OAuth sync was removed — the calendar.events
+  // scope needs Google app verification, which blocked every user until
+  // approval. Each event card now carries an "Add to Google Calendar" link
+  // (template URL, no OAuth) so users add the events they care about
+  // themselves. See lib/gcal.ts.
 
   // Filters
   const [filterType, setFilterType] = useState<'ALL' | 'FOCUS' | 'COMPANY'>('ALL');
@@ -450,51 +381,14 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      {/* Google Calendar Link Card */}
-      <div className="mt-6 border-2 border-border p-5 bg-card flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs font-black uppercase text-accent">
-            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${googleConnected ? "bg-green-500" : "bg-zinc-500 animate-pulse"}`} />
-            <span>Google Calendar Sync Integration</span>
-          </div>
-          <p className="text-xs font-bold text-muted-foreground uppercase">
-            {googleConnected 
-              ? "Your placement events will automatically synchronize to your Google Calendar." 
-              : "Link your Google Calendar to synchronize registration deadlines, assessments, and interviews."
-            }
-          </p>
-          {googleMsg && (
-            <p className="text-xs font-black text-accent uppercase">{googleMsg}</p>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {googleConnected ? (
-            <>
-              <button
-                onClick={handleSyncGoogle}
-                disabled={syncingGoogle}
-                className="h-10 px-5 border-2 border-accent bg-accent text-black hover:bg-transparent hover:text-accent font-extrabold text-xs tracking-wider transition-all active:scale-95 uppercase disabled:opacity-50"
-              >
-                {syncingGoogle ? "SYNCING..." : "SYNC NOW"}
-              </button>
-              <button
-                onClick={handleDisconnectGoogle}
-                className="h-10 px-5 border-2 border-red-600 bg-red-600/10 text-red-500 hover:bg-red-600 hover:text-black hover:border-red-600 font-extrabold text-xs tracking-wider transition-all active:scale-95 uppercase"
-              >
-                UNLINK
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={handleLinkGoogle}
-              className="h-10 px-5 border-2 border-accent bg-accent text-black hover:bg-transparent hover:text-accent font-extrabold text-xs tracking-wider transition-all active:scale-95 uppercase"
-            >
-              LINK GOOGLE CALENDAR
-            </button>
-          )}
-        </div>
+      {/* Google Calendar hint — per-event add links, no account linking */}
+      <div className="mt-6 border border-border/60 px-4 py-3 bg-card/40 flex items-center gap-3">
+        <CalendarPlus size={16} className="text-accent shrink-0" />
+        <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wide">
+          Want an event in your Google Calendar? Use the <span className="text-accent">＋ GCAL</span> button
+          on any event in the day schedule — it opens Google Calendar pre-filled, no account linking needed.
+        </p>
       </div>
-
 
       {/* Filter and Top Controls Bar */}
       <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4 mt-8 pb-4 border-b border-border/50">
@@ -659,7 +553,7 @@ export default function CalendarPage() {
             </div>
 
             {/* Event list */}
-            <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+            <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
               {selectedDayEvents.length === 0 ? (
                 <div className="py-16 text-center text-xs font-bold text-muted-foreground uppercase tracking-widest leading-relaxed">
                   No events scheduled.
@@ -674,99 +568,73 @@ export default function CalendarPage() {
                     minute: "2-digit"
                   });
 
+                  // Compact card: one meta row, one title block, one action
+                  // row. The old card stacked a boxed company/role panel, a
+                  // source panel and two bordered action rows — with 3+
+                  // events the sidebar became unreadable.
                   return (
-                    <div 
-                      key={e.id} 
-                      className={`border-2 border-border bg-background p-4 flex flex-col gap-3 transition-all relative ${
+                    <div
+                      key={e.id}
+                      className={`border border-border bg-background transition-all ${
                         e.completed ? "opacity-40" : ""
                       }`}
                     >
-                      {/* Event Meta Line */}
-                      <div className="flex justify-between items-center w-full">
+                      {/* Meta row: type chip · time · source */}
+                      <div className="flex justify-between items-center px-3 pt-2.5">
                         <span className={`text-[8px] font-extrabold tracking-widest uppercase px-2 py-0.5 border ${clr.border} ${clr.bg} ${clr.text}`}>
                           {e.event_type.replace('_', ' ').toUpperCase()}
                         </span>
-                        <span className="text-[10px] font-bold text-muted-foreground">
-                          {timeStr}
+                        <span className="text-[10px] font-bold text-muted-foreground" title={e.source === 'application_timeline' ? 'Auto-extracted from CDC mail' : 'Manually added'}>
+                          {timeStr} · {e.source === 'application_timeline' ? 'AUTO' : 'MANUAL'}
                         </span>
                       </div>
 
-                      {/* Title */}
-                      <h4 className={`font-extrabold text-sm uppercase tracking-tight text-foreground leading-snug ${e.completed ? "line-through" : ""}`}>
-                        {e.company_name || e.title.replace(/registration deadline:?\s*/i, '').replace(/- registration deadline\s*/i, '')}
-                      </h4>
-
-                      {/* Display Info (Company & Role) if available */}
-                      {(e.company_name || e.role) && (
-                        <div className="text-[10px] font-bold text-muted-foreground uppercase flex flex-col gap-0.5 bg-muted/20 p-2 border border-border/50">
-                          {e.company_name && (
-                            <div>COMPANY: <span className="text-foreground">{e.company_name}</span></div>
-                          )}
-                          {e.role && (
-                            <div>ROLE: <span className="text-foreground">{e.role}</span></div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Location or Notes */}
-                      {e.location_platform && (
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground uppercase">
-                          <MapPin size={12} className={clr.text} />
-                          <span className="truncate">{e.location_platform}</span>
-                        </div>
-                      )}
-
-                      {e.notes && (
-                        <div className="flex items-start gap-1.5 text-xs text-muted-foreground uppercase">
-                          <FileText size={12} className="shrink-0 mt-0.5" />
-                          <p className="line-clamp-3 leading-tight">{e.notes}</p>
-                        </div>
-                      )}
-
-                      {/* Source Info and Workspace Link */}
-                      <div className="flex items-center justify-between border-t border-border/20 pt-2 mt-1">
-                        <div className="text-[10px] font-bold text-muted-foreground uppercase flex items-center gap-1.5">
-                          <span>SOURCE:</span>
-                          {e.source === 'application_timeline' ? (
-                            <span className="text-emerald-500 font-extrabold flex items-center gap-1">
-                              ✓ AUTO (CDC MAIL)
-                            </span>
-                          ) : (
-                            <span className="text-amber-500 font-extrabold flex items-center gap-1">
-                              ✏ MANUAL
-                            </span>
-                          )}
-                        </div>
-                        {e.company_id && (
-                          <button onClick={() => setSelectedWorkspaceCompanyId(e.company_id!)} className="text-[9px] font-black tracking-widest text-accent uppercase hover:underline transition-all">
-                            VIEW WORKSPACE &rarr;
-                          </button>
+                      {/* Title + role + optional location/notes */}
+                      <div className="px-3 py-2 space-y-1">
+                        <h4 className={`font-extrabold text-sm uppercase tracking-tight text-foreground leading-snug ${e.completed ? "line-through" : ""}`}>
+                          {e.company_name || e.title.replace(/registration deadline:?\s*/i, '').replace(/- registration deadline\s*/i, '')}
+                        </h4>
+                        {e.role && (
+                          <p className="text-[10px] font-bold text-muted-foreground uppercase truncate">{e.role}</p>
+                        )}
+                        {e.location_platform && (
+                          <p className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase truncate">
+                            <MapPin size={10} className={clr.text} />
+                            {e.location_platform}
+                          </p>
+                        )}
+                        {e.notes && (
+                          <p className="flex items-start gap-1.5 text-[10px] text-muted-foreground leading-tight">
+                            <FileText size={10} className="shrink-0 mt-0.5" />
+                            <span className="line-clamp-2">{e.notes}</span>
+                          </p>
                         )}
                       </div>
 
-                      {/* Actions */}
-                      <div className="flex items-center justify-between border-t border-border/50 pt-3 mt-1">
-                        {/* Complete Checkbox */}
-                        <button
-                          onClick={() => handleToggleComplete(e)}
-                          className={`flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-1 border transition-all active:scale-95 ${
-                            e.completed 
-                              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-500" 
-                              : "bg-transparent border-border text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          {e.completed ? (
-                            <>
-                              <Check size={10} />
-                              <span>COMPLETED</span>
-                            </>
-                          ) : (
-                            <span>MARK COMPLETE</span>
-                          )}
-                        </button>
-
-                        {/* Edit & Delete (CRUD for Manual, or Soft Delete for Synced) */}
+                      {/* Single action row: complete · gcal · edit · delete · workspace */}
+                      <div className="flex items-center justify-between border-t border-border/50 px-3 py-2">
                         <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleToggleComplete(e)}
+                            title={e.completed ? "Completed — click to undo" : "Mark complete"}
+                            className={`p-1 border transition-all active:scale-95 ${
+                              e.completed
+                                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-500"
+                                : "border-border text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            <Check size={12} />
+                          </button>
+                          <a
+                            href={buildGoogleCalendarUrl(e)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Add this event to your Google Calendar"
+                            className="flex items-center gap-1 px-1.5 py-1 border border-border text-[9px] font-black text-muted-foreground hover:text-accent hover:border-accent uppercase transition-all active:scale-95"
+                          >
+                            <CalendarPlus size={11} />
+                            GCAL
+                          </a>
                           {e.is_manual && (
                             <button
                               onClick={() => handleOpenEditModal(e)}
@@ -784,6 +652,11 @@ export default function CalendarPage() {
                             <Trash2 size={12} />
                           </button>
                         </div>
+                        {e.company_id && (
+                          <button onClick={() => setSelectedWorkspaceCompanyId(e.company_id!)} className="text-[9px] font-black tracking-widest text-accent uppercase hover:underline transition-all">
+                            WORKSPACE &rarr;
+                          </button>
+                        )}
                       </div>
                     </div>
                   );

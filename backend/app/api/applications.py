@@ -1,11 +1,26 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, defer
 from typing import List, Any, Dict, Optional
 from uuid import UUID
 from datetime import datetime
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.models import User, Application, Company, OpportunityState
+from app.models.models import User, Application, Company, OpportunityState, CompanyEvent
+
+
+def _company_with_light_events(rel):
+    """Eager-load a company relationship + its events WITHOUT email bodies.
+
+    joinedload(...).joinedload(Company.events) exploded into
+    (applications x events) rows each carrying the FULL email body — the
+    priority scorer and deadline properties only need timestamps/stages.
+    selectinload batches events into one extra query; defer skips the
+    heavyweight columns entirely.
+    """
+    return rel.selectinload(Company.events).options(
+        defer(CompanyEvent.body),
+        defer(CompanyEvent.source_email),
+    )
 from app.schemas.schemas import ApplicationCreate, ApplicationUpdate, ApplicationOut, OpportunityStateOut, CompanyOut
 from app.services.priority_scorer import calculate_priority_score
 from app.services.stale_detector import is_application_stale
@@ -21,7 +36,7 @@ router = APIRouter(prefix="/applications", tags=["applications"])
 def _load_application_with_score(db: Session, app: Application) -> Application:
     """Reload application with all relationships and computed fields."""
     loaded = db.query(Application).options(
-        joinedload(Application.company).joinedload(Company.events)
+        _company_with_light_events(joinedload(Application.company))
     ).filter(Application.id == app.id).first()
     loaded.priority_score = calculate_priority_score(loaded, loaded.company, loaded.company.events)
     loaded.is_stale = is_application_stale(loaded)
@@ -113,7 +128,7 @@ def list_applications(
 
     # Fetch all real applications for this user
     apps = db.query(Application).options(
-        joinedload(Application.company).joinedload(Company.events)
+        _company_with_light_events(joinedload(Application.company))
     ).filter(Application.user_id == current_user.id).all()
 
     # Build a map of company_id → Application

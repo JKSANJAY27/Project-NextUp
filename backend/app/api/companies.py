@@ -262,9 +262,23 @@ def list_companies(
     list_version = get_companies_list_version()
     cache_key = f"nextup:cache:companies:list:v{list_version}:s{skip}:l{limit}"
     cached_list = get_cache(cache_key)
-    
+
     if cached_list is None:
-        companies = db.query(Company).all()
+        # Eager-load events in ONE batched query, with the heavy columns
+        # (full email bodies) deferred. Serialization touches latest_event /
+        # effective_deadline / deadline_label — each reads company.events, so
+        # lazy loading fired one query PER COMPANY pulling every email body.
+        # On a Redis cache miss that took long enough to saturate the single
+        # free-tier worker's thread/DB pool, and every other endpoint then
+        # timed out behind it (the intermittent ERR_CONNECTION_TIMED_OUT
+        # storms across the app).
+        from sqlalchemy.orm import selectinload, defer
+        companies = db.query(Company).options(
+            selectinload(Company.events).options(
+                defer(CompanyEvent.body),
+                defer(CompanyEvent.source_email),
+            )
+        ).all()
         def get_sort_key(c):
             # Sort by when the drive's FIRST email actually arrived (earliest
             # event timestamp), so the most recently announced company always
@@ -330,7 +344,13 @@ def get_company(
     cached_company = get_cache(cache_key)
     
     if cached_company is None:
-        company = db.query(Company).filter(Company.id == id).first()
+        from sqlalchemy.orm import selectinload, defer
+        company = db.query(Company).options(
+            selectinload(Company.events).options(
+                defer(CompanyEvent.body),
+                defer(CompanyEvent.source_email),
+            )
+        ).filter(Company.id == id).first()
         if not company:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
