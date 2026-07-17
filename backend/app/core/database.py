@@ -15,7 +15,11 @@ else:
     # sslmode=require ensures the connection is encrypted.
     # The hstore probe is handled by passing use_native_hstore=False
     # as a dialect kwarg below.
-    connect_args = {"sslmode": "require"}
+    # connect_timeout bounds the TCP/SSL handshake — psycopg2's default is
+    # UNLIMITED, and a single unreachable-DB moment during boot hung the
+    # startup migrations forever, so uvicorn never bound its port and the
+    # whole Render deploy failed with "no open ports detected".
+    connect_args = {"sslmode": "require", "connect_timeout": 10}
 
 engine_kwargs = {
     "pool_pre_ping": True,

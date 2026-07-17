@@ -75,6 +75,21 @@ for api_prefix in [settings.API_V1_STR, "/api/v1"]:
 
 @app.on_event("startup")
 def on_startup():
+    """Kick off boot tasks WITHOUT blocking the port bind.
+
+    Uvicorn binds its socket only after the startup event returns. The old
+    handler ran DB migrations inline — one slow/unreachable DB moment and
+    the process sat here forever, Render's port scan found nothing, and the
+    deploy failed ("no open ports detected"). Migrations, the scheduler and
+    the resume worker all tolerate starting a few seconds after traffic;
+    requests that need the DB before it's ready get a 503 from the
+    SAOperationalError handler above and the frontend retries.
+    """
+    import threading
+    threading.Thread(target=_boot_tasks, name="boot-tasks", daemon=True).start()
+
+
+def _boot_tasks():
     # Run structural schema migrations automatically on boot
     db_url = settings.DATABASE_URL
     is_sqlite = db_url.startswith("sqlite")

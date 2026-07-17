@@ -16,6 +16,11 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 # Configure Ollama models to reside inside a writable project subfolder
 ENV OLLAMA_MODELS=/app/ollama/models
 
+# Never buffer Python stdout/stderr: the last failed deploy showed ZERO
+# uvicorn output for 14 minutes — with buffering on, we couldn't tell where
+# boot was stuck. Unbuffered logs make the next hang diagnosable in Render.
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 # Copy and install python dependencies
