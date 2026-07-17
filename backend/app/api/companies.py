@@ -235,8 +235,21 @@ async def import_placement_file(
         raise HTTPException(status_code=400, detail="Invalid import_type. Must be 'email', 'jd', or 'shortlist'.")
 
 class CachedCompanyMock:
-    def __init__(self, eligibility_rules):
-        self.eligibility_rules = eligibility_rules
+    """Stand-in for a Company ORM row built from cached/serialized data.
+
+    MUST mirror every attribute check_eligibility() reads via getattr() —
+    eligibility_rules alone silently disabled the branch-restriction (Tier 2)
+    and raw-text (Tier 3) checks on every cached read, which is the actual
+    API path for both list_companies() and get_company(). A student whose
+    degree matched but whose BRANCH was restricted (e.g. a B.Tech CSE
+    student against a 'B.Tech MECH/EEE only' drive) was marked ELIGIBLE
+    because eligible_branches defaulted to [] on this mock, even though the
+    same check against the real Company row returned NOT_ELIGIBLE correctly.
+    """
+    def __init__(self, company_data: dict):
+        self.eligibility_rules = company_data.get("eligibility_rules")
+        self.eligible_branches = company_data.get("eligible_branches")
+        self.eligibility_raw_text = company_data.get("eligibility_raw_text")
 
 @router.get("", response_model=List[CompanyWithEligibilityOut])
 def list_companies(
@@ -280,7 +293,7 @@ def list_companies(
 
     results = []
     for company_data in cached_list:
-        mock_company = CachedCompanyMock(company_data.get("eligibility_rules"))
+        mock_company = CachedCompanyMock(company_data)
         if current_user.profile:
             status, reason, explanation = check_eligibility(current_user.profile, mock_company)
         else:
@@ -326,7 +339,7 @@ def get_company(
         cached_company = CompanyOut.from_orm(company).dict()
         set_cache(cache_key, cached_company, expire_seconds=600) # 10 min TTL
 
-    mock_company = CachedCompanyMock(cached_company.get("eligibility_rules"))
+    mock_company = CachedCompanyMock(cached_company)
     if current_user.profile:
         status_elig, reason_elig, explanation_elig = check_eligibility(current_user.profile, mock_company)
     else:

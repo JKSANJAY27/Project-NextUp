@@ -34,8 +34,8 @@ export default function TrackingPage() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [pdfLoading, setPdfLoading] = useState(false);
   const queryClient = useQueryClient();
-  const { data: companiesData, isLoading: companiesLoading } = useCompanies(!!user);
-  const { data: applicationsData, isLoading: applicationsLoading } = useApplications(!!user);
+  const { data: companiesData, isLoading: companiesLoading, isError: companiesError } = useCompanies(!!user);
+  const { data: applicationsData, isLoading: applicationsLoading, isError: applicationsError } = useApplications(!!user);
 
   const [archiveConfirm, setArchiveConfirm] = useState<{
     isOpen: boolean;
@@ -294,10 +294,27 @@ export default function TrackingPage() {
           offer={categorized.OFFER.length}
         />
 
-        {/* Loading / Empty States */}
+        {/* Loading / Error / Empty States */}
         {loading ? (
           <div className="text-center py-20 font-bold uppercase tracking-wider text-muted-foreground">
             Loading workflow tracker...
+          </div>
+        ) : (companiesError || applicationsError) ? (
+          // Distinct from the real empty state: the free-tier backend can
+          // take 30-50s to wake from a cold start, and a fetch failure used
+          // to render as an indistinguishable 'no companies' message —
+          // making the tracker look broken/empty when it was just waiting.
+          <div className="text-center py-20 border-2 border-dashed border-destructive/40 text-muted-foreground font-bold uppercase tracking-wider text-xs space-y-3">
+            <p>Could not reach the server. It may be waking up from idle — this can take up to a minute.</p>
+            <button
+              onClick={() => {
+                queryClient.invalidateQueries({ queryKey: ["companies"] });
+                queryClient.invalidateQueries({ queryKey: ["applications"] });
+              }}
+              className="inline-block border border-border hover:border-foreground px-4 py-2 text-foreground normal-case tracking-normal"
+            >
+              Retry
+            </button>
           </div>
         ) : visibleCompanies.length === 0 ? (
           <div className="text-center py-20 border-2 border-dashed border-border text-muted-foreground font-bold uppercase tracking-wider text-xs">
