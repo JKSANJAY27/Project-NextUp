@@ -102,9 +102,14 @@ class CompanyOut(CompanyCreate):
         from_attributes = True
 
 class EligibilityExplanation(BaseModel):
-    eligible: bool
+    # None = UNKNOWN verdict (restricted/criteria-less drives). A strict bool
+    # here made FastAPI's response validation 500 on any UNKNOWN company, and
+    # that unhandled 500 bypasses CORSMiddleware — surfacing in the browser as
+    # a bogus CORS error on /api/companies.
+    eligible: Optional[bool] = None
     matched: List[str] = []
     failed: List[str] = []
+    unverified: List[str] = []
 
 class CompanyWithEligibilityOut(CompanyOut):
     eligibility_status: str  # 'ELIGIBLE', 'NOT_ELIGIBLE'

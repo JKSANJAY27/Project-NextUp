@@ -99,18 +99,17 @@ const builders = [
     id: "BLDR_01",
     name: "SANJAY",
     surname: "J K",
-    initials: "SJK",
+    initials: "JK",
     role: "Software Developer & AI Engineer",
     photo: "/images/peeps/sanjay.jfif",
     bio: "I love building systems that think. From LLM pipelines to real-time AI apps, I enjoy solving complex problems and turning ideas into scalable, intelligent products.",
     whoami: "engineers full-stack systems, then teaches them to think",
     stats: [
-      { k: "Projects", v: "4+" },
-      { k: "Hackathons", v: "3" },
+      { k: "CGPA", v: "9.34" },
       { k: "GATE AIR", v: "1603" },
     ],
-    expertise: ["Full-Stack", "AI / LLM Systems", "Backend Engineering", "Python", "System Design", "Graph DB"],
-    highlight: "Judges' Choice @ Sankalp AI Hackathon · Finalist, Google Cloud Agentic AI Hackathon",
+    expertise: ["Software Engineering", "AI / LLM Systems", "Full-Stack", "System Design"],
+    highlight: "UKIERI International Research Scholar · Builds production-grade AI systems",
     links: [
       { label: "GitHub", href: "https://github.com/JKSANJAY27", icon: GitBranch },
       { label: "LinkedIn", href: "https://linkedin.com/in/sanjay-j-k/", icon: ExternalLink },
@@ -123,18 +122,17 @@ const builders = [
     id: "BLDR_02",
     name: "HARIPRASAD",
     surname: "T",
-    initials: "HT",
+    initials: "HP",
     role: "Software Developer & AI Engineer",
     photo: "/images/peeps/hariprasad.jfif",
     bio: "I build end-to-end solutions with clean code and smart design. Whether it's ML models, full-stack apps or optimizing workflows, I love shipping real value.",
     whoami: "builds the model, then ships it into a real product",
     stats: [
-      { k: "AI/ML Builds", v: "5+" },
+      { k: "CGPA", v: "9.06" },
       { k: "Internships", v: "2" },
-      { k: "Natl. Finals", v: "3" },
     ],
     expertise: ["Machine Learning", "Deep Learning", "Full Stack", "Python", "React", "AWS"],
-    highlight: "90.22% accuracy multi-task CV pipeline · Finalist, India Innovates 2026",
+    highlight: "Finalist, India Innovates 2026 · Ships end-to-end ML products",
     links: [
       { label: "GitHub", href: "https://github.com/HARIPRASAD-04", icon: GitBranch },
       { label: "LinkedIn", href: "https://www.linkedin.com/in/hariprasad-t-91799b28a/", icon: ExternalLink },
@@ -194,9 +192,9 @@ function BuilderCard({ b }: { b: (typeof builders)[number] }) {
         </div>
 
         {/* Info panel */}
-        <div className="p-6 md:p-8 flex flex-col gap-5">
-          <div className="space-y-3">
-            <h3 className="text-3xl md:text-4xl font-extrabold tracking-tighter uppercase leading-none">
+        <div className="p-5 md:p-6 flex flex-col gap-4">
+          <div className="space-y-2">
+            <h3 className="text-2xl md:text-3xl font-extrabold tracking-tighter uppercase leading-none">
               {b.name} <span className="text-accent">{b.surname}</span>
             </h3>
             <div className="flex items-center gap-2 flex-wrap">
@@ -207,7 +205,7 @@ function BuilderCard({ b }: { b: (typeof builders)[number] }) {
             </div>
           </div>
 
-          <p className="text-sm text-muted-foreground leading-relaxed">{b.bio}</p>
+          <p className="text-[13px] text-muted-foreground leading-relaxed">{b.bio}</p>
 
           {/* whoami terminal strip */}
           <div className="border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed">
@@ -220,8 +218,8 @@ function BuilderCard({ b }: { b: (typeof builders)[number] }) {
           {/* stat tiles */}
           <div className="grid grid-cols-3 border-2 border-border divide-x-2 divide-border">
             {b.stats.map((s) => (
-              <div key={s.k} className="p-3 text-center hover:bg-accent hover:text-black transition-colors group/stat">
-                <div className="text-lg md:text-xl font-extrabold tracking-tighter">{s.v}</div>
+              <div key={s.k} className="p-2.5 text-center hover:bg-accent hover:text-black transition-colors group/stat">
+                <div className="text-base md:text-lg font-extrabold tracking-tighter">{s.v}</div>
                 <div className="text-[9px] font-bold tracking-widest uppercase text-muted-foreground group-hover/stat:text-black">
                   {s.k}
                 </div>
@@ -257,10 +255,11 @@ function BuilderCard({ b }: { b: (typeof builders)[number] }) {
                   href={l.href}
                   target={l.href.startsWith("mailto:") ? undefined : "_blank"}
                   rel="noopener noreferrer"
-                  className="flex-1 flex items-center justify-center gap-2 py-2.5 text-[10px] font-extrabold tracking-widest uppercase text-muted-foreground hover:bg-accent hover:text-black transition-colors"
+                  aria-label={l.label}
+                  title={l.label}
+                  className="flex-1 flex items-center justify-center py-2.5 text-muted-foreground hover:bg-accent hover:text-black transition-colors"
                 >
-                  <l.icon size={13} />
-                  {l.label}
+                  <l.icon size={15} />
                 </a>
               ))}
             </div>

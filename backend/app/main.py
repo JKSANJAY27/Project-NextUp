@@ -19,6 +19,22 @@ app = FastAPI(
 
 import logging
 
+from fastapi.exceptions import ResponseValidationError
+
+@app.exception_handler(ResponseValidationError)
+async def response_validation_error_handler(request: Request, exc: ResponseValidationError):
+    """Handle response-schema mismatches inside the middleware stack.
+
+    Left unhandled, this error propagates past CORSMiddleware and the browser
+    reports it as a CORS failure (no ACAO header) instead of the 500 it is —
+    which is exactly how the /api/companies 'CORS' outages presented.
+    """
+    logging.error(f"ResponseValidationError on {request.method} {request.url.path}: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Server response failed validation. Please report this."},
+    )
+
 @app.exception_handler(SAOperationalError)
 async def db_operational_error_handler(request: Request, exc: SAOperationalError):
     """Return 503 on stale DB SSL connections so the frontend can retry."""
