@@ -9,11 +9,15 @@ import {
   CheckCircle,
   ChevronDown,
   ClipboardList,
+  ExternalLink,
   Filter,
+  GitBranch,
+  Globe,
   Mail,
   Shield,
   Sparkles,
   Calendar,
+  Terminal,
 } from "lucide-react";
 import Tooltip from "@/components/Tooltip";
 
@@ -86,6 +90,187 @@ function FAQItem({ q, a }: { q: string; a: string }) {
   );
 }
 
+// ─── Builders Data ───────────────────────────────────────────────────────────
+// Photos: drop the two headshots at frontend/public/images/peeps/ with these
+// exact filenames — the card falls back to an initials block until they exist.
+// Fill in the missing profile URLs below; empty links are simply not rendered.
+const builders = [
+  {
+    id: "BLDR_01",
+    name: "SANJAY",
+    surname: "J K",
+    initials: "SJK",
+    role: "AI Systems Developer",
+    photo: "/images/peeps/sanjay.jfif",
+    bio: "I love building systems that think. From LLM pipelines to real-time AI apps, I enjoy solving complex problems and turning ideas into scalable, intelligent products.",
+    whoami: "wires LLMs to real products, sub-1.2s at a time",
+    stats: [
+      { k: "CGPA", v: "9.34" },
+      { k: "Patents", v: "2" },
+      { k: "GATE AIR", v: "1603" },
+    ],
+    expertise: ["AI Systems", "LLM / RAG", "Backend", "Python", "Graph DB", "DevOps"],
+    highlight: "2 granted patents in applied AI · 1 of 9 national research scholars",
+    links: [
+      { label: "GitHub", href: "https://github.com/JKSANJAY27", icon: GitBranch },
+      { label: "LinkedIn", href: "https://linkedin.com/in/sanjay-j-k/", icon: ExternalLink },
+      { label: "Email", href: "mailto:j.k.sanjay2006@gmail.com", icon: Mail },
+      { label: "Portfolio", href: "https://j-k-sanjay.onrender.com/", icon: Globe },
+    ],
+    tilt: "md:rotate-1",
+  },
+  {
+    id: "BLDR_02",
+    name: "HARIPRASAD",
+    surname: "T",
+    initials: "HT",
+    role: "AI & Software Engineer",
+    photo: "/images/peeps/hariprasad.jfif",
+    bio: "I build end-to-end solutions with clean code and smart design. Whether it's ML models, full-stack apps or optimizing workflows, I love shipping real value.",
+    whoami: "trains the models, ships the pipelines, wins the hackathons",
+    stats: [
+      { k: "CGPA", v: "9.06" },
+      { k: "AI/ML Builds", v: "5+" },
+      { k: "Natl. Finals", v: "3" },
+    ],
+    expertise: ["Machine Learning", "Deep Learning", "Full Stack", "Python", "React", "AWS"],
+    highlight: "VIT Achiever 2025–26 · Judges' Choice @ SANKALP AI Hackathon",
+    links: [
+      { label: "GitHub", href: "https://github.com/HARIPRASAD-04", icon: GitBranch },
+      { label: "LinkedIn", href: "https://www.linkedin.com/in/hariprasad-t-91799b28a/", icon: ExternalLink },
+      { label: "Email", href: "mailto:hariprasad.t2023@vitstudent.ac.in", icon: Mail },
+    ],
+    tilt: "md:-rotate-1",
+  },
+];
+
+// ─── Builder Photo (with initials fallback until photos are added) ───────────
+function BuilderPhoto({ src, alt, initials }: { src: string; alt: string; initials: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-[repeating-linear-gradient(45deg,transparent,transparent_10px,rgba(223,225,4,0.06)_10px,rgba(223,225,4,0.06)_20px)]">
+        <span className="text-6xl font-extrabold tracking-tighter text-accent/40">{initials}</span>
+        <span className="text-[9px] font-bold tracking-widest text-muted-foreground uppercase">photo loading…</span>
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- needs onError fallback until the photos are committed
+    <img
+      src={src}
+      alt={alt}
+      className="w-full h-full object-cover object-top grayscale group-hover:grayscale-0 transition-all duration-500 group-hover:scale-[1.03]"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+// ─── Builder Card ────────────────────────────────────────────────────────────
+function BuilderCard({ b }: { b: (typeof builders)[number] }) {
+  const liveLinks = b.links.filter((l) => l.href);
+  return (
+    <article
+      className={`relative border-2 border-border bg-card group transition-all duration-300 ${b.tilt} md:hover:rotate-0 hover:border-accent hover:shadow-[10px_10px_0px_0px_#DFE104]`}
+    >
+      {/* HUD corner brackets */}
+      <span aria-hidden className="absolute -top-[2px] -left-[2px] w-6 h-6 border-t-4 border-l-4 border-accent" />
+      <span aria-hidden className="absolute -top-[2px] -right-[2px] w-6 h-6 border-t-4 border-r-4 border-accent" />
+      <span aria-hidden className="absolute -bottom-[2px] -left-[2px] w-6 h-6 border-b-4 border-l-4 border-accent" />
+      <span aria-hidden className="absolute -bottom-[2px] -right-[2px] w-6 h-6 border-b-4 border-r-4 border-accent" />
+
+      <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,42%)_1fr]">
+        {/* Photo panel */}
+        <div className="relative aspect-[4/5] sm:aspect-auto sm:min-h-full border-b-2 sm:border-b-0 sm:border-r-2 border-border overflow-hidden bg-muted/20">
+          <BuilderPhoto src={b.photo} alt={`${b.name} ${b.surname} — ${b.role}`} initials={b.initials} />
+          {/* scanline overlay */}
+          <div aria-hidden className="absolute inset-0 pointer-events-none bg-[repeating-linear-gradient(0deg,rgba(0,0,0,0.18)_0px,rgba(0,0,0,0.18)_1px,transparent_1px,transparent_4px)] opacity-40" />
+          {/* ID tag */}
+          <div className="absolute bottom-0 left-0 bg-black/85 border-t-2 border-r-2 border-accent px-3 py-1.5">
+            <span className="font-mono text-[10px] font-bold tracking-widest text-accent">
+              {`${b.id} // VIT_VELLORE`}
+            </span>
+          </div>
+        </div>
+
+        {/* Info panel */}
+        <div className="p-6 md:p-8 flex flex-col gap-5">
+          <div className="space-y-3">
+            <h3 className="text-3xl md:text-4xl font-extrabold tracking-tighter uppercase leading-none">
+              {b.name} <span className="text-accent">{b.surname}</span>
+            </h3>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-2 bg-accent text-black px-3 py-1.5 text-[11px] font-extrabold tracking-widest uppercase">
+                <Terminal size={12} />
+                {b.role}
+              </span>
+            </div>
+          </div>
+
+          <p className="text-sm text-muted-foreground leading-relaxed">{b.bio}</p>
+
+          {/* whoami terminal strip */}
+          <div className="border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed">
+            <span className="text-accent">&gt; whoami</span>
+            <br />
+            <span className="text-muted-foreground">{b.whoami}</span>
+            <span className="inline-block w-2 h-3 bg-accent ml-1 animate-pulse align-middle" aria-hidden />
+          </div>
+
+          {/* stat tiles */}
+          <div className="grid grid-cols-3 border-2 border-border divide-x-2 divide-border">
+            {b.stats.map((s) => (
+              <div key={s.k} className="p-3 text-center hover:bg-accent hover:text-black transition-colors group/stat">
+                <div className="text-lg md:text-xl font-extrabold tracking-tighter">{s.v}</div>
+                <div className="text-[9px] font-bold tracking-widest uppercase text-muted-foreground group-hover/stat:text-black">
+                  {s.k}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* expertise chips */}
+          <div>
+            <p className="text-[10px] font-extrabold tracking-widest text-accent uppercase mb-2">Expertise</p>
+            <div className="flex flex-wrap gap-1.5">
+              {b.expertise.map((e) => (
+                <span
+                  key={e}
+                  className="border border-border px-2.5 py-1 text-[10px] font-bold tracking-wider uppercase text-muted-foreground hover:border-accent hover:text-accent transition-colors cursor-default"
+                >
+                  {e}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <p className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground border-l-2 border-accent pl-3">
+            {b.highlight}
+          </p>
+
+          {/* links */}
+          {liveLinks.length > 0 && (
+            <div className="flex items-center gap-0 border-2 border-border divide-x-2 divide-border mt-auto">
+              {liveLinks.map((l) => (
+                <a
+                  key={l.label}
+                  href={l.href}
+                  target={l.href.startsWith("mailto:") ? undefined : "_blank"}
+                  rel="noopener noreferrer"
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 text-[10px] font-extrabold tracking-widest uppercase text-muted-foreground hover:bg-accent hover:text-black transition-colors"
+                >
+                  <l.icon size={13} />
+                  {l.label}
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
 // ─── Feature Card (unused standalone, features rendered inline) ──────────────
 // kept for reference; see features grid section below
 
@@ -116,6 +301,12 @@ export default function LandingPage() {
             className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors hidden md:block"
           >
             How It Works
+          </Link>
+          <Link
+            href="#builders"
+            className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors hidden md:block"
+          >
+            Builders
           </Link>
           <Link
             href="#faq"
@@ -393,6 +584,84 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ─── Meet the Builders ─────────────────────────────────────────── */}
+      <section
+        id="builders"
+        className="border-b-2 border-border relative overflow-hidden"
+        aria-labelledby="builders-heading"
+      >
+        {/* hazard-stripe top divider */}
+        <div
+          aria-hidden
+          className="h-3 w-full bg-[repeating-linear-gradient(-45deg,#DFE104,#DFE104_14px,#000_14px,#000_28px)] border-b-2 border-border"
+        />
+
+        <div className="py-20 px-8 max-w-[95vw] xl:max-w-7xl mx-auto w-full">
+          {/* Header */}
+          <div className="text-center mb-14 space-y-4 relative">
+            <p className="font-mono text-xs font-extrabold tracking-[0.35em] text-accent uppercase">
+              {"// Built by VITians, for VITians"}
+            </p>
+            <h2
+              id="builders-heading"
+              className="text-[clamp(2.5rem,8vw,6rem)] font-extrabold tracking-tighter uppercase leading-[0.85]"
+            >
+              Meet the
+              <br />
+              <span className="text-transparent [-webkit-text-stroke:2.5px_#DFE104]">
+                Builders
+              </span>
+            </h2>
+            <p className="text-sm md:text-base text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+              We&apos;re two final-year CSE students at VIT Vellore building NEXTUP.AI to make
+              placement tracking smarter, simpler and actually useful.
+            </p>
+            {/* floating side tags (desktop only) */}
+            <div aria-hidden className="hidden xl:block absolute left-0 top-8 border border-accent/60 p-4 text-left font-mono text-[10px] text-muted-foreground max-w-[180px]">
+              <p className="text-accent font-bold mb-1">{"// OUR MISSION"}</p>
+              <p>Empower every VITian to stay ahead in their placement journey.</p>
+            </div>
+            <div aria-hidden className="hidden xl:block absolute right-0 top-8 border border-accent/60 p-4 text-left font-mono text-[10px] text-muted-foreground max-w-[160px]">
+              <p className="text-accent font-bold mb-1">{"// BUILT WITH"}</p>
+              <p>Passion<br />Code<br />&amp; Late Nights</p>
+            </div>
+          </div>
+
+          {/* Builder cards */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-10">
+            {builders.map((b) => (
+              <BuilderCard key={b.id} b={b} />
+            ))}
+          </div>
+
+          {/* Mission quote bar */}
+          <div className="mt-12 border-2 border-border bg-card flex flex-col md:flex-row items-stretch">
+            <div aria-hidden className="flex items-center justify-center px-6 py-4 bg-accent text-black text-5xl font-extrabold tracking-tighter shrink-0">
+              {"//"}
+            </div>
+            <div className="flex-1 px-6 py-5 flex flex-col justify-center gap-1">
+              <p className="text-sm md:text-base font-bold leading-snug">
+                We built NEXTUP.AI for every VITian who&apos;s tired of scattered spreadsheets and missed opportunities.
+              </p>
+              <p className="font-mono text-sm text-accent font-bold">
+                One platform. All your placements.
+              </p>
+            </div>
+            <div aria-hidden className="hidden md:flex flex-col justify-center border-l-2 border-border px-5 py-4 font-mono text-[11px] text-muted-foreground leading-relaxed shrink-0">
+              <span>&gt; track()</span>
+              <span>&gt; prepare()</span>
+              <span>
+                &gt; succeed();<span className="inline-block w-2 h-3 bg-accent ml-1 animate-pulse align-middle" />
+              </span>
+            </div>
+          </div>
+
+          <p className="text-center mt-10 font-mono text-[11px] font-bold tracking-[0.3em] text-muted-foreground uppercase">
+            🚀 [ Let&apos;s build the future together ]
+          </p>
+        </div>
+      </section>
+
       {/* FAQ Section */}
       <section
         id="faq"
@@ -462,6 +731,9 @@ export default function LandingPage() {
               </Link>
               <Link href="#how-it-works" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
                 How It Works
+              </Link>
+              <Link href="#builders" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
+                Builders
               </Link>
               <Link href="#faq" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
                 FAQ
