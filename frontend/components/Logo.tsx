@@ -10,7 +10,7 @@ interface LogoProps {
 
 export default function Logo({ className = "", size = "md" }: LogoProps) {
   const [attemptIndex, setAttemptIndex] = useState(0);
-  const srcOptions = ["/logo.jpg", "/logo.png", "/logo.svg"];
+  const srcOptions = ["/logo.png", "/logo.svg", "/logo.jpg"];
 
   // Define sizes matching the context where the logo is used
   const dimensions = {
