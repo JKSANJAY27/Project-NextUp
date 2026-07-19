@@ -11,6 +11,7 @@ import api from "@/lib/api";
 import { Eye, EyeOff, ArrowLeft } from "lucide-react";
 import CrowdCanvas from "@/components/CrowdCanvas";
 import GoogleAuthButton from "@/components/GoogleAuthButton";
+import Logo from "@/components/Logo";
 
 async function getDeterministicSalt(email: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -108,8 +109,8 @@ export default function LoginPage() {
           <Link href="/" className="inline-flex items-center gap-2 text-xs font-bold tracking-widest uppercase text-muted-foreground hover:text-black transition-colors">
             <ArrowLeft size={16} /> Back to Home
           </Link>
-          <Link href="/" className="text-3xl font-extrabold tracking-tighter uppercase leading-none">
-            NEXTUP.AI
+          <Link href="/" className="flex items-center">
+            <Logo size="md" />
           </Link>
         </div>
         <div className="relative z-10 my-16 space-y-4">

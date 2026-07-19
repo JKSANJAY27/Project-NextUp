@@ -20,6 +20,7 @@ import {
   Terminal,
 } from "lucide-react";
 import Tooltip from "@/components/Tooltip";
+import Logo from "@/components/Logo";
 
 // ─── FAQ Data ─────────────────────────────────────────────────────────────────
 const faqs = [
@@ -283,10 +284,8 @@ export default function LandingPage() {
 
       {/* Navigation */}
       <header className="flex h-20 items-center justify-between border-b-2 border-border px-8 md:px-16 w-full bg-background z-10 sticky top-0 backdrop-blur-md">
-        <Link href="/" aria-label="NEXTUP.AI home">
-          <span className="text-xl font-extrabold tracking-tighter uppercase text-foreground leading-none">
-            NEXTUP<span className="text-accent">.AI</span>
-          </span>
+        <Link href="/" aria-label="NEXTUP.AI home" className="flex items-center">
+          <Logo size="md" />
         </Link>
         <nav className="flex items-center gap-6" aria-label="Primary navigation">
           <Link
@@ -721,8 +720,8 @@ export default function LandingPage() {
       <footer className="border-t-2 border-border py-12 px-8 bg-muted/10 mt-auto w-full">
         <div className="max-w-[95vw] mx-auto">
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-            <Link href="/" className="text-xl font-extrabold tracking-tighter uppercase">
-              NEXTUP<span className="text-accent">.AI</span>
+            <Link href="/" className="flex items-center">
+              <Logo size="md" />
             </Link>
             <nav className="flex items-center flex-wrap justify-center gap-6" aria-label="Footer navigation">
               <Link href="#features" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">

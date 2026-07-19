@@ -23,6 +23,7 @@ import { isProfileComplete } from "@/lib/profile-utils";
 import Tooltip from "@/components/Tooltip";
 
 import { supabase } from "@/lib/supabase";
+import Logo from "@/components/Logo";
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -69,8 +70,8 @@ export default function Sidebar() {
     <>
       {/* Mobile Header */}
       <div className="flex h-16 w-full items-center justify-between border-b-2 border-border bg-background px-4 md:hidden">
-        <Link href="/dashboard" className="text-xl font-bold tracking-tighter text-foreground uppercase">
-          NEXTUP<span className="text-accent">.AI</span>
+        <Link href="/dashboard" className="flex items-center">
+          <Logo size="sm" />
         </Link>
         <button 
           onClick={() => setMobileOpen(!mobileOpen)} 
@@ -87,8 +88,8 @@ export default function Sidebar() {
       `}>
         {/* Brand header */}
         <div className="flex h-24 items-center justify-between border-b-2 border-border px-8">
-          <Link href="/dashboard" className="text-2xl font-bold tracking-tighter text-foreground uppercase leading-none">
-            NEXTUP<span className="text-accent">.AI</span>
+          <Link href="/dashboard" className="flex items-center">
+            <Logo size="lg" />
           </Link>
           <button 
             onClick={() => setMobileOpen(false)} 

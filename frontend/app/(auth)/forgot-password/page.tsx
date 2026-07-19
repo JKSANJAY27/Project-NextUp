@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import CrowdCanvas from "@/components/CrowdCanvas";
 import PasswordChangeWarningModal from "@/components/PasswordChangeWarningModal";
 import { AlertTriangle } from "lucide-react";
+import Logo from "@/components/Logo";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -66,8 +67,8 @@ export default function ForgotPasswordPage() {
       {/* Visual panel */}
       <section className="relative overflow-hidden flex flex-col justify-between border-b-2 border-border p-8 bg-accent text-black md:w-1/2 md:border-b-0 md:border-r-2 md:p-16">
         <div className="relative z-10">
-          <Link href="/" className="text-3xl font-extrabold tracking-tighter uppercase leading-none">
-            NEXTUP.AI
+          <Link href="/" className="flex items-center">
+            <Logo size="md" />
           </Link>
         </div>
         <div className="relative z-10 my-16 space-y-4">

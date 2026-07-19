@@ -1,6 +1,7 @@
 import React from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
+import Logo from "@/components/Logo";
 
 export const metadata: Metadata = {
   title: "Privacy Policy",
@@ -15,9 +16,9 @@ export default function PrivacyPage() {
       <header className="flex h-20 items-center justify-between border-b-2 border-border px-8 md:px-16">
         <Link
           href="/"
-          className="text-xl font-extrabold tracking-tighter uppercase"
+          className="flex items-center"
         >
-          NEXTUP<span className="text-accent">.AI</span>
+          <Logo size="md" />
         </Link>
         <nav className="flex items-center gap-6">
           <Link

@@ -9,6 +9,7 @@ import { supabase } from "@/lib/supabase";
 import api from "@/lib/api";
 import { Eye, EyeOff, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import CrowdCanvas from "@/components/CrowdCanvas";
+import Logo from "@/components/Logo";
 
 async function getDeterministicSalt(email: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -275,9 +276,9 @@ export default function ResetPasswordPage() {
       {/* Visual info panel */}
       <section className="relative overflow-hidden flex flex-col justify-between border-b-2 border-border p-8 bg-accent text-black md:w-1/2 md:border-b-0 md:border-r-2 md:p-16">
         <div className="relative z-10">
-          <h1 className="text-3xl font-extrabold tracking-tighter uppercase leading-none">
-            NEXTUP.AI
-          </h1>
+          <Link href="/" className="flex items-center">
+            <Logo size="md" />
+          </Link>
         </div>
         <div className="relative z-10 my-16 space-y-6">
           <div className="text-[clamp(2.2rem,5vw,4.5rem)] font-extrabold tracking-tighter uppercase leading-[0.8] text-red-700">
