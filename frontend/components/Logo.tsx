@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState } from "react";
-import Image from "next/image";
 
 interface LogoProps {
   className?: string;
@@ -12,14 +11,6 @@ export default function Logo({ className = "", size = "md" }: LogoProps) {
   const [attemptIndex, setAttemptIndex] = useState(0);
   const srcOptions = ["/logo.png", "/logo.svg", "/logo.jpg"];
 
-  // Define sizes matching the context where the logo is used
-  const dimensions = {
-    sm: { height: 24, className: "h-6 w-auto" },  // Mobile header / small elements
-    md: { height: 32, className: "h-8 w-auto" },  // Main landing header / sidebar mobile
-    lg: { height: 40, className: "h-10 w-auto" }  // Sidebar desktop header
-  };
-
-  const current = dimensions[size];
   const hasImageFailed = attemptIndex >= srcOptions.length;
 
   // If all image loading attempts fail, render the stylized text.
