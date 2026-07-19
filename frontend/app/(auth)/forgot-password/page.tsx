@@ -68,7 +68,7 @@ export default function ForgotPasswordPage() {
       <section className="relative overflow-hidden flex flex-col justify-between border-b-2 border-border p-8 bg-accent text-black md:w-1/2 md:border-b-0 md:border-r-2 md:p-16">
         <div className="relative z-10">
           <Link href="/" className="flex items-center">
-            <Logo size="md" />
+            <Logo size="md" onAccent />
           </Link>
         </div>
         <div className="relative z-10 my-16 space-y-4">

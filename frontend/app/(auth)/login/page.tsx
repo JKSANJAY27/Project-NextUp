@@ -110,7 +110,7 @@ export default function LoginPage() {
             <ArrowLeft size={16} /> Back to Home
           </Link>
           <Link href="/" className="flex items-center">
-            <Logo size="md" />
+            <Logo size="md" onAccent />
           </Link>
         </div>
         <div className="relative z-10 my-16 space-y-4">
