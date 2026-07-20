@@ -13,11 +13,15 @@ import {
   Filter,
   GitBranch,
   Globe,
+  Lock,
   Mail,
   Shield,
   Sparkles,
   Calendar,
   Terminal,
+  Zap,
+  GitMerge,
+  Search,
 } from "lucide-react";
 import Tooltip from "@/components/Tooltip";
 import Logo from "@/components/Logo";
@@ -45,12 +49,12 @@ const faqs = [
     a: "Your encryption key is derived from your password. If you change it, you'll need to re-enter your registration number, CGPA, and marks — because the old encrypted data can't be read with the new key. The app warns you clearly before any password change.",
   },
   {
-    q: "What is the AI Toolkit?",
-    a: "The AI Toolkit is a local, in-browser AI feature that analyses job descriptions and compares them with your resume. It identifies keyword gaps, suggests improvements, and helps you tailor your resume for specific drives — all without sending your data to any external AI service.",
+    q: "What is the AI Resume Tailoring feature?",
+    a: "The AI Resume Tailoring feature rewrites your resume to match a specific job description — targeting the right keywords, reordering your projects by relevance, and ensuring no metric you didn't write gets invented. The AI runs on our self-hosted Hugging Face server (not in your browser). Your resume content is processed securely and the generated output is encrypted before storage — but it does travel to our inference server to be processed.",
   },
   {
-    q: "Does it work for all VIT branches and programmes?",
-    a: "Yes. NEXTUP.AI supports all branches (CSE, ECE, EEE, Mechanical, Civil, etc.), all degree types (BTech, MTech, MCA, MBA), and all batch years. Eligibility checks automatically account for your specific branch and academic profile.",
+    q: "Does it work for students from all VIT branches and programmes?",
+    a: "NEXTUP.AI is powered by a CSE student's college Gmail inbox. This means it parses and displays all placement emails that arrive in that inbox — including drives for Mechanical, ECE, EEE, M.Tech, MBA, and other departments, whenever those mails are also sent to CSE students. However, we cannot guarantee coverage of drives whose emails are sent exclusively to other departments and never reach a CSE inbox. Eligibility checks work for all branches and degree types once you enter your profile.",
   },
   {
     q: "Can I use NEXTUP.AI on my phone?",
@@ -407,7 +411,7 @@ export default function LandingPage() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0 border-2 border-border">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-0 border-2 border-border">
           {[
             {
               icon: <Bell size={20} />,
@@ -446,19 +450,45 @@ export default function LandingPage() {
             },
             {
               icon: <Sparkles size={20} />,
-              title: "AI Resume Toolkit",
+              title: "AI Resume Tailoring",
               description:
-                "Paste a job description and the AI analyses your resume for keyword gaps, skill matches, and ATS-optimisation tips — all running locally in your browser.",
-              tooltip: "Downloads a small AI model (~50–200 MB) that runs 100% in your browser. No resume text is ever sent to external servers.",
+                "Get a per-drive rewritten resume tailored to the actual job description. The AI highlights keyword gaps, rewrites project bullets for relevance, and scores ATS coverage — all verified so no invented metrics slip through.",
+              tooltip: "Powered by a self-hosted Qwen2.5-3B model on our Hugging Face Space. Evidence-grounding gates ensure every metric in the output existed in your original resume.",
+            },
+            {
+              icon: <Lock size={20} />,
+              title: "Zero-Knowledge Encryption",
+              description:
+                "Your CGPA, marks, and registration number are encrypted right in your browser using AES-256-GCM before anything leaves your device. Our servers store only ciphertext they cannot decrypt.",
+              tooltip: "Your encryption key is derived from your password via PBKDF2 and lives only in memory. A database breach yields nothing readable — we literally cannot decrypt your data.",
+            },
+            {
+              icon: <Search size={20} />,
+              title: "Blind-Index Shortlist Matching",
+              description:
+                "Shortlist Excel sheets and inline ID tables are matched against your registration number using a cryptographic hash — the server finds your name without ever seeing your actual ID.",
+              tooltip: "A peppered HMAC of your registration number is stored server-side. Incoming shortlists are hashed the same way and intersected — plaintext IDs never exist on our servers.",
+            },
+            {
+              icon: <GitMerge size={20} />,
+              title: "Application Stage Machine",
+              description:
+                "Your application status advances automatically: Applied → OA → Interview → Offer, driven by what each shortlist is actually for — with guards against roster mails and re-sent lists.",
+              tooltip: "Each list's purpose (OA schedule, interview shortlist, offer list, roster) drives the target stage. Re-sent duplicate lists are fingerprinted and ignored. Stages only move forward.",
+            },
+            {
+              icon: <Zap size={20} />,
+              title: "Resilient AI Gateway",
+              description:
+                "Email parsing and resume generation run through a multi-tier AI gateway with per-provider circuit breakers, so a slow or down HuggingFace Space never breaks core features.",
+              tooltip: "Tier 1: own HF Space (qwen2.5:3b). Tier 2: HF Router (Llama-3.3-70B fallback). If all providers are down, deterministic fallbacks keep parsing and resume tailoring functional.",
             },
           ].map((feature, i) => (
             <div
               key={i}
               className={`border-border p-8 space-y-4 hover:bg-muted/10 hover:border-accent/30 transition-all group
-                ${i < 3 ? "border-b-2 md:border-b-2 lg:border-b-2" : ""}
-                ${i % 3 !== 2 ? "md:border-r-0 lg:border-r-2" : ""}
-                ${i % 2 !== 1 ? "md:border-r-2" : ""}
-                border-r-0 border-b-2 last:border-b-0
+                ${i % 2 === 0 ? "md:border-r-2" : ""}
+                ${i < 8 ? "border-b-2" : ""}
               `}
             >
               <div className="flex items-start justify-between">
