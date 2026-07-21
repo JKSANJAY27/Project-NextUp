@@ -718,6 +718,11 @@ def get_branches_from_text(text: str, strict: bool = False) -> List[str]:
     # 1. CS / IT / Allied Branches
     if re.search(r'\b(computer\s*science(?:\s*(?:and|&)\s*engineering)?|cse)\b', text_lower):
         branches.add("CSE")
+    # Handle standalone "CS" when used in a CS/IT context (e.g. "CS/IT related", "CS & IT", "CS related branches")
+    # This is the standard CDC shorthand for CSE — only match it in combination with IT or "related"
+    if re.search(r'\bcs\s*[/&,]\s*it\b|\bcs\s+related\b|\bcs\s*(?:and|&)\s*it\b', text_lower):
+        branches.add("CSE")
+        branches.add("IT")
     if re.search(r'\binformation\s+technology\b', text_lower):
         branches.add("IT")
     if re.search(r'\b(master\s+of\s+computer\s+app(?:lications?)?|m\.?c\.?a)\b', text_lower):

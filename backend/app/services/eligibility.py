@@ -62,6 +62,19 @@ def _branch_matches(user_branch: str, user_degree: str, eligible_branches: List[
         "MCA": "MCA", "MSC": "MSC", "M.SC": "MSC",
     }
 
+    # CS/IT branch alias group — "CS & IT related branches" is a VIT-CDC
+    # shorthand covering all these branches. If ANY of them appears in the
+    # eligible list, the student's CS/IT branch is considered a match.
+    _CS_IT_FAMILY = {"CSE", "IT", "AIML", "AIDS", "SWE", "CS",
+                     "COMPUTER SCIENCE", "INFORMATION TECHNOLOGY"}
+
+    eligible_upper = [e.strip().upper() for e in eligible_branches]
+    # If both the user's branch AND at least one listed branch are in the
+    # CS/IT family, it's a match — handles the common case where the mail
+    # says "CS/IT related" and the parser stored only ["IT"] or ["CSE"].
+    if ub in _CS_IT_FAMILY and any(e in _CS_IT_FAMILY for e in eligible_upper):
+        return True
+
     for entry in eligible_branches:
         e = entry.strip().upper()
         # 1. Pure degree codes stored directly ("MTECH", "BTECH")
