@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import api from "@/lib/api";
-import { Loader2, CheckCircle2, AlertCircle, Plus, X, RotateCcw, Sparkles, Check, HelpCircle } from "lucide-react";
+import { Loader2, CheckCircle2, AlertCircle, Plus, X, RotateCcw, Sparkles, HelpCircle } from "lucide-react";
 
 interface ProjectSuggestion {
   title: string;
