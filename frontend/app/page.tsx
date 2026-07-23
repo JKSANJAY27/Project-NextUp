@@ -105,16 +105,16 @@ const builders = [
     name: "SANJAY",
     surname: "J K",
     initials: "JK",
-    role: "Software Developer & AI Engineer",
+    role: "Software Systems Builder",
     photo: "/images/peeps/sanjay.jfif",
-    bio: "I love building systems that think. From LLM pipelines to real-time AI apps, I enjoy solving complex problems and turning ideas into scalable, intelligent products.",
-    whoami: "engineers full-stack systems, then teaches them to think",
+    bio: "I enjoy building software where system design matters as much as the AI itself. My work focuses on backend architecture, full-stack applications, and making AI reliable enough to become part of production software.",
+    whoami: "thinks in systems,\nbuilds in software.",
     stats: [
-      { k: "CGPA", v: "9.34" },
-      { k: "GATE AIR", v: "1603" },
+      { k: "Published Patents", v: "2" },
+      { k: "GATE CSE AIR", v: "1603" },
+      { k: "Research Scholar", v: "UKIERI" },
     ],
-    expertise: ["Software Engineering", "AI / LLM Systems", "Full-Stack", "System Design"],
-    highlight: "UKIERI International Research Scholar · Builds production-grade AI systems",
+    expertise: ["Backend Systems", "LLM Applications", "System Design", "Real-Time Software"],
     links: [
       { label: "GitHub", href: "https://github.com/JKSANJAY27", icon: GitBranch },
       { label: "LinkedIn", href: "https://linkedin.com/in/sanjay-j-k/", icon: ExternalLink },
@@ -128,16 +128,16 @@ const builders = [
     name: "HARIPRASAD",
     surname: "T",
     initials: "HP",
-    role: "Software Developer & AI Engineer",
+    role: "Full-Stack Developer",
     photo: "/images/peeps/hariprasad.jfif",
-    bio: "I build end-to-end solutions with clean code and smart design. Whether it's ML models, full-stack apps or optimizing workflows, I love shipping real value.",
-    whoami: "builds the model, then ships it into a real product",
+    bio: "I usually start by understanding how people already solve a problem before thinking about the technology. I enjoy mapping real-world workflows into software that feels intuitive, like municipal operations in JanVedha or the placement journey in NextUpAI.",
+    whoami: "designs flow\nbefore features.",
     stats: [
-      { k: "CGPA", v: "9.06" },
-      { k: "Internships", v: "2" },
+      { k: "SANKALP Grand Finalist", v: "Top 10" },
+      { k: "Award", v: "Judges\u2019 Choice" },
+      { k: "2025\u201326", v: "VIT Achiever" },
     ],
-    expertise: ["Machine Learning", "Deep Learning", "Full Stack", "Python", "React", "AWS"],
-    highlight: "Finalist, India Innovates 2026 · Ships end-to-end ML products",
+    expertise: ["Full-Stack Development", "Product Design", "Workflow Design", "AI Integration"],
     links: [
       { label: "GitHub", href: "https://github.com/HARIPRASAD-04", icon: GitBranch },
       { label: "LinkedIn", href: "https://www.linkedin.com/in/hariprasad-t-91799b28a/", icon: ExternalLink },
@@ -216,7 +216,7 @@ function BuilderCard({ b }: { b: (typeof builders)[number] }) {
           <div className="border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed">
             <span className="text-accent">&gt; whoami</span>
             <br />
-            <span className="text-muted-foreground">{b.whoami}</span>
+            <span className="text-muted-foreground whitespace-pre-line">{b.whoami}</span>
             <span className="inline-block w-2 h-3 bg-accent ml-1 animate-pulse align-middle" aria-hidden />
           </div>
 
@@ -247,10 +247,6 @@ function BuilderCard({ b }: { b: (typeof builders)[number] }) {
             </div>
           </div>
 
-          <p className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground border-l-2 border-accent pl-3">
-            {b.highlight}
-          </p>
-
           {/* links */}
           {liveLinks.length > 0 && (
             <div className="flex items-center gap-0 border-2 border-border divide-x-2 divide-border mt-auto">
@@ -261,10 +257,10 @@ function BuilderCard({ b }: { b: (typeof builders)[number] }) {
                   target={l.href.startsWith("mailto:") ? undefined : "_blank"}
                   rel="noopener noreferrer"
                   aria-label={l.label}
-                  title={l.label}
-                  className="flex-1 flex items-center justify-center py-2.5 text-muted-foreground hover:bg-accent hover:text-black transition-colors"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-2 text-[10px] font-bold tracking-wider uppercase text-muted-foreground hover:bg-accent hover:text-black transition-colors"
                 >
-                  <l.icon size={15} />
+                  <l.icon size={13} />
+                  <span>{l.label}</span>
                 </a>
               ))}
             </div>
@@ -641,8 +637,7 @@ export default function LandingPage() {
               </span>
             </h2>
             <p className="text-sm md:text-base text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-              We&apos;re two final-year CSE students at VIT Vellore building NEXTUP.AI to make
-              placement tracking smarter, simpler and actually useful.
+              Two final-year CSE students at VIT Vellore. We built NEXTUP.AI because the placement process was harder to track than it needed to be.
             </p>
             {/* floating side tags (desktop only) */}
             <div aria-hidden className="hidden xl:block absolute left-0 top-8 border border-accent/60 p-4 text-left font-mono text-[10px] text-muted-foreground max-w-[180px]">
@@ -651,7 +646,7 @@ export default function LandingPage() {
             </div>
             <div aria-hidden className="hidden xl:block absolute right-0 top-8 border border-accent/60 p-4 text-left font-mono text-[10px] text-muted-foreground max-w-[160px]">
               <p className="text-accent font-bold mb-1">{"// BUILT WITH"}</p>
-              <p>Passion<br />Code<br />&amp; Late Nights</p>
+              <p>Curiosity<br />Iteration<br />&amp; Feedback</p>
             </div>
           </div>
 
@@ -665,27 +660,27 @@ export default function LandingPage() {
           {/* Mission quote bar */}
           <div className="mt-12 border-2 border-border bg-card flex flex-col md:flex-row items-stretch">
             <div aria-hidden className="flex items-center justify-center px-6 py-4 bg-accent text-black text-5xl font-extrabold tracking-tighter shrink-0">
-              {"//"}
+              ?
             </div>
             <div className="flex-1 px-6 py-5 flex flex-col justify-center gap-1">
               <p className="text-sm md:text-base font-bold leading-snug">
-                We built NEXTUP.AI for every VITian who&apos;s tired of scattered spreadsheets and missed opportunities.
+                Placement season is already stressful. Keeping track of it shouldn&apos;t be.
               </p>
               <p className="font-mono text-sm text-accent font-bold">
-                One platform. All your placements.
+                Built by students. Designed for students.
               </p>
             </div>
             <div aria-hidden className="hidden md:flex flex-col justify-center border-l-2 border-border px-5 py-4 font-mono text-[11px] text-muted-foreground leading-relaxed shrink-0">
               <span>&gt; track()</span>
               <span>&gt; prepare()</span>
               <span>
-                &gt; succeed();<span className="inline-block w-2 h-3 bg-accent ml-1 animate-pulse align-middle" />
+                &gt; ship();<span className="inline-block w-2 h-3 bg-accent ml-1 animate-pulse align-middle" />
               </span>
             </div>
           </div>
 
           <p className="text-center mt-10 font-mono text-[11px] font-bold tracking-[0.3em] text-muted-foreground uppercase">
-            🚀 [ Let&apos;s build the future together ]
+            [ TWO BUILDERS • ONE GOAL ]
           </p>
         </div>
       </section>

@@ -227,7 +227,7 @@ export default function NotificationsDropdown() {
                 visibleBundles.map((bundle) => (
                   <div key={bundle.company_id} className="flex flex-col bg-card">
                     {/* Bundle Header */}
-                    <div className="flex items-center justify-between px-3 py-2 bg-accent/10 border-b border-border sticky top-0 z-10">
+                    <div className="flex items-center justify-between px-3 py-2 bg-card border-l-2 border-l-accent border-b border-border sticky top-0 z-10 shadow-sm">
                       <div className="flex flex-col gap-0.5">
                         <span className="text-xs font-bold text-foreground uppercase flex items-center gap-1.5">
                           <Building2 size={12} className="text-accent" />
@@ -303,7 +303,7 @@ export default function NotificationsDropdown() {
                 archivedBundles.map((bundle) => (
                   <div key={bundle.company_id} className="flex flex-col bg-card opacity-75">
                     {/* Bundle Header */}
-                    <div className="flex items-center justify-between px-3 py-2 bg-muted border-b border-border sticky top-0 z-10">
+                    <div className="flex items-center justify-between px-3 py-2 bg-card border-b border-border sticky top-0 z-10 shadow-sm">
                       <div className="flex flex-col gap-0.5">
                         <span className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1.5">
                           <Building2 size={12} className="text-muted-foreground" />
