@@ -6,7 +6,9 @@ import { useAppStore } from "@/lib/store";
 import { isProfileComplete } from "@/lib/profile-utils";
 import Sidebar from "@/components/Sidebar";
 import NotificationsDropdown from "@/components/NotificationsDropdown";
+import NotificationPermissionBanner from "@/components/NotificationPermissionBanner";
 import VaultGate from "@/components/VaultGate";
+import { NotificationProvider } from "@/lib/notification-context";
 
 export default function TrackingLayout({
   children,
@@ -38,6 +40,7 @@ export default function TrackingLayout({
   }
 
   return (
+    <NotificationProvider>
     <VaultGate>
     <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
       <Suspense fallback={<div className="w-64 bg-background border-r-2 border-border hidden md:block" />}>
@@ -55,11 +58,14 @@ export default function TrackingLayout({
             <NotificationsDropdown />
           </div>
         </header>
+        {/* Permission banner — shown beneath header when permission is "default" */}
+        <NotificationPermissionBanner />
         <main className="flex-1 w-full">
           {children}
         </main>
       </div>
     </div>
     </VaultGate>
+    </NotificationProvider>
   );
 }

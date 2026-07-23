@@ -1,7 +1,11 @@
+"use client";
+
 import React, { Suspense } from "react";
 import Sidebar from "@/components/Sidebar";
 import NotificationsDropdown from "@/components/NotificationsDropdown";
+import NotificationPermissionBanner from "@/components/NotificationPermissionBanner";
 import VaultGate from "@/components/VaultGate";
+import { NotificationProvider } from "@/lib/notification-context";
 
 export default function ResumeLayout({
   children,
@@ -9,6 +13,7 @@ export default function ResumeLayout({
   children: React.ReactNode;
 }) {
   return (
+    <NotificationProvider>
     <VaultGate>
     <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
       <Suspense fallback={<div className="w-64 bg-background border-r-2 border-border hidden md:block" />}>
@@ -25,11 +30,14 @@ export default function ResumeLayout({
             <NotificationsDropdown />
           </div>
         </header>
+        {/* Permission banner — shown beneath header when permission is "default" */}
+        <NotificationPermissionBanner />
         <main className="flex-1 w-full">
           {children}
         </main>
       </div>
     </div>
     </VaultGate>
+    </NotificationProvider>
   );
 }

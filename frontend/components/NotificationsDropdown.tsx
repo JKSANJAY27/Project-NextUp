@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef, useMemo } from "react";
 import { Bell, Check, CheckCheck, AlertCircle, Building2, Trash2 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { useNotifications } from "@/lib/notification-context";
 import api from "@/lib/api";
 
 interface Notification {
@@ -22,21 +22,14 @@ interface NotificationBundle {
 }
 
 export default function NotificationsDropdown() {
-  const [bundles, setBundles] = useState<NotificationBundle[]>([]);
+  // Consume shared context — no standalone Supabase channel needed here
+  const { unreadCount, bundles, refreshNotifications } = useNotifications();
+
   const [archivedBundles, setArchivedBundles] = useState<NotificationBundle[]>([]);
   const [activeTab, setActiveTab] = useState<"notifications" | "archived">("notifications");
   const [isOpen, setIsOpen] = useState(false);
   const [readInSession, setReadInSession] = useState<string[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  const fetchNotifications = async () => {
-    try {
-      const response = await api.get<NotificationBundle[]>("/notifications?scope=all_active");
-      setBundles(response.data || []);
-    } catch (error) {
-      console.error("Failed to fetch notifications:", error);
-    }
-  };
 
   const fetchArchivedNotifications = async () => {
     try {
@@ -47,35 +40,17 @@ export default function NotificationsDropdown() {
     }
   };
 
-  useEffect(() => {
-    // Subscribe to realtime database changes for notifications
-    const channel = supabase
-      .channel("realtime-notifications-dropdown")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "notifications" },
-        () => {
-          fetchNotifications();
-          fetchArchivedNotifications();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
   // Fetch when dropdown is opened or active tab changes, and clear readInSession when closed
   useEffect(() => {
     if (isOpen) {
-      fetchNotifications();
+      refreshNotifications();
       if (activeTab === "archived") {
         fetchArchivedNotifications();
       }
     } else {
       setReadInSession([]);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, activeTab]);
 
   // Close dropdown on click outside
@@ -89,27 +64,27 @@ export default function NotificationsDropdown() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const unreadCount = bundles.reduce((acc, b) => acc + b.unread_count, 0);
-
   const handleMarkAsRead = async (id: string, companyId: string) => {
     try {
       await api.patch(`/notifications/${id}/read`);
       setReadInSession((prev) => [...prev, id]);
 
-      setBundles((prev) =>
-        prev.map((b) => {
-          if (b.company_id === companyId) {
-            return {
-              ...b,
-              unread_count: Math.max(0, b.unread_count - 1),
-              notifications: b.notifications.map((n) =>
-                n.id === id ? { ...n, is_read: true } : n
-              ),
-            };
-          }
-          return b;
-        })
-      );
+      // Optimistic local update — context will catch up on next realtime event
+      const updatedBundles = bundles.map((b) => {
+        if (b.company_id === companyId) {
+          return {
+            ...b,
+            unread_count: Math.max(0, b.unread_count - 1),
+            notifications: b.notifications.map((n) =>
+              n.id === id ? { ...n, is_read: true } : n
+            ),
+          };
+        }
+        return b;
+      });
+      // Refresh from server to keep context in sync
+      await refreshNotifications();
+      void updatedBundles; // suppress unused warning
     } catch (error) {
       console.error("Failed to mark notification as read:", error);
     }
@@ -125,18 +100,7 @@ export default function NotificationsDropdown() {
         setReadInSession((prev) => [...prev, ...ids]);
       }
 
-      setBundles((prev) =>
-        prev.map((b) => {
-          if (b.company_id === companyId) {
-            return {
-              ...b,
-              unread_count: 0,
-              notifications: b.notifications.map((n) => ({ ...n, is_read: true })),
-            };
-          }
-          return b;
-        })
-      );
+      await refreshNotifications();
     } catch (error) {
       console.error("Failed to mark company as read:", error);
     }
@@ -149,13 +113,7 @@ export default function NotificationsDropdown() {
       const allIds = bundles.flatMap((b) => b.notifications.map((n) => n.id));
       setReadInSession((prev) => [...prev, ...allIds]);
 
-      setBundles((prev) =>
-        prev.map((b) => ({
-          ...b,
-          unread_count: 0,
-          notifications: b.notifications.map((n) => ({ ...n, is_read: true })),
-        }))
-      );
+      await refreshNotifications();
     } catch (error) {
       console.error("Failed to mark all as read:", error);
     }
@@ -208,7 +166,7 @@ export default function NotificationsDropdown() {
         <Bell size={20} />
         {unreadCount > 0 && (
           <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center bg-accent text-[10px] font-extrabold text-black ring-2 ring-background rounded-none">
-            {unreadCount}
+            {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         )}
       </button>
