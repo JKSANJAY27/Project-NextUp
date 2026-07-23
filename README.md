@@ -1,16 +1,22 @@
 <div align="center">
 
-# NEXTUP.AI — AI-Powered Placement Intelligence Platform
+# NextUp VIT — Free Placement Tracker for VIT Vellore Students
 
-**Never miss a shortlist.** A privacy-first, zero-knowledge placement tracker that reads campus
-recruitment emails, detects shortlists, verifies eligibility, and tailors ATS-optimized resumes —
-built end-to-end by two students and run entirely on free-tier infrastructure.
+**The free campus placement tracker built by VIT students, for VIT students.**
+Automatically reads CDC emails, detects shortlists, checks eligibility, and manages
+your entire placement journey — so you never miss a drive again.
 
-[Live App](https://project-next-up.vercel.app) · [Backend API](https://project-nextup.onrender.com/docs)
+> **Also known as:** NextUp · NEXTUP.AI · VIT placement tracker · VIT CDC tracker · placement tracker VIT
+
+[![Live App](https://img.shields.io/badge/Live%20App-project--next--up.vercel.app-DFE104?style=for-the-badge)](https://project-next-up.vercel.app)
+[![Backend API](https://img.shields.io/badge/API%20Docs-Render-DFE104?style=for-the-badge)](https://project-nextup.onrender.com/docs)
 
 `Next.js 14` · `FastAPI` · `PostgreSQL` · `Redis` · `Self-hosted LLMs (Ollama)` · `AES-256-GCM Zero-Knowledge Encryption`
 
+Built by [Sanjay J K](https://github.com/JKSANJAY27) & [Hariprasad T](https://github.com/HARIPRASAD-04) — final-year CSE students at VIT Vellore.
+
 </div>
+
 
 ---
 

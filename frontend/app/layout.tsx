@@ -15,31 +15,48 @@ const inter = Inter({
   weight: ["400", "500", "600"],
 });
 
-const BASE_URL = "https://nextup.ai";
+const BASE_URL = "https://project-next-up.vercel.app";
 
 export const metadata: Metadata = {
   metadataBase: new URL(BASE_URL),
   title: {
-    default: "NEXTUP.AI — Placement Tracker for VIT Vellore Students",
-    template: "%s | NEXTUP.AI",
+    default: "NextUp VIT — Free Placement Tracker for VIT Vellore Students",
+    template: "%s | NextUp VIT",
   },
   description:
-    "Never miss a campus placement shortlist again. NEXTUP.AI automatically tracks CDC emails, checks your eligibility for drives, and manages your entire placement journey — built for VIT Vellore students.",
+    "NextUp is the free placement tracker for VIT Vellore students. Automatically reads CDC emails, detects shortlists, checks eligibility, and manages your entire campus placement journey — never miss a drive again.",
   keywords: [
-    "VIT placement tracker",
-    "VIT Vellore placement",
-    "CDC placement automation",
-    "campus placement management",
-    "shortlist notification",
-    "placement drive tracker",
+    // Exact-match queries people type
+    "nextup vit",
+    "nextup vit vellore",
+    "nextup ai vit",
+    "project nextup vit",
+    "placement tracker vit",
+    "vit placement tracker",
+    "vit placement tracker app",
+    "placement tracker for vit students",
+    // VIT-specific CDC terms
+    "VIT CDC tracker",
+    "VIT CDC placement automation",
     "VIT CDC email parser",
-    "job application tracker students",
+    "VIT Vellore placement",
     "VIT placements 2025",
-    "placement eligibility checker",
+    "VIT placements 2026",
+    // Feature keywords
+    "campus placement management",
+    "placement drive tracker",
+    "shortlist notification VIT",
+    "placement eligibility checker VIT",
+    "CDC shortlist detector",
+    "job application tracker students India",
   ],
-  authors: [{ name: "NEXTUP.AI" }],
-  creator: "NEXTUP.AI",
-  publisher: "NEXTUP.AI",
+  authors: [
+    { name: "Sanjay J K", url: "https://github.com/JKSANJAY27" },
+    { name: "Hariprasad T", url: "https://github.com/HARIPRASAD-04" },
+  ],
+  creator: "Sanjay J K & Hariprasad T",
+  publisher: "NextUp VIT",
+  applicationName: "NextUp VIT",
   robots: {
     index: true,
     follow: true,
@@ -54,25 +71,25 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_IN",
     url: BASE_URL,
-    siteName: "NEXTUP.AI",
-    title: "NEXTUP.AI — Never Miss a Placement Shortlist",
+    siteName: "NextUp VIT",
+    title: "NextUp VIT — Free Placement Tracker for VIT Vellore",
     description:
-      "The all-in-one placement tracker for VIT Vellore students. Auto-detect shortlists, track applications, check eligibility, and prepare smarter.",
+      "The free placement tracker built for VIT Vellore students. Auto-detect CDC shortlists, track all your applications, check drive eligibility, and prepare smarter — in one place.",
     images: [
       {
-        url: "/og-image.png",
+        url: `${BASE_URL}/og-image.png`,
         width: 1200,
         height: 630,
-        alt: "NEXTUP.AI — Placement Tracker for VIT Vellore",
+        alt: "NextUp VIT — Placement Tracker for VIT Vellore Students",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "NEXTUP.AI — Never Miss a Placement Shortlist",
+    title: "NextUp VIT — Free Placement Tracker for VIT Vellore",
     description:
-      "Auto-detect placement shortlists from CDC emails, track applications, and prepare smarter. Built for VIT Vellore students.",
-    images: ["/og-image.png"],
+      "Auto-detect CDC shortlists, track applications, check eligibility. The free placement tracker built for VIT Vellore students.",
+    images: [`${BASE_URL}/og-image.png`],
   },
   alternates: {
     canonical: BASE_URL,
@@ -80,14 +97,22 @@ export const metadata: Metadata = {
   category: "education",
 };
 
-// JSON-LD structured data for WebApplication schema
-const jsonLd = {
+// JSON-LD structured data
+const jsonLdApp = {
   "@context": "https://schema.org",
-  "@type": "WebApplication",
-  name: "NEXTUP.AI",
+  "@type": "SoftwareApplication",
+  name: "NextUp VIT",
+  alternateName: [
+    "NextUp",
+    "NEXTUP.AI",
+    "NextUp placement tracker",
+    "VIT placement tracker",
+    "placement tracker VIT Vellore",
+    "NextUp VIT Vellore",
+  ],
   url: BASE_URL,
   description:
-    "A privacy-first placement tracking platform for VIT Vellore students. Automatically parses CDC emails for shortlists, checks drive eligibility, and manages the full placement journey.",
+    "NextUp is a free, privacy-first placement tracking platform for VIT Vellore students. Automatically reads CDC emails to detect shortlists, checks your eligibility for drives, and manages your entire campus placement journey.",
   applicationCategory: "EducationApplication",
   operatingSystem: "Web Browser",
   offers: {
@@ -98,14 +123,77 @@ const jsonLd = {
   audience: {
     "@type": "EducationalAudience",
     educationalRole: "student",
+    audienceType: "VIT Vellore engineering students appearing for campus placement drives",
   },
   featureList: [
-    "Automatic shortlist detection from Gmail",
-    "Campus placement eligibility checker",
-    "Application status tracker",
-    "Placement drive calendar",
-    "AI-powered resume keyword analysis",
-    "Privacy-first encrypted data storage",
+    "Automatic shortlist detection from CDC Gmail",
+    "Campus placement eligibility checker for VIT drives",
+    "Application status tracker (Applied → OA → Interview → Offer)",
+    "Placement drive calendar with auto-extracted deadlines",
+    "AI-powered resume tailoring and keyword gap analysis",
+    "Privacy-first AES-256 encrypted data storage",
+    "Browser push notifications for shortlists",
+  ],
+  creator: [
+    {
+      "@type": "Person",
+      name: "Sanjay J K",
+      url: "https://github.com/JKSANJAY27",
+      affiliation: { "@type": "CollegeOrUniversity", name: "VIT Vellore" },
+    },
+    {
+      "@type": "Person",
+      name: "Hariprasad T",
+      url: "https://github.com/HARIPRASAD-04",
+      affiliation: { "@type": "CollegeOrUniversity", name: "VIT Vellore" },
+    },
+  ],
+};
+
+const jsonLdOrg = {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  name: "NextUp VIT",
+  alternateName: ["NEXTUP.AI", "NextUp placement tracker"],
+  url: BASE_URL,
+  description:
+    "NextUp VIT is a student-built placement tracking platform for VIT Vellore. It helps students manage campus placement drives, detect CDC shortlists automatically, and tailor resumes using AI.",
+  foundingLocation: { "@type": "Place", name: "VIT Vellore, Tamil Nadu, India" },
+  areaServed: { "@type": "Place", name: "VIT Vellore" },
+  member: [
+    { "@type": "Person", name: "Sanjay J K" },
+    { "@type": "Person", name: "Hariprasad T" },
+  ],
+};
+
+const jsonLdFaq = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: [
+    {
+      "@type": "Question",
+      name: "What is NextUp VIT?",
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: "NextUp VIT (also called NextUp or NEXTUP.AI) is a free placement tracker built for VIT Vellore students. It automatically reads CDC placement emails, detects when you are shortlisted, checks your eligibility for campus drives, and manages all your job applications in one dashboard.",
+      },
+    },
+    {
+      "@type": "Question",
+      name: "Is there a placement tracker for VIT Vellore students?",
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: "Yes. NextUp VIT (https://project-next-up.vercel.app) is a free, student-built placement tracker specifically for VIT Vellore. It connects to your college Gmail to auto-detect CDC shortlists and tracks all your placement applications.",
+      },
+    },
+    {
+      "@type": "Question",
+      name: "How does NextUp VIT detect CDC shortlists?",
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: "NextUp VIT connects to your college Gmail once using OAuth. It then monitors incoming CDC emails in the background. When a shortlist Excel sheet arrives, it checks whether your registration number appears and notifies you instantly.",
+      },
+    },
   ],
 };
 
@@ -119,7 +207,15 @@ export default function RootLayout({
       <head>
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdApp) }}
+        />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdOrg) }}
+        />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdFaq) }}
         />
       </head>
       <body className={`${spaceGrotesk.variable} ${inter.variable} antialiased selection:bg-accent selection:text-accent-foreground`}>
