@@ -454,15 +454,18 @@ class ResumeGenerationPipeline:
         """
         data = self.master_resume_data or {}
         skills = [str(s) for s in (data.get("skills") or [])]
-        projects = [
-            {"title": str(p.get("title", "")),
-             "description": str(p.get("description", ""))}
-            for p in (data.get("projects") or []) if isinstance(p, dict)
-        ]
+        det_projects = []
+        for p in self._rank_projects(projects):
+            det_projects.append({
+                "title": p["title"],
+                "description": p["description"],
+                "ai_description": p["description"],
+                "_status": "deterministic"
+            })
 
         suggestions: Dict[str, Any] = {
             "optimized_skills": self._rank_skills(skills),
-            "optimized_projects": self._rank_projects(projects)[:MAX_PROJECTS],
+            "optimized_projects": det_projects,
             "tailoring_mode": "deterministic",
             "tailoring_note": (
                 "AI providers were unavailable — skills and projects were "
@@ -613,23 +616,47 @@ class ResumeGenerationPipeline:
 
             if lost_metrics or invented_metrics or too_short or truncated:
                 reverted += 1
+                op["_status"] = "reverted"
+                op["ai_description"] = new_desc
+                op["description"] = orig or new_desc
                 logger.info(
-                    f"Quality gate: dropping '{op.get('title')}' rewrite "
+                    f"Quality gate: flagging '{op.get('title')}' as reverted "
                     f"(lost_metrics={sorted(lost_metrics)[:5]}, "
                     f"invented_metrics={sorted(invented_metrics)[:5]}, "
                     f"too_short={too_short}, truncated={truncated})."
                 )
+                kept.append(op)
                 continue
             if near_copy:
                 already_aligned += 1
+                op["_status"] = "near_copy"
+                op["ai_description"] = new_desc
+                op["description"] = new_desc
                 logger.info(
-                    f"Quality gate: dropping '{op.get('title')}' rewrite "
-                    f"(near-copy, jaccard={jaccard:.2f})."
+                    f"Quality gate: flagging '{op.get('title')}' as near-copy (jaccard={jaccard:.2f})."
                 )
+                kept.append(op)
                 continue
+            op["_status"] = "kept"
+            op["ai_description"] = new_desc
             op["description"] = new_desc
             kept.append(op)
+
+        # Include any master projects that were not processed by AI as "unchanged"
+        processed_titles = {op.get("title", "").strip().lower() for op in kept}
+        for mp in (self.master_resume_data.get("projects") or []):
+            if isinstance(mp, dict):
+                m_title = mp.get("title", "").strip()
+                if m_title.lower() not in processed_titles:
+                    kept.append({
+                        "title": m_title,
+                        "description": mp.get("description", ""),
+                        "ai_description": mp.get("description", ""),
+                        "_status": "unchanged"
+                    })
+
         suggestions["optimized_projects"] = kept
+
         if hasattr(self, "metrics"):
             self.metrics["gate_dropped"] = reverted
             self.metrics["gate_near_copy"] = already_aligned
