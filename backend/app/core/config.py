@@ -56,17 +56,13 @@ class Settings(BaseSettings):
     PARSER_AI_AUTH_TOKEN: str = ""
     # Free HF Spaces run on 2 vCPU: a slim prompt + ~900 output tokens still
     # takes several minutes. This is fine — resume jobs are async.
-    RESUME_AI_TIMEOUT_SECONDS: int = 480
+    RESUME_AI_TIMEOUT_SECONDS: int = 40
     # HF router fallback model for resume generation / JD analysis.
     # NOTE: the router is a METERED service (burns HF credits / returns 402
     # when depleted) — it is a fallback tier only, never the primary.
     HF_FALLBACK_MODEL: str = "meta-llama/Llama-3.3-70B-Instruct"
     # Gateway behaviour
-    # In-container 1.5b parses average ~150s but can exceed 300s on a cold or
-    # slow Space host. Ollama does NOT cancel a generation when the client
-    # times out, so a too-low ceiling creates a death spiral: the retry queues
-    # behind the abandoned generation, waits, times out too, and so on.
-    AI_REQUEST_TIMEOUT_SECONDS: int = 600
+    AI_REQUEST_TIMEOUT_SECONDS: int = 45
     AI_MAX_RETRIES: int = 1               # retries per provider (exponential backoff)
     AI_RETRY_BASE_DELAY_SECONDS: float = 2.0
     AI_CIRCUIT_FAILURE_THRESHOLD: int = 4  # consecutive failures before circuit opens

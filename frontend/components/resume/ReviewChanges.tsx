@@ -38,14 +38,20 @@ function scoreBar(v: number): string {
 
 function formatBulletText(text: string): string {
   if (!text) return "";
-  const lines = text.split("\n");
+  // Normalize various bullet formats: •, -, *, and inline bullets separated by •
+  // First: split on bullet separators that appear mid-line (inline •)
+  const normalized = text
+    .replace(/([^\.!?\n])\s*•\s*/g, "$1\n• ")  // split inline bullets after non-sentence-end
+    .replace(/^\s*[-*]\s+/gm, "• ")            // convert - and * to •
+    .replace(/^\s*•\s*/gm, "• ");              // normalize leading •
+
+  const lines = normalized.split("\n");
   const bullets: string[] = [];
   for (const line of lines) {
-    const parts = line.split(/\s*•\s*/).map((p) => p.trim()).filter(Boolean);
-    for (const p of parts) {
-      const clean = p.startsWith("•") ? p.slice(1).trim() : p;
-      bullets.push(`• ${clean}`);
-    }
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const clean = trimmed.startsWith("•") ? trimmed.slice(1).trim() : trimmed;
+    if (clean) bullets.push(`• ${clean}`);
   }
   if (bullets.length === 0) return text;
   return bullets.join("\n");
@@ -338,7 +344,7 @@ export default function ReviewChanges({
                     onClick={() => setSummaryText(suggestions.optimized_summary!)}
                     className="text-[10px] font-mono text-accent hover:underline flex items-center gap-1"
                   >
-                    <Sparkles size={11} /> Use AI Summary
+                    <Sparkles size={11} /> Restore AI Version
                   </button>
                 )}
               </div>
@@ -531,7 +537,7 @@ export default function ReviewChanges({
                       <span className="text-muted-foreground font-mono text-[9px] uppercase">
                         MASTER RESUME DESCRIPTION (REFERENCE):
                       </span>
-                      <div className="p-3 bg-muted/15 rounded-lg border border-border/20 text-muted-foreground italic font-sans min-h-[140px] whitespace-pre-wrap select-text leading-relaxed">
+                      <div className="p-3 bg-muted/15 rounded-lg border border-border/20 text-muted-foreground italic font-sans min-h-[180px] max-h-[400px] overflow-y-auto whitespace-pre-wrap select-text leading-relaxed">
                         {proj.originalDesc || "No original description."}
                       </div>
                     </div>
@@ -551,8 +557,8 @@ export default function ReviewChanges({
                             [proj.title.trim().toLowerCase()]: val,
                           }));
                         }}
-                        rows={6}
-                        className="w-full p-3 bg-card border border-accent/40 rounded-lg text-xs leading-relaxed text-foreground font-sans focus:outline-none focus:ring-1 focus:ring-accent min-h-[140px] resize-y"
+                        rows={8}
+                        className="w-full p-3 bg-card border border-accent/40 rounded-lg text-xs leading-relaxed text-foreground font-sans focus:outline-none focus:ring-1 focus:ring-accent min-h-[180px] max-h-[400px] overflow-y-auto resize-y"
                         placeholder="• Bullet 1&#10;• Bullet 2"
                       />
                     </div>
