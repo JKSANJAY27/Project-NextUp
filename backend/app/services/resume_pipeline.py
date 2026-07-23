@@ -454,15 +454,18 @@ class ResumeGenerationPipeline:
         """
         data = self.master_resume_data or {}
         skills = [str(s) for s in (data.get("skills") or [])]
-        projects = [
-            {"title": str(p.get("title", "")),
-             "description": str(p.get("description", ""))}
-            for p in (data.get("projects") or []) if isinstance(p, dict)
-        ]
+        det_projects = []
+        for p in self._rank_projects(projects):
+            det_projects.append({
+                "title": p["title"],
+                "description": p["description"],
+                "ai_description": p["description"],
+                "_status": "deterministic"
+            })
 
         suggestions: Dict[str, Any] = {
             "optimized_skills": self._rank_skills(skills),
-            "optimized_projects": self._rank_projects(projects)[:MAX_PROJECTS],
+            "optimized_projects": det_projects,
             "tailoring_mode": "deterministic",
             "tailoring_note": (
                 "AI providers were unavailable — skills and projects were "
@@ -580,25 +583,27 @@ class ResumeGenerationPipeline:
             new_desc = (op.get("description") or "").strip()
             if not new_desc:
                 continue
-            # Capitalize each bullet's first letter (models emit 'designed a...')
-            parts = [b.strip() for b in new_desc.split("•") if b.strip()]
-            parts = [b[0].upper() + b[1:] if b else b for b in parts]
-            new_desc = " • ".join(parts) if len(parts) > 1 else (parts[0] if parts else new_desc)
+            # Split bullets, clean up, ensure period at end of each bullet, and format with newlines
+            raw_parts = [b.strip() for b in re.split(r"\s*•\s*", new_desc) if b.strip()]
+            cleaned_parts = []
+            for b in raw_parts:
+                b_clean = b[0].upper() + b[1:] if b else b
+                if not b_clean.endswith((".", "!", "?", ".)", "?)", "!")):
+                    b_clean += "."
+                cleaned_parts.append(b_clean)
+
+            if len(cleaned_parts) > 1:
+                new_desc = "• " + "\n• ".join(cleaned_parts)
+            elif len(cleaned_parts) == 1:
+                new_desc = "• " + cleaned_parts[0] if not cleaned_parts[0].startswith("•") else cleaned_parts[0]
 
             # Evidence grounding, both directions: a rewrite may neither LOSE
-            # the student's real metrics nor INVENT new ones. A number that
-            # doesn't exist in the source project ("improved latency by 42%")
-            # is a hallucination even if it looks impressive.
+            # the student's real metrics nor INVENT new ones.
             lost_metrics = self._metrics_in(orig) - self._metrics_in(new_desc)
             invented_metrics = self._bare_nums(new_desc) - self._bare_nums(orig)
             too_short = orig and len(new_desc) < 0.55 * len(orig)
             truncated = self._is_truncated(new_desc)
-            # Near-copies (the model changed a word or two) are not
-            # optimizations — showing identical before/after cards reads as
-            # a broken feature. Drop the card; the original wording is kept
-            # in the tailored copy automatically. EXCEPTION: a high-overlap
-            # rewrite that introduces new JD terminology ("Designed SCALABLE
-            # REST APIs...") is a real ATS gain despite the word overlap.
+            
             orig_norm, new_norm = self._norm_text(orig), self._norm_text(new_desc)
             a, b = set(orig_norm.split()), set(new_norm.split())
             jaccard = (len(a & b) / len(a | b)) if (a or b) else 0.0
@@ -613,23 +618,47 @@ class ResumeGenerationPipeline:
 
             if lost_metrics or invented_metrics or too_short or truncated:
                 reverted += 1
+                op["_status"] = "reverted"
+                op["ai_description"] = new_desc
+                op["description"] = new_desc
                 logger.info(
-                    f"Quality gate: dropping '{op.get('title')}' rewrite "
+                    f"Quality gate: flagging '{op.get('title')}' as reverted "
                     f"(lost_metrics={sorted(lost_metrics)[:5]}, "
                     f"invented_metrics={sorted(invented_metrics)[:5]}, "
                     f"too_short={too_short}, truncated={truncated})."
                 )
+                kept.append(op)
                 continue
             if near_copy:
                 already_aligned += 1
+                op["_status"] = "near_copy"
+                op["ai_description"] = new_desc
+                op["description"] = new_desc
                 logger.info(
-                    f"Quality gate: dropping '{op.get('title')}' rewrite "
-                    f"(near-copy, jaccard={jaccard:.2f})."
+                    f"Quality gate: flagging '{op.get('title')}' as near-copy (jaccard={jaccard:.2f})."
                 )
+                kept.append(op)
                 continue
+            op["_status"] = "kept"
+            op["ai_description"] = new_desc
             op["description"] = new_desc
             kept.append(op)
+
+        # Include any master projects that were not processed by AI as "unchanged"
+        processed_titles = {op.get("title", "").strip().lower() for op in kept}
+        for mp in (self.master_resume_data.get("projects") or []):
+            if isinstance(mp, dict):
+                m_title = mp.get("title", "").strip()
+                if m_title.lower() not in processed_titles:
+                    kept.append({
+                        "title": m_title,
+                        "description": mp.get("description", ""),
+                        "ai_description": mp.get("description", ""),
+                        "_status": "unchanged"
+                    })
+
         suggestions["optimized_projects"] = kept
+
         if hasattr(self, "metrics"):
             self.metrics["gate_dropped"] = reverted
             self.metrics["gate_near_copy"] = already_aligned

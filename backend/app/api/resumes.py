@@ -181,7 +181,7 @@ def update_user_resume(
 # Asynchronous Resume Generation Endpoints
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict
 from app.models.models import AiGenerationJob, Company, Application
 from app.services.latex_renderer import render_resume_to_pdf
 
@@ -198,6 +198,10 @@ class AcceptChangesRequest(BaseModel):
     accept_skills: bool = True
     accept_summary: bool = True
     accept_projects: bool = True
+    final_summary: Optional[str] = None
+    final_skills: Optional[List[str]] = None
+    project_overrides: Optional[Dict[str, str]] = None
+
 
 @router.post("/generate")
 def start_resume_tailoring_job(
@@ -400,14 +404,28 @@ def accept_resume_changes(
     tailored_data = json.loads(json.dumps(current_data))  # deep copy
     result = job.result_json
 
-    if req.accept_summary and result.get("optimized_summary"):
+    # 1. Summary
+    if req.final_summary is not None:
+        tailored_data["summary"] = req.final_summary
+    elif req.accept_summary and result.get("optimized_summary"):
         tailored_data["summary"] = result["optimized_summary"]
 
-    if req.accept_skills and result.get("optimized_skills"):
+    # 2. Skills
+    if req.final_skills is not None:
+        tailored_data["skills"] = req.final_skills
+    elif req.accept_skills and result.get("optimized_skills"):
         tailored_data["skills"] = result["optimized_skills"]
 
-    if req.accept_projects and result.get("optimized_projects"):
-        # Match projects by title and update descriptions
+    # 3. Projects
+    if req.project_overrides is not None:
+        master_projects = tailored_data.get("projects", [])
+        # Map normalized title -> override text
+        override_map = {k.strip().lower(): v for k, v in req.project_overrides.items()}
+        for mp in master_projects:
+            t = mp.get("title", "").strip().lower()
+            if t in override_map:
+                mp["description"] = override_map[t]
+    elif req.accept_projects and result.get("optimized_projects"):
         opt_projects = result["optimized_projects"]
         master_projects = tailored_data.get("projects", [])
 
