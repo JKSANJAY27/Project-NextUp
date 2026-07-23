@@ -1035,11 +1035,6 @@ function DashboardPageContent() {
   // My Applications conversion stats — count ALL applications (active + archived)
   // so active drives like Ion Group (OA) are reflected in the stats.
   const allApps = React.useMemo(() => Object.values(applications), [applications]);
-  // Historical placements table only shows archived/completed applications
-  const historyApps = React.useMemo(() =>
-    Object.values(applications).filter(app => app.user_decision === "archived"),
-    [applications]
-  );
   const totalAppsCount = allApps.length;
   // OA reached: app has status OA, Interview, Technical, HR, or Offer
   const oaReachedCount = React.useMemo(() =>
