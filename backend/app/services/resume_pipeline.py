@@ -583,25 +583,27 @@ class ResumeGenerationPipeline:
             new_desc = (op.get("description") or "").strip()
             if not new_desc:
                 continue
-            # Capitalize each bullet's first letter (models emit 'designed a...')
-            parts = [b.strip() for b in new_desc.split("•") if b.strip()]
-            parts = [b[0].upper() + b[1:] if b else b for b in parts]
-            new_desc = " • ".join(parts) if len(parts) > 1 else (parts[0] if parts else new_desc)
+            # Split bullets, clean up, ensure period at end of each bullet, and format with newlines
+            raw_parts = [b.strip() for b in re.split(r"\s*•\s*", new_desc) if b.strip()]
+            cleaned_parts = []
+            for b in raw_parts:
+                b_clean = b[0].upper() + b[1:] if b else b
+                if not b_clean.endswith((".", "!", "?", ".)", "?)", "!")):
+                    b_clean += "."
+                cleaned_parts.append(b_clean)
+
+            if len(cleaned_parts) > 1:
+                new_desc = "• " + "\n• ".join(cleaned_parts)
+            elif len(cleaned_parts) == 1:
+                new_desc = "• " + cleaned_parts[0] if not cleaned_parts[0].startswith("•") else cleaned_parts[0]
 
             # Evidence grounding, both directions: a rewrite may neither LOSE
-            # the student's real metrics nor INVENT new ones. A number that
-            # doesn't exist in the source project ("improved latency by 42%")
-            # is a hallucination even if it looks impressive.
+            # the student's real metrics nor INVENT new ones.
             lost_metrics = self._metrics_in(orig) - self._metrics_in(new_desc)
             invented_metrics = self._bare_nums(new_desc) - self._bare_nums(orig)
             too_short = orig and len(new_desc) < 0.55 * len(orig)
             truncated = self._is_truncated(new_desc)
-            # Near-copies (the model changed a word or two) are not
-            # optimizations — showing identical before/after cards reads as
-            # a broken feature. Drop the card; the original wording is kept
-            # in the tailored copy automatically. EXCEPTION: a high-overlap
-            # rewrite that introduces new JD terminology ("Designed SCALABLE
-            # REST APIs...") is a real ATS gain despite the word overlap.
+            
             orig_norm, new_norm = self._norm_text(orig), self._norm_text(new_desc)
             a, b = set(orig_norm.split()), set(new_norm.split())
             jaccard = (len(a & b) / len(a | b)) if (a or b) else 0.0
@@ -618,7 +620,7 @@ class ResumeGenerationPipeline:
                 reverted += 1
                 op["_status"] = "reverted"
                 op["ai_description"] = new_desc
-                op["description"] = orig or new_desc
+                op["description"] = new_desc
                 logger.info(
                     f"Quality gate: flagging '{op.get('title')}' as reverted "
                     f"(lost_metrics={sorted(lost_metrics)[:5]}, "

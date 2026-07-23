@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import api from "@/lib/api";
 import { Loader2, CheckCircle2, AlertCircle, Plus, X, RotateCcw, Sparkles, HelpCircle } from "lucide-react";
 
@@ -34,6 +34,21 @@ function scoreColor(v: number): string {
 }
 function scoreBar(v: number): string {
   return v >= 70 ? "bg-emerald-500" : v >= 40 ? "bg-amber-500" : "bg-destructive";
+}
+
+function formatBulletText(text: string): string {
+  if (!text) return "";
+  const lines = text.split("\n");
+  const bullets: string[] = [];
+  for (const line of lines) {
+    const parts = line.split(/\s*•\s*/).map((p) => p.trim()).filter(Boolean);
+    for (const p of parts) {
+      const clean = p.startsWith("•") ? p.slice(1).trim() : p;
+      bullets.push(`• ${clean}`);
+    }
+  }
+  if (bullets.length === 0) return text;
+  return bullets.join("\n");
 }
 
 interface ReviewChangesProps {
@@ -79,14 +94,14 @@ export default function ReviewChanges({
     const map: Record<string, string> = {};
     const optProjs = suggestions.optimized_projects || [];
     optProjs.forEach((p) => {
-      map[p.title.trim().toLowerCase()] = p.description;
+      map[p.title.trim().toLowerCase()] = formatBulletText(p.description);
     });
 
     // Also seed any original projects that weren't in optimized_projects
     (originalResume.projects || []).forEach((p) => {
       const key = p.title.trim().toLowerCase();
       if (!(key in map)) {
-        map[key] = p.description;
+        map[key] = formatBulletText(p.description);
       }
     });
     return map;
@@ -154,7 +169,7 @@ export default function ReviewChanges({
   };
 
   // Compile list of projects to render
-  const projectsToRender = React.useMemo(() => {
+  const projectsToRender = useMemo(() => {
     const list: Array<{
       title: string;
       originalDesc: string;
@@ -172,8 +187,8 @@ export default function ReviewChanges({
       );
       list.push({
         title: op.title,
-        originalDesc: origMatch?.description || op.description,
-        aiDesc: op.ai_description || op.description,
+        originalDesc: formatBulletText(origMatch?.description || op.description),
+        aiDesc: formatBulletText(op.ai_description || op.description),
         status: op._status || "kept",
       });
     });
@@ -185,8 +200,8 @@ export default function ReviewChanges({
         processedKeys.add(key);
         list.push({
           title: mp.title,
-          originalDesc: mp.description,
-          aiDesc: mp.description,
+          originalDesc: formatBulletText(mp.description),
+          aiDesc: formatBulletText(mp.description),
           status: "unchanged",
         });
       }
@@ -200,10 +215,10 @@ export default function ReviewChanges({
       <div>
         <h3 className="text-sm font-bold tracking-wider uppercase text-foreground mb-1 flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-accent" />
-          Review &amp; Edit Optimization Suggestions
+          Review &amp; Edit Tailored Resume
         </h3>
         <p className="text-xs text-muted-foreground">
-          Compare proposed enhancements with your master resume. Edit any text, add or remove skills, and refine project descriptions before rendering your PDF. Your master resume is never altered.
+          Compare the proposed enhancements with your master resume. Edit any text directly, add or remove skills, and refine project bullet points before rendering your PDF. Your master resume is never modified.
         </p>
       </div>
 
@@ -214,22 +229,18 @@ export default function ReviewChanges({
         </div>
       )}
 
-      {(suggestions.tailoring_mode === "deterministic" || suggestions.tailoring_note) && (
-        <div className="flex items-start gap-3 p-3 rounded-lg border border-amber-500/20 bg-amber-500/5 text-amber-500 text-xs">
-          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-          <span>
-            {suggestions.tailoring_note ||
-              "AI providers were unavailable — your skills and projects were re-ordered to match the JD keywords instead. All wording is your own."}
+      {/* Overview Notice */}
+      <div className="flex items-start gap-3 p-3.5 rounded-xl border border-accent/30 bg-accent/5 text-foreground text-xs leading-relaxed">
+        <Sparkles className="h-4 w-4 shrink-0 text-accent mt-0.5" />
+        <div>
+          <span className="font-bold text-accent uppercase tracking-wider block mb-0.5">
+            Tailoring Complete
           </span>
+          <p className="text-[11px] text-muted-foreground">
+            The AI re-ordered your skills by JD relevance, aligned your summary, and generated tailored project descriptions. All proposed texts are pre-filled in the editable textareas on the right — review and edit as desired.
+          </p>
         </div>
-      )}
-
-      {suggestions.quality_note && (
-        <div className="flex items-start gap-3 p-3 rounded-lg border border-border bg-muted/10 text-muted-foreground text-xs">
-          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-          <span>{suggestions.quality_note}</span>
-        </div>
-      )}
+      </div>
 
       {/* Analytics Bars */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -285,46 +296,63 @@ export default function ReviewChanges({
       </div>
 
       <div className="space-y-6">
-        {/* 1. PROFESSIONAL SUMMARY EDITOR */}
+        {/* 1. PROFESSIONAL SUMMARY COMPARISON & EDITOR */}
         <div className="border border-border rounded-xl p-4 bg-card/25 space-y-3">
           <div className="flex flex-wrap justify-between items-center pb-2 border-b border-border/50 gap-2">
             <span className="font-mono text-xs font-bold tracking-tight uppercase flex items-center gap-2">
               1. Professional Summary
-              <span className="text-[10px] text-muted-foreground font-normal lowercase">(editable)</span>
             </span>
-            <div className="flex items-center gap-2 text-xs font-mono">
-              {suggestions.optimized_summary && (
-                <button
-                  type="button"
-                  onClick={() => setSummaryText(suggestions.optimized_summary!)}
-                  className="text-[10px] text-accent hover:underline flex items-center gap-1"
-                >
-                  <Sparkles size={11} /> Use AI Suggestion
-                </button>
-              )}
-              {originalResume.summary && (
-                <button
-                  type="button"
-                  onClick={() => setSummaryText(originalResume.summary!)}
-                  className="text-[10px] text-muted-foreground hover:text-foreground hover:underline flex items-center gap-1"
-                >
-                  <RotateCcw size={11} /> Reset to Master
-                </button>
-              )}
-            </div>
           </div>
 
-          <div className="space-y-2">
-            <textarea
-              value={summaryText}
-              onChange={(e) => setSummaryText(e.target.value)}
-              rows={3}
-              className="w-full p-3 bg-card border border-border rounded-lg text-xs leading-relaxed text-foreground focus:outline-none focus:ring-1 focus:ring-accent font-sans"
-              placeholder="Enter your professional summary..."
-            />
-            <div className="flex justify-between text-[10px] font-mono text-muted-foreground">
-              <span>Tip: Keep to 2-3 sentences (~400-600 characters) for optimal ATS reading.</span>
-              <span>{summaryText.length} chars</span>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs leading-relaxed">
+            {/* Left: Master Summary Reference */}
+            <div className="space-y-1">
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground font-mono text-[9px] uppercase">
+                  MASTER RESUME SUMMARY (REFERENCE):
+                </span>
+                {originalResume.summary && (
+                  <button
+                    type="button"
+                    onClick={() => setSummaryText(originalResume.summary!)}
+                    className="text-[10px] font-mono text-muted-foreground hover:text-foreground hover:underline flex items-center gap-1"
+                  >
+                    <RotateCcw size={11} /> Use Master Summary
+                  </button>
+                )}
+              </div>
+              <div className="p-3 bg-muted/15 rounded-lg border border-border/20 text-muted-foreground italic font-sans min-h-[110px] whitespace-pre-wrap select-text">
+                {originalResume.summary || "No summary provided in master resume."}
+              </div>
+            </div>
+
+            {/* Right: Editable Tailored Summary */}
+            <div className="space-y-1">
+              <div className="flex justify-between items-center">
+                <span className="text-accent font-mono text-[9px] uppercase">
+                  TAILORED SUMMARY (EDITABLE):
+                </span>
+                {suggestions.optimized_summary && (
+                  <button
+                    type="button"
+                    onClick={() => setSummaryText(suggestions.optimized_summary!)}
+                    className="text-[10px] font-mono text-accent hover:underline flex items-center gap-1"
+                  >
+                    <Sparkles size={11} /> Use AI Summary
+                  </button>
+                )}
+              </div>
+              <textarea
+                value={summaryText}
+                onChange={(e) => setSummaryText(e.target.value)}
+                rows={4}
+                className="w-full p-3 bg-card border border-accent/40 rounded-lg text-xs leading-relaxed text-foreground font-sans focus:outline-none focus:ring-1 focus:ring-accent min-h-[110px]"
+                placeholder="Enter your professional summary..."
+              />
+              <div className="flex justify-between text-[10px] font-mono text-muted-foreground pt-0.5">
+                <span>Tip: Keep to 2-3 sentences (~400-600 chars) for optimal ATS ranking.</span>
+                <span>{summaryText.length} chars</span>
+              </div>
             </div>
           </div>
         </div>
@@ -425,12 +453,11 @@ export default function ReviewChanges({
           )}
         </div>
 
-        {/* 3. TAILORED PROJECT DESCRIPTIONS */}
+        {/* 3. TAILORED PROJECT DESCRIPTIONS COMPARISON & EDITOR */}
         <div className="border border-border rounded-xl p-4 bg-card/25 space-y-4">
           <div className="flex justify-between items-center pb-2 border-b border-border/50">
             <span className="font-mono text-xs font-bold tracking-tight uppercase flex items-center gap-2">
               3. Project Descriptions
-              <span className="text-[10px] text-muted-foreground font-normal lowercase">(edit per project)</span>
             </span>
           </div>
 
@@ -448,12 +475,12 @@ export default function ReviewChanges({
                       {/* Status Badges */}
                       {proj.status === "kept" && (
                         <span className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 text-[9px] font-mono font-bold flex items-center gap-1">
-                          <Sparkles size={9} /> ✨ AI Improved
+                          <Sparkles size={9} /> ✨ AI Tailored
                         </span>
                       )}
                       {proj.status === "reverted" && (
                         <span className="px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-500 text-[9px] font-mono font-bold flex items-center gap-1">
-                          <AlertCircle size={9} /> ⚠ AI Wording Dropped (Original Kept)
+                          <AlertCircle size={9} /> ⚠ AI Metric Adjusted
                         </span>
                       )}
                       {proj.status === "near_copy" && (
@@ -469,7 +496,7 @@ export default function ReviewChanges({
                     </div>
 
                     <div className="flex items-center gap-2 text-[10px] font-mono">
-                      {proj.aiDesc && proj.aiDesc !== proj.originalDesc && (
+                      {proj.aiDesc && (
                         <button
                           type="button"
                           onClick={() => {
@@ -499,20 +526,22 @@ export default function ReviewChanges({
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs leading-relaxed">
+                    {/* Left: Master Reference */}
                     <div className="space-y-1">
                       <span className="text-muted-foreground font-mono text-[9px] uppercase">
                         MASTER RESUME DESCRIPTION (REFERENCE):
                       </span>
-                      <div className="p-3 bg-muted/15 rounded-lg border border-border/20 text-muted-foreground italic font-sans min-h-[90px] whitespace-pre-wrap select-text">
+                      <div className="p-3 bg-muted/15 rounded-lg border border-border/20 text-muted-foreground italic font-sans min-h-[140px] whitespace-pre-wrap select-text leading-relaxed">
                         {proj.originalDesc || "No original description."}
                       </div>
                     </div>
 
+                    {/* Right: Editable Tailored Textarea */}
                     <div className="space-y-1">
-                      <span className="text-accent font-mono text-[9px] uppercase flex justify-between">
+                      <div className="flex justify-between text-accent font-mono text-[9px] uppercase">
                         <span>TAILORED DESCRIPTION (EDITABLE):</span>
                         <span>{currentText.length} chars</span>
-                      </span>
+                      </div>
                       <textarea
                         value={currentText}
                         onChange={(e) => {
@@ -522,8 +551,9 @@ export default function ReviewChanges({
                             [proj.title.trim().toLowerCase()]: val,
                           }));
                         }}
-                        rows={4}
-                        className="w-full p-3 bg-card border border-accent/30 rounded-lg text-xs leading-relaxed text-foreground font-sans focus:outline-none focus:ring-1 focus:ring-accent min-h-[90px]"
+                        rows={6}
+                        className="w-full p-3 bg-card border border-accent/40 rounded-lg text-xs leading-relaxed text-foreground font-sans focus:outline-none focus:ring-1 focus:ring-accent min-h-[140px] resize-y"
+                        placeholder="• Bullet 1&#10;• Bullet 2"
                       />
                     </div>
                   </div>
