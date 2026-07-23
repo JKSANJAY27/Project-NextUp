@@ -38,7 +38,7 @@ export default function GoogleAuthButton({ label, onBeforeStart, onError }: Goog
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2 md:space-y-2.5">
       <div className="flex items-center gap-4">
         <div className="h-0.5 flex-1 bg-border" />
         <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">OR</span>
@@ -48,7 +48,7 @@ export default function GoogleAuthButton({ label, onBeforeStart, onError }: Goog
         type="button"
         onClick={handleClick}
         disabled={loading}
-        className="flex w-full items-center justify-center gap-3 h-14 border-2 border-border bg-transparent text-foreground font-extrabold tracking-widest uppercase hover:border-accent hover:text-accent hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
+        className="flex w-full items-center justify-center gap-3 h-10 md:h-11 border-2 border-border bg-transparent text-foreground font-extrabold text-xs md:text-sm tracking-widest uppercase hover:border-accent hover:text-accent hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
       >
         <GoogleIcon />
         <span>{loading ? "Redirecting to Google..." : label}</span>

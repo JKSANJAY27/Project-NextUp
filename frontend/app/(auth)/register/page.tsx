@@ -153,7 +153,7 @@ export default function RegisterPage() {
       : "w-0";
 
   return (
-    <main className="flex min-h-screen flex-col bg-background text-foreground md:flex-row">
+    <main className="flex min-h-screen flex-col bg-background text-foreground md:flex-row md:h-screen md:overflow-hidden">
       {/* Terms modal */}
       <TermsModal
         open={showTermsModal}
@@ -163,8 +163,8 @@ export default function RegisterPage() {
       />
 
       {/* Visual panel */}
-      <section className="relative overflow-hidden flex flex-col justify-between border-b-2 border-border p-8 bg-accent text-black md:w-1/2 md:border-b-0 md:border-r-2 md:p-16">
-        <div className="relative z-10 flex flex-col items-start gap-4">
+      <section className="relative overflow-hidden flex flex-col justify-between border-b-2 border-border p-6 bg-accent text-black md:w-1/2 md:border-b-0 md:border-r-2 md:p-10 lg:p-12">
+        <div className="relative z-10 flex flex-col items-start gap-3">
           <Link href="/" className="inline-flex items-center gap-2 text-xs font-bold tracking-widest uppercase text-muted-foreground hover:text-black transition-colors">
             <ArrowLeft size={16} /> Back to Home
           </Link>
@@ -172,15 +172,15 @@ export default function RegisterPage() {
             <Logo size="md" onAccent />
           </Link>
         </div>
-        <div className="relative z-10 my-16 space-y-4">
-          <div className="text-[clamp(2rem,6vw,5rem)] font-extrabold tracking-tighter uppercase leading-[0.8]">
+        <div className="relative z-10 my-auto py-6 space-y-3">
+          <div className="text-[clamp(2rem,5vw,4.5rem)] font-extrabold tracking-tighter uppercase leading-[0.85]">
             TRACK
             <br />
             YOUR
             <br />
             PLACEMENTS
           </div>
-          <p className="max-w-md text-sm font-medium tracking-tight leading-snug">
+          <p className="max-w-md text-xs md:text-sm font-medium tracking-tight leading-snug">
             Create your free account and start tracking shortlists, eligibility, and applications — all in one place.
           </p>
         </div>
@@ -195,13 +195,13 @@ export default function RegisterPage() {
       </section>
 
       {/* Register Form */}
-      <section className="flex flex-col justify-center p-8 md:w-1/2 md:p-16 lg:p-24">
-        <div className="max-w-md w-full mx-auto space-y-10">
-          <div className="space-y-4">
-            <h1 className="text-4xl font-extrabold tracking-tighter uppercase leading-none">
+      <section className="flex flex-col justify-center p-6 md:w-1/2 md:p-8 lg:p-10 md:overflow-y-auto">
+        <div className="max-w-md w-full mx-auto space-y-4 md:space-y-5">
+          <div className="space-y-1">
+            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tighter uppercase leading-none">
               Create Account
             </h1>
-            <p className="text-sm font-bold text-muted-foreground uppercase tracking-wider">
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
               Register with your VIT college email
             </p>
           </div>
@@ -209,7 +209,7 @@ export default function RegisterPage() {
           {error && (
             <div
               role="alert"
-              className="border-2 border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-500 tracking-wider"
+              className="border-2 border-red-600 bg-red-600/10 p-3 text-xs font-bold text-red-500 tracking-wider"
             >
               {error}
             </div>
@@ -218,16 +218,16 @@ export default function RegisterPage() {
           {success && (
             <div
               role="status"
-              className="border-2 border-accent bg-accent/10 p-4 text-xs font-bold text-accent tracking-wider"
+              className="border-2 border-accent bg-accent/10 p-3 text-xs font-bold text-accent tracking-wider"
             >
               {success}
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-8" noValidate>
+          <form onSubmit={handleSubmit} className="space-y-3.5 md:space-y-4" noValidate>
             {/* Email */}
-            <div className="space-y-2">
-              <label htmlFor="reg-email" className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
+            <div className="space-y-1">
+              <label htmlFor="reg-email" className="text-[11px] font-bold tracking-widest text-muted-foreground uppercase">
                 College Email
               </label>
               <input
@@ -238,13 +238,13 @@ export default function RegisterPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="student@vit.ac.in"
                 autoComplete="email"
-                className="w-full h-14 border-b-2 border-border bg-transparent text-lg font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors"
+                className="w-full h-10 md:h-11 border-b-2 border-border bg-transparent text-sm md:text-base font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors"
               />
             </div>
 
             {/* Password */}
-            <div className="space-y-2">
-              <label htmlFor="reg-password" className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
+            <div className="space-y-1">
+              <label htmlFor="reg-password" className="text-[11px] font-bold tracking-widest text-muted-foreground uppercase">
                 Password
               </label>
               <div className="relative">
@@ -259,20 +259,20 @@ export default function RegisterPage() {
                   }}
                   placeholder="Min. 6 characters"
                   autoComplete="new-password"
-                  className="w-full h-14 border-b-2 border-border bg-transparent text-lg font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors pr-12"
+                  className="w-full h-10 md:h-11 border-b-2 border-border bg-transparent text-sm md:text-base font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors pr-10"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-muted-foreground hover:text-accent transition-colors"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-muted-foreground hover:text-accent transition-colors"
                   aria-label={showPassword ? "Hide password" : "Show password"}
                 >
-                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
               {/* Password strength indicator */}
               {passwordStrength && (
-                <div className="space-y-1">
+                <div className="space-y-1 pt-0.5">
                   <div className="h-1 w-full bg-muted rounded-full overflow-hidden">
                     <div className={`h-full ${strengthColor} ${strengthWidth} transition-all duration-300`} />
                   </div>
@@ -287,8 +287,8 @@ export default function RegisterPage() {
             </div>
 
             {/* Confirm Password */}
-            <div className="space-y-2">
-              <label htmlFor="reg-confirm-password" className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
+            <div className="space-y-1">
+              <label htmlFor="reg-confirm-password" className="text-[11px] font-bold tracking-widest text-muted-foreground uppercase">
                 Confirm Password
               </label>
               <div className="relative">
@@ -300,7 +300,7 @@ export default function RegisterPage() {
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Repeat your password"
                   autoComplete="new-password"
-                  className={`w-full h-14 border-b-2 bg-transparent text-lg font-bold tracking-tight placeholder-zinc-700 focus:outline-none px-2 transition-colors pr-12 ${
+                  className={`w-full h-10 md:h-11 border-b-2 bg-transparent text-sm md:text-base font-bold tracking-tight placeholder-zinc-700 focus:outline-none px-2 transition-colors pr-10 ${
                     confirmPassword && confirmPassword !== password
                       ? "border-red-500 focus:border-red-500"
                       : confirmPassword && confirmPassword === password
@@ -315,17 +315,17 @@ export default function RegisterPage() {
             </div>
 
             {/* Terms agreement */}
-            <div className="space-y-2">
-              <label className="flex items-start gap-3 cursor-pointer group">
+            <div className="pt-0.5">
+              <label className="flex items-start gap-2.5 cursor-pointer group">
                 <input
                   type="checkbox"
                   checked={agreedToTerms}
                   onChange={(e) => setAgreedToTerms(e.target.checked)}
-                  className="mt-1 h-4 w-4 accent-yellow-400 cursor-pointer shrink-0"
+                  className="mt-0.5 h-4 w-4 accent-yellow-400 cursor-pointer shrink-0"
                   id="terms-checkbox"
                   required
                 />
-                <span className="text-xs text-muted-foreground leading-relaxed group-hover:text-foreground transition-colors">
+                <span className="text-xs text-muted-foreground leading-snug group-hover:text-foreground transition-colors">
                   I agree to the{" "}
                   <button
                     type="button"
@@ -349,7 +349,7 @@ export default function RegisterPage() {
             <button
               type="submit"
               disabled={loading || !agreedToTerms}
-              className="flex w-full items-center justify-center h-14 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all disabled:opacity-40 disabled:pointer-events-none"
+              className="flex w-full items-center justify-center h-10 md:h-11 border-2 border-border bg-foreground text-background font-extrabold text-xs md:text-sm tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-40 disabled:pointer-events-none"
             >
               {loading ? "Creating your account..." : "Create Account"}
             </button>
@@ -367,7 +367,7 @@ export default function RegisterPage() {
             onError={(msg) => setError(msg)}
           />
 
-          <div className="text-center">
+          <div className="text-center pt-1">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
               Already have an account?{" "}
               <Link

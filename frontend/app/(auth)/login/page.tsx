@@ -102,10 +102,10 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="flex min-h-screen flex-col bg-background text-foreground md:flex-row">
+    <main className="flex min-h-screen flex-col bg-background text-foreground md:flex-row md:h-screen md:overflow-hidden">
       {/* Visual panel */}
-      <section className="relative overflow-hidden flex flex-col justify-between border-b-2 border-border p-8 bg-accent text-black md:w-1/2 md:border-b-0 md:border-r-2 md:p-16">
-        <div className="relative z-10 flex flex-col items-start gap-4">
+      <section className="relative overflow-hidden flex flex-col justify-between border-b-2 border-border p-6 bg-accent text-black md:w-1/2 md:border-b-0 md:border-r-2 md:p-10 lg:p-12">
+        <div className="relative z-10 flex flex-col items-start gap-3">
           <Link href="/" className="inline-flex items-center gap-2 text-xs font-bold tracking-widest uppercase text-muted-foreground hover:text-black transition-colors">
             <ArrowLeft size={16} /> Back to Home
           </Link>
@@ -113,13 +113,13 @@ export default function LoginPage() {
             <Logo size="md" onAccent />
           </Link>
         </div>
-        <div className="relative z-10 my-16 space-y-4">
-          <div className="text-[clamp(2.5rem,6vw,5.5rem)] font-extrabold tracking-tighter uppercase leading-[0.8]">
+        <div className="relative z-10 my-auto py-6 space-y-3">
+          <div className="text-[clamp(2.5rem,5.5vw,5rem)] font-extrabold tracking-tighter uppercase leading-[0.85]">
             WELCOME
             <br />
             BACK
           </div>
-          <p className="max-w-md text-sm font-medium tracking-tight leading-snug">
+          <p className="max-w-md text-xs md:text-sm font-medium tracking-tight leading-snug">
             Sign in to see your latest shortlists, track your applications, and manage your placement calendar.
           </p>
         </div>
@@ -134,13 +134,13 @@ export default function LoginPage() {
       </section>
 
       {/* Login panel */}
-      <section className="flex flex-col justify-center p-8 md:w-1/2 md:p-16 lg:p-24">
-        <div className="max-w-md w-full mx-auto space-y-10">
-          <div className="space-y-4">
-            <h1 className="text-4xl font-extrabold tracking-tighter uppercase leading-none">
+      <section className="flex flex-col justify-center p-6 md:w-1/2 md:p-8 lg:p-10 md:overflow-y-auto">
+        <div className="max-w-md w-full mx-auto space-y-4 md:space-y-5">
+          <div className="space-y-1">
+            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tighter uppercase leading-none">
               Sign In
             </h1>
-            <p className="text-sm font-bold text-muted-foreground uppercase tracking-wider">
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
               Enter your college email and password
             </p>
           </div>
@@ -148,15 +148,15 @@ export default function LoginPage() {
           {error && (
             <div
               role="alert"
-              className="border-2 border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-500 tracking-wider"
+              className="border-2 border-red-600 bg-red-600/10 p-3 text-xs font-bold text-red-500 tracking-wider"
             >
               {error}
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-8" noValidate>
-            <div className="space-y-2">
-              <label htmlFor="login-email" className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
+          <form onSubmit={handleSubmit} className="space-y-3.5 md:space-y-4" noValidate>
+            <div className="space-y-1">
+              <label htmlFor="login-email" className="text-[11px] font-bold tracking-widest text-muted-foreground uppercase">
                 College Email
               </label>
               <input
@@ -167,13 +167,13 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="student@vit.ac.in"
                 autoComplete="email"
-                className="w-full h-14 border-b-2 border-border bg-transparent text-lg font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors"
+                className="w-full h-10 md:h-11 border-b-2 border-border bg-transparent text-sm md:text-base font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors"
               />
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-1">
               <div className="flex justify-between items-center">
-                <label htmlFor="login-password" className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
+                <label htmlFor="login-password" className="text-[11px] font-bold tracking-widest text-muted-foreground uppercase">
                   Password
                 </label>
                 <Link
@@ -192,15 +192,15 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Your password"
                   autoComplete="current-password"
-                  className="w-full h-14 border-b-2 border-border bg-transparent text-lg font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors pr-12"
+                  className="w-full h-10 md:h-11 border-b-2 border-border bg-transparent text-sm md:text-base font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-2 transition-colors pr-10"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-muted-foreground hover:text-accent transition-colors"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-muted-foreground hover:text-accent transition-colors"
                   aria-label={showPassword ? "Hide password" : "Show password"}
                 >
-                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
             </div>
@@ -208,7 +208,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="flex w-full items-center justify-center h-14 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
+              className="flex w-full items-center justify-center h-10 md:h-11 border-2 border-border bg-foreground text-background font-extrabold text-xs md:text-sm tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
             >
               {loading ? "Signing you in..." : "Sign In"}
             </button>
@@ -219,7 +219,7 @@ export default function LoginPage() {
             onError={(msg) => setError(msg)}
           />
 
-          <div className="text-center">
+          <div className="text-center pt-1">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
               Don&apos;t have an account?{" "}
               <Link
