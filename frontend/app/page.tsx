@@ -355,7 +355,7 @@ export default function LandingPage() {
         <div className="space-y-6 max-w-4xl">
           <div className="inline-flex items-center gap-2 border-2 border-border bg-muted/30 px-4 py-2 text-xs font-extrabold tracking-widest text-accent uppercase">
             <Bell size={14} />
-            <span>Free Placement Tracker for VIT Vellore Students</span>
+            <span>NextUp — Free VIT Placement Tracker</span>
           </div>
 
           <h1
@@ -368,8 +368,13 @@ export default function LandingPage() {
           </h1>
 
           <p className="text-lg md:text-xl font-medium text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-            NEXTUP.AI automatically reads your CDC emails, detects shortlists, checks eligibility,
+            NextUp automatically reads your CDC emails, detects shortlists, checks eligibility,
             and keeps all your applications organised — so you can focus on preparing, not tracking.
+          </p>
+
+          {/* SEO anchor — visible to crawlers, de-emphasised visually */}
+          <p className="text-[11px] text-muted-foreground/50 max-w-xl mx-auto font-mono tracking-wide" aria-hidden="false">
+            NextUp VIT &middot; Placement Tracker for VIT Vellore &middot; VIT CDC shortlist detector &middot; Free for all VIT students
           </p>
 
           <div className="pt-8 flex flex-col sm:flex-row justify-center gap-4">

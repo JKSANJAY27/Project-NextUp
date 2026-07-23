@@ -175,8 +175,12 @@ export function NotificationProvider({
         }
         isFirstFetchRef.current = false;
       }
-    } catch (error) {
-      console.error("[NotificationContext] Failed to fetch notifications:", error);
+    } catch (error: unknown) {
+      // Quietly log notification fetch errors (e.g. backend busy/timeout during AI generation)
+      const err = error as { code?: string; message?: string };
+      if (err?.code !== "ECONNABORTED") {
+        console.warn("[NotificationContext] Could not update notifications (backend busy or unreachable).");
+      }
     }
   }, [fireOsNotification]);
 

@@ -454,8 +454,9 @@ class ResumeGenerationPipeline:
         """
         data = self.master_resume_data or {}
         skills = [str(s) for s in (data.get("skills") or [])]
+        raw_projects = [p for p in (data.get("projects") or []) if isinstance(p, dict)]
         det_projects = []
-        for p in self._rank_projects(projects):
+        for p in self._rank_projects(raw_projects):
             det_projects.append({
                 "title": p["title"],
                 "description": p["description"],
@@ -495,17 +496,23 @@ class ResumeGenerationPipeline:
 
     @staticmethod
     def _is_truncated(text: str) -> bool:
-        """A bullet that doesn't end a sentence was cut off mid-generation
-        ('...plus end-to-end observability (Langfuse tracing, structured')."""
+        """A bullet list was cut off mid-generation if the last bullet ends
+        mid-word/mid-phrase (unclosed parenthesis, or last token is very short
+        with no punctuation) — but NOT simply because it lacks a final period.
+        Bullet descriptions routinely end with a period inside the last bullet
+        and stripping them correctly shows terminal '.'."""
         t = (text or "").strip().rstrip('"\'' ).rstrip()
         if not t:
-            return False
-        if t.endswith((".", "!", "?", ".)", "?)", "!)")):
             return False
         # An unclosed parenthesis is the classic cut-off signature
         if t.count("(") > t.count(")"):
             return True
-        return True  # no sentence-terminal punctuation at all
+        # If last token after stripping bullet markers is very short (1-2 chars)
+        # and has no terminal punctuation it's almost certainly mid-word.
+        last = t.rstrip("• ").rstrip()
+        if last and not last[-1] in ".!?)" and len(last.split()[-1]) <= 2:
+            return True
+        return False
 
     # Generic filler a summary must never contain — if the model produces
     # this, the student's own summary is strictly better.
