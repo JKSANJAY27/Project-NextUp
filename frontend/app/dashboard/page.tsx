@@ -954,12 +954,10 @@ function DashboardPageContent() {
     }
 
     if (activeTab === "applications") {
-      if (!app) return false;
-      const isArchived = app.user_decision === "archived" || effectiveState === "archived" || effectiveState === "auto_archived";
-      const isRejected = app.status === "Rejected" || app.recruitment_state === "Rejected";
-      const isOffer = app.status === "Offer" || app.recruitment_state === "Offer";
-      if (!isArchived && !isRejected && !isOffer) return false;
+      // Only show actively tracked apps in the table — archived = done/removed
+      if (!app || app.user_decision === "archived") return false;
     }
+
 
     if (filterCategory !== "ALL" && c.category !== filterCategory) return false;
     if (filterEligibility !== "ALL" && c.eligibility_status !== filterEligibility) return false;
@@ -1034,13 +1032,38 @@ function DashboardPageContent() {
     return `Registration closed ${weeks} week${weeks > 1 ? 's' : ''} ago`;
   };
 
-  // My Applications conversion stats
-  const historyApps = React.useMemo(() => Object.values(applications), [applications]);
-  const totalAppsCount = historyApps.length;
-  const oaReachedCount = React.useMemo(() => historyApps.filter(app => ["OA", "Technical", "HR", "Offer"].includes(app.status) || app.recruitment_state.includes("OA") || app.recruitment_state.includes("Interview")).length, [historyApps]);
-  const interviewReachedCount = React.useMemo(() => historyApps.filter(app => ["Technical", "HR", "Offer"].includes(app.status) || app.recruitment_state.includes("Interview")).length, [historyApps]);
-  const offersCount = React.useMemo(() => historyApps.filter(app => app.status === "Offer" || app.recruitment_state === "Offer").length, [historyApps]);
-  const conversionRate = React.useMemo(() => totalAppsCount > 0 ? ((offersCount / totalAppsCount) * 100).toFixed(1) : "0.0", [totalAppsCount, offersCount]);
+  // My Applications conversion stats — count ALL applications (active + archived)
+  // so active drives like Ion Group (OA) are reflected in the stats.
+  const allApps = React.useMemo(() => Object.values(applications), [applications]);
+  // Historical placements table only shows archived/completed applications
+  const historyApps = React.useMemo(() =>
+    Object.values(applications).filter(app => app.user_decision === "archived"),
+    [applications]
+  );
+  const totalAppsCount = allApps.length;
+  // OA reached: app has status OA, Interview, Technical, HR, or Offer
+  const oaReachedCount = React.useMemo(() =>
+    allApps.filter(app =>
+      ["OA", "Interview", "Technical", "HR", "Offer"].includes(app.status)
+    ).length,
+    [allApps]
+  );
+  // Interview reached: app has status Interview, Technical, HR, or Offer
+  const interviewReachedCount = React.useMemo(() =>
+    allApps.filter(app =>
+      ["Interview", "Technical", "HR", "Offer"].includes(app.status)
+    ).length,
+    [allApps]
+  );
+  const offersCount = React.useMemo(() =>
+    allApps.filter(app => app.status === "Offer").length,
+    [allApps]
+  );
+  const conversionRate = React.useMemo(() =>
+    totalAppsCount > 0 ? ((offersCount / totalAppsCount) * 100).toFixed(1) : "0.0",
+    [totalAppsCount, offersCount]
+  );
+
 
   // Timeline and Workspace Drawer computed states
 
@@ -2119,7 +2142,7 @@ function DashboardPageContent() {
 
                 {/* List of Applications History */}
                 <div className="space-y-6">
-                  <h3 className="text-xl font-bold tracking-tight uppercase">HISTORICAL PLACEMENTS RECORD</h3>
+                  <h3 className="text-xl font-bold tracking-tight uppercase">ACTIVE APPLICATIONS RECORD</h3>
                   
                   {loading ? (
                     <tr>
@@ -2138,7 +2161,7 @@ function DashboardPageContent() {
                     </tr>
                   ) : filteredCompanies.length === 0 ? (
                     <div className="text-center py-12 border-2 border-dashed border-border text-muted-foreground uppercase font-bold text-xs">
-                      No historical applications recorded yet. Past rejections or offers will list here automatically.
+                      No active applications yet. Track a company from the Opportunities page to see it here.
                     </div>
                   ) : (
                     <div className="border-2 border-border overflow-hidden">
@@ -2189,12 +2212,21 @@ function DashboardPageContent() {
                                   </td>
 
                                   <td className="py-4 px-6 text-right">
-                                    <button
-                                      onClick={() => handleUpdateApplication(c.id, { user_decision: 'tracking' })}
-                                      className="h-8 px-3 border border-border bg-background text-foreground hover:bg-accent hover:text-black hover:border-accent font-bold text-[9px] uppercase tracking-wider transition-colors"
-                                    >
-                                      Re-Track Workspace
-                                    </button>
+                                    {app.user_decision === "archived" ? (
+                                      <button
+                                        onClick={() => handleUpdateApplication(c.id, { user_decision: 'tracking' })}
+                                        className="h-8 px-3 border border-border bg-background text-foreground hover:bg-accent hover:text-black hover:border-accent font-bold text-[9px] uppercase tracking-wider transition-colors"
+                                      >
+                                        Re-Track Workspace
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => setSelectedCompany(c)}
+                                        className="h-8 px-3 border border-accent/40 text-accent hover:bg-accent hover:text-black hover:border-accent font-bold text-[9px] uppercase tracking-wider transition-colors"
+                                      >
+                                        Open Workspace
+                                      </button>
+                                    )}
                                   </td>
                                 </tr>
                               );

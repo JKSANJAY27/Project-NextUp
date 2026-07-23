@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/lib/store";
 import api from "@/lib/api";
 import { useCompanies, useApplications } from "@/lib/queries";
+import { supabase } from "@/lib/supabase";
 import { Company, Application, CompanyEvent } from "./types";
 import TrackingStats from "@/components/TrackingStats";
 import TrackingSection from "@/components/TrackingSection";
@@ -36,6 +37,25 @@ export default function TrackingPage() {
   const queryClient = useQueryClient();
   const { data: companiesData, isLoading: companiesLoading, isError: companiesError } = useCompanies(!!user);
   const { data: applicationsData, isLoading: applicationsLoading, isError: applicationsError } = useApplications(!!user);
+
+  // Real-time Supabase subscription for active tracking updates
+  useEffect(() => {
+    const trackingChannel = supabase
+      .channel("supabase-realtime-tracking")
+      .on("postgres_changes", { event: "*", schema: "public", table: "applications" }, () => {
+        queryClient.invalidateQueries({ queryKey: ["applications"] });
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "companies" }, () => {
+        queryClient.invalidateQueries({ queryKey: ["companies"] });
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(trackingChannel);
+    };
+  }, [queryClient]);
 
   const [archiveConfirm, setArchiveConfirm] = useState<{
     isOpen: boolean;
