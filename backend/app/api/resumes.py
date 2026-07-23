@@ -181,7 +181,7 @@ def update_user_resume(
 # Asynchronous Resume Generation Endpoints
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict
 from app.models.models import AiGenerationJob, Company, Application
 from app.services.latex_renderer import render_resume_to_pdf
 
