@@ -465,7 +465,7 @@ Eligibility Rules — IMPORTANT:
 - DO NOT add branches like ECE, EEE, EIE, Mechanical, Civil, Aerospace, or any non-CSE branches unless they are EXPLICITLY named as eligible in the email's "Eligible Branches" section.
 - eligible_branches: Extract ONLY the branches explicitly listed in the "Eligible Branches" or "Eligible Departments" section of the email. Do NOT infer branches from job title or role description.
 - degree_types: A list of strings from: BTECH, MTECH, MCA, MSC. Parse from the Eligible Branches section only.
-- specializations: A list of strings from: CSE_CORE, CSE_INFO_SEC, CSE_IOT, CSE_DATA_SCIENCE, CSE_BLOCKCHAIN, CSE_AI_ML. If the email says "B.Tech CSE (all specializations)" or just "B.Tech CSE" without listing specific specializations, use ["CSE_CORE"] and set allow_all_specializations=true. ONLY add specific specializations if they are explicitly listed.
+- specializations: A list of strings from: CSE_CORE, CSE_INFO_SEC, CSE_IOT, CSE_DATA_SCIENCE, CSE_BLOCKCHAIN, CSE_AI_ML. CRITICAL RULE: If the email says ALL of the following are eligible together — CSE, IT, ECE, or combinations like "B.Tech (CSE/IT/ECE) related branches" — this means ALL CSE specializations are open. Output ["CSE_CORE"] and set allow_all_specializations=true. ONLY add specific individual specializations (e.g. ["CSE_AI_ML", "CSE_DATA_SCIENCE"]) when they are explicitly named as separate entries. ECE, IT, EEE are NOT specialization codes — their presence in the eligible branches means allow_all_specializations=true.
 - min_tenth_marks: Extract the minimum percentage required for Class 10 (e.g. 60.0 or 70.0). Null if not mentioned.
 - min_twelfth_marks: Extract the minimum percentage required for Class 12 (e.g. 60.0 or 70.0). Null if not mentioned.
 - min_ug_cgpa: Only for PG programs (e.g. M.Tech, MCA) if they mention a minimum UG CGPA (e.g. "UG CGPA >= 7.0"). Null if not mentioned.
@@ -1594,10 +1594,21 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
         if br not in ["CSE", "IT", "MCA", "MTECH_INT", "MTECH", "AIDS", "AIML", "SWE"]:
             found_specializations.append(br)
 
-    # If specializations not found in a block, default to CSE_CORE (safest assumption for CSE-only system)
-    if not found_specializations:
-        found_specializations.append("CSE_CORE")
-    data["specializations"] = found_specializations
+    # Valid CSE specialization codes this system tracks
+    VALID_CSE_SPEC_CODES = {
+        "CSE_CORE", "CSE_INFO_SEC", "CSE_IOT", "CSE_DATA_SCIENCE",
+        "CSE_BLOCKCHAIN", "CSE_AI_ML"
+    }
+    # Filter to only valid CSE codes — emails saying 'CSE/IT/ECE' may
+    # produce non-CSE entries like 'ECE', 'IT', 'EEE' which we drop.
+    # Their presence simply means ALL CSE specializations are eligible.
+    filtered_specializations = [s for s in (found_specializations or []) if s.upper() in VALID_CSE_SPEC_CODES]
+
+    allow_all_specializations = False
+    if not filtered_specializations or filtered_specializations == ["CSE_CORE"]:
+        allow_all_specializations = True
+
+    data["specializations"] = filtered_specializations
 
     # 8. Eligibility Criteria block extraction
     elig_block_match = re.search(

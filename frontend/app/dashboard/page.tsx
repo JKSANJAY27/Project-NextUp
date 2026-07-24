@@ -1049,18 +1049,32 @@ function DashboardPageContent() {
   // so active drives like Ion Group (OA) are reflected in the stats.
   const allApps = React.useMemo(() => Object.values(applications), [applications]);
   const totalAppsCount = allApps.length;
-  // OA reached: app has status OA, Interview, Technical, HR, or Offer
+
+  // Stage order: higher number = further in the process
+  const STAGE_ORDER: Record<string, number> = {
+    "Applied": 1, "Shortlisted": 2, "OA": 3, "Interview": 4, "Technical": 4,
+    "HR": 5, "Offer": 6, "Likely Rejected": 1, "Rejected": 1, "Declined": 1, "Ineligible": 0
+  };
+
+  // OA reached: current status is OA or beyond, OR was rejected/likely-rejected
+  // AFTER reaching OA (i.e. they made it to the assessment stage at minimum)
   const oaReachedCount = React.useMemo(() =>
-    allApps.filter(app =>
-      ["OA", "Interview", "Technical", "HR", "Offer"].includes(app.status)
-    ).length,
+    allApps.filter(app => {
+      const stage = STAGE_ORDER[app.status] ?? 0;
+      // Count if currently at OA+, OR if they reached Interview+ (meaning they passed OA)
+      // OR check recruitment_state which preserves the highest round reached
+      const recruitStage = STAGE_ORDER[app.recruitment_state] ?? 0;
+      return stage >= 3 || recruitStage >= 3;
+    }).length,
     [allApps]
   );
-  // Interview reached: app has status Interview, Technical, HR, or Offer
+  // Interview reached: current status is Interview/Technical/HR/Offer, or recruitment_state shows they got there
   const interviewReachedCount = React.useMemo(() =>
-    allApps.filter(app =>
-      ["Interview", "Technical", "HR", "Offer"].includes(app.status)
-    ).length,
+    allApps.filter(app => {
+      const stage = STAGE_ORDER[app.status] ?? 0;
+      const recruitStage = STAGE_ORDER[app.recruitment_state] ?? 0;
+      return stage >= 4 || recruitStage >= 4;
+    }).length,
     [allApps]
   );
   const offersCount = React.useMemo(() =>
@@ -1071,6 +1085,7 @@ function DashboardPageContent() {
     totalAppsCount > 0 ? ((offersCount / totalAppsCount) * 100).toFixed(1) : "0.0",
     [totalAppsCount, offersCount]
   );
+
 
 
   // Timeline and Workspace Drawer computed states

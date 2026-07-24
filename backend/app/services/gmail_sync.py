@@ -2188,9 +2188,21 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             min_ug_cgpa = r_item.get("min_ug_cgpa", {}).get("value")
             eligibility_raw_text = ext_data.get("eligibility_raw_text", {}).get("value")
 
+            # Valid CSE specialization codes this system tracks
+            VALID_CSE_SPEC_CODES = {
+                "CSE_CORE", "CSE_INFO_SEC", "CSE_IOT", "CSE_DATA_SCIENCE",
+                "CSE_BLOCKCHAIN", "CSE_AI_ML"
+            }
+            # Filter to only valid CSE codes — emails saying 'CSE/IT/ECE' may
+            # produce non-CSE entries like 'ECE', 'IT', 'EEE' which we drop.
+            # Their presence simply means ALL CSE specializations are eligible.
+            filtered_specializations = [s for s in (specializations or []) if s.upper() in VALID_CSE_SPEC_CODES]
+
             allow_all_specializations = False
-            if not specializations or specializations == ["CSE_CORE"]:
+            if not filtered_specializations or filtered_specializations == ["CSE_CORE"]:
                 allow_all_specializations = True
+
+            specializations = filtered_specializations
 
             eligibility_rules = {
                 "degree_types": degree_types,
