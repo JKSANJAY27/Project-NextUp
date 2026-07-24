@@ -57,6 +57,9 @@ GENERIC_COMPANY_NAMES = frozenset({
     # CDC headings
     "vit", "vellore", "vit vellore", "cdc", "training and placement",
     "vit placement", "vit bhopal", "vit ap", "vit chennai",
+    "director", "career development centre", "career development center",
+    "director career development centre", "director career development center",
+    "director cdc",
     # Registration headings
     "registration open", "registration", "apply now", "apply",
     # Year-like tokens
@@ -105,6 +108,8 @@ def is_generic_company_name(name: str) -> bool:
         r'\bselect\s+list\b',
         r'\bselected\b',
         r'\bplacement\s+officer\b',
+        r'\bdirector\b',
+        r'\bcareer\s+development\b',
         r'\bcdc\b',
         r'\bvit\b',
         r'\bstudents?\b',
