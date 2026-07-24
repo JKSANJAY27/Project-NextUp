@@ -1227,7 +1227,9 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
 def reconcile_all_pending_company_events(db: Session):
     """
     Sweeps through all PendingCompanyEvents with status 'PENDING_PARENT'.
-    Auto-creates Company workspaces for unknown companies and reconciles all events and shortlists.
+    Tries to fuzzy-match each to an existing Company workspace and reconciles
+    all events and shortlists. Only creates a new workspace if NO fuzzy match
+    exists, preventing duplicates for the same company with slightly different names.
     """
     pending = db.query(PendingCompanyEvent).filter(
         PendingCompanyEvent.status == "PENDING_PARENT"
@@ -1241,38 +1243,57 @@ def reconcile_all_pending_company_events(db: Session):
         if pe.company_name and not is_generic_company_name(pe.company_name):
             by_company.setdefault(pe.company_name.strip(), []).append(pe)
 
+    all_companies = db.query(Company).all()
+
     for comp_name, pe_list in by_company.items():
-        existing_companies = db.query(Company).all()
+        # Fuzzy-match against all existing companies using the same key as ingestion
+        ext_key = clean_company_name_key(comp_name).lower()
         company = None
-        for c in existing_companies:
-            if is_company_name_match(comp_name, c.name):
+        best_score = -1
+        for c in all_companies:
+            db_key = clean_company_name_key(c.name).lower()
+            if db_key == ext_key:
                 company = c
                 break
+            elif db_key and ext_key and (_key_in_text(db_key, ext_key) or _key_in_text(ext_key, db_key)):
+                overlap_ratio = len(db_key) / len(ext_key) if len(ext_key) > 0 else 0
+                if overlap_ratio > 1:
+                    overlap_ratio = 1 / overlap_ratio
+                score = int(50 * overlap_ratio)
+                if score > best_score:
+                    best_score = score
+                    company = c
 
         if not company:
             sample_pe = pe_list[0]
             role_name = sample_pe.role_name or "Software Engineer"
-            norm_comp = re.sub(r'[^a-z0-9]+', ' ', comp_name.lower()).strip()
-            norm_role = re.sub(r'[^a-z0-9]+', ' ', role_name.lower()).strip()
+            norm_comp = clean_company_name_key(comp_name).upper()
+            norm_role = normalize_role_name(role_name).upper()
             fingerprint_input = f"{norm_comp}|{norm_role}|2025-2026"
             fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
 
-            company = Company(
-                name=comp_name,
-                role=role_name,
-                roles=[{"role": role_name, "ctc": None, "stipend": None}],
-                category="Regular",
-                recruitment_cycle="2025-2026",
-                fingerprint=fingerprint,
-                requires_review=False
-            )
-            db.add(company)
-            db.commit()
-            db.refresh(company)
-            logger.info(f"Auto-created company workspace during sweep: {comp_name}")
-
+            # Double check fingerprint doesn't already exist (safety net)
+            company = db.query(Company).filter(Company.fingerprint == fingerprint).first()
+            if not company:
+                company = Company(
+                    name=comp_name,
+                    role=role_name,
+                    roles=[{"role": role_name, "ctc": None, "stipend": None}],
+                    category="Regular",
+                    recruitment_cycle="2025-2026",
+                    fingerprint=fingerprint,
+                    requires_review=False
+                )
+                db.add(company)
+                db.commit()
+                db.refresh(company)
+                all_companies.append(company)
+                logger.info(f"Auto-created company workspace during sweep: {comp_name}")
+        else:
+            logger.info(f"Fuzzy-matched pending '{comp_name}' -> existing company '{company.name}'")
 
         reconcile_pending_events_for_company(db, company)
+
 
 def process_queued_jobs_cron():
     """Cron tick: drain up to PARSER_JOBS_PER_TICK pending emails.
@@ -2111,15 +2132,30 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
 
             # -----------------------------------------------------------------
             # GUARD: If this is an update mail (not an announcement) and we
-            # couldn't find an existing company, check if it carries a shortlist
-            # or schedule event that warrants auto-creating a company workspace.
+            # couldn't find an existing company via fingerprint, do a fuzzy scan
+            # first before auto-creating. Prevents duplicates for companies with
+            # slightly different name spellings (e.g. 'PixelCompute' vs 'Pixel Compute').
             # -----------------------------------------------------------------
             if not company and not is_announcement:
                 has_inline_shortlist = bool(extract_neo_ids_from_text(body))
                 is_valid_update_event = event_type in ("OA", "INTERVIEW", "SHORTLIST", "SHORTLIST_RELEASED", "OA_RESULT", "INTERVIEW_RESULT", "OFFER", "OFFER_RELEASED")
                 if (has_inline_shortlist or is_valid_update_event) and company_name and not is_generic_company_name(company_name):
-                    logger.info(f"Job {job.id}: Auto-creating company workspace for update/shortlist email: '{company_name}'")
-                    is_announcement = True
+                    # Do a fuzzy name scan before committing to creating a new workspace
+                    ext_key = clean_company_name_key(company_name).lower()
+                    all_cos = db.query(Company).all()
+                    for c in all_cos:
+                        db_key = clean_company_name_key(c.name).lower()
+                        if db_key == ext_key or _key_in_text(db_key, ext_key) or _key_in_text(ext_key, db_key):
+                            email_haystack = f"{subject}\n{body}".lower()
+                            if company_grounded_in_email(c.name, email_haystack) or company_grounded_in_email(company_name, email_haystack):
+                                company = c
+                                logger.info(f"Job {job.id}: Fuzzy-matched update email '{company_name}' -> existing company '{c.name}'")
+                                break
+
+                    if not company:
+                        # No fuzzy match found — auto-create workspace
+                        logger.info(f"Job {job.id}: Auto-creating company workspace for update/shortlist email: '{company_name}'")
+                        is_announcement = True
                 else:
                     # Update email with no matching company in DB — park as PendingCompanyEvent.
                     existing_pending = db.query(PendingCompanyEvent).filter(
