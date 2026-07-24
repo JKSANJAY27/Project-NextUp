@@ -35,6 +35,13 @@ def map_event_type(company_event_type: str, stage: Optional[str] = None) -> str:
     else:
         return 'manual'
 
+def is_rejected_status(status: Optional[str]) -> bool:
+    """Returns True if the application status indicates rejection/ineligibility."""
+    if not status:
+        return False
+    s = status.strip().lower()
+    return 'reject' in s or s in ('declined', 'ineligible', 'likely rejected', 'likely_rejected')
+
 def sync_user_calendar_events(db: Session, user_id: UUID, company_id: Optional[UUID] = None):
     """
     Synchronizes company deadlines and company events to user calendar_events table.
@@ -61,11 +68,17 @@ def sync_user_calendar_events(db: Session, user_id: UUID, company_id: Optional[U
 
         for company in companies:
             state = opp_state_map.get(company.id)
+            app = app_map.get(company.id)
+
             if state in ('archived', 'auto_archived'):
                 continue
+            # Drives in a rejected status have all calendar events suppressed/cleaned up
+            if app and is_rejected_status(app.status):
+                continue
+
             active_company_ids.add(company.id)
             # A company is tracked if its state is tracking or it has an application record with a tracking/interested decision
-            is_tracked = (state == 'tracking') or (company.id in app_map and app_map[company.id].user_decision in ('tracking', 'interested'))
+            is_tracked = (state == 'tracking') or (app and app.user_decision in ('tracking', 'interested'))
             if is_tracked:
                 tracking_company_ids.add(company.id)
 

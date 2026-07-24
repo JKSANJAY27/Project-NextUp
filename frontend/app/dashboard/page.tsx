@@ -827,6 +827,16 @@ function DashboardPageContent() {
     return Math.min(100, score);
   };
 
+  // Helper: Check if a company application is in rejected status
+  const isCompanyRejected = React.useCallback((companyId: string) => {
+    const app = applications[companyId];
+    if (!app) return false;
+    const st = (app.status || "").toLowerCase();
+    const rec = (app.recruitment_state || "").toLowerCase();
+    return st.includes("reject") || st.includes("declined") || st.includes("ineligible") ||
+           rec.includes("reject") || rec.includes("declined") || rec.includes("ineligible");
+  }, [applications]);
+
   // Helper: Get Today's schedule events
   const getTodayEvents = React.useCallback(() => {
     const today = new Date();
@@ -837,6 +847,7 @@ function DashboardPageContent() {
     
     // 1. Company registration deadlines today
     companies.forEach(comp => {
+      if (isCompanyRejected(comp.id)) return;
       if (comp.registration_deadline) {
         const dlTime = new Date(comp.registration_deadline).getTime();
         if (dlTime >= startOfDay && dlTime <= endOfDay) {
@@ -853,6 +864,7 @@ function DashboardPageContent() {
 
     // 2. Notification events today
     notificationBundles.forEach(bundle => {
+      if (isCompanyRejected(bundle.company_id)) return;
       bundle.notifications.forEach((n) => {
         const eventTime = n.timestamp ? new Date(n.timestamp).getTime() : new Date(n.created_at).getTime();
         if (eventTime >= startOfDay && eventTime <= endOfDay) {
@@ -868,7 +880,8 @@ function DashboardPageContent() {
     });
 
     return events.sort((a, b) => a.time.getTime() - b.time.getTime());
-  }, [companies, notificationBundles]);
+  }, [companies, notificationBundles, isCompanyRejected]);
+
 
   const getDailyDigest = () => {
     const userName = user?.full_name || "Sanjay";

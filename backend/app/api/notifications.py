@@ -7,8 +7,9 @@ from datetime import datetime
 
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.models import User, Notification, CompanyEvent, Company, IngestionAuditLog
+from app.models.models import User, Notification, CompanyEvent, Company, IngestionAuditLog, Application, OpportunityState
 from app.schemas.schemas import NotificationOut, NotificationDetail, NotificationBundle
+from app.services.calendar_sync import is_rejected_status
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -21,6 +22,18 @@ def get_notifications(
     db: Session = Depends(get_db)
 ):
     """Fetch all notifications for the authenticated user, bundled by company/workspace."""
+    # Find companies where application is rejected or opportunity state is archived
+    apps = db.query(Application).filter(Application.user_id == current_user.id).all()
+    opp_states = db.query(OpportunityState).filter(OpportunityState.user_id == current_user.id).all()
+
+    rejected_company_ids = {
+        app.company_id for app in apps if is_rejected_status(app.status)
+    }
+    archived_company_ids = {
+        os.company_id for os in opp_states if os.state in ("archived", "auto_archived")
+    }
+    suppressed_company_ids = rejected_company_ids | archived_company_ids
+
     query = (
         db.query(Notification)
         .options(
@@ -28,41 +41,47 @@ def get_notifications(
         )
         .filter(Notification.user_id == current_user.id)
     )
-    
-    if scope == "all_active":
-        query = query.filter(Notification.notification_scope == "ACTIVE")
-    elif scope == "archived":
-        query = query.filter(Notification.notification_scope == "ARCHIVED")
-        
+
     if cursor:
         query = query.filter(Notification.created_at < cursor)
-        
-    notifications = query.order_by(Notification.created_at.desc()).limit(limit).all()
-    
+
+    notifications = query.order_by(Notification.created_at.desc()).limit(limit * 2).all()
+
     bundles = {}
-    
+
     # Pre-fetch ingestion audit logs for all events to compile confidence scores
     event_ids = [n.company_event_id for n in notifications if n.company_event_id]
     audit_logs = []
     if event_ids:
         audit_logs = db.query(IngestionAuditLog).filter(IngestionAuditLog.company_event_id.in_(event_ids)).all()
-        
+
     confidence_map = defaultdict(dict)
     for log in audit_logs:
         confidence_map[log.company_event_id][log.field_name] = float(log.confidence_score) if log.confidence_score else 0.0
-        
+
     for n in notifications:
         event = n.company_event
         if not event:
             continue
-            
+
         company = event.company
         if not company:
             continue
-            
+
         company_id = company.id
+        is_suppressed = company_id in suppressed_company_ids
+
+        # Scope routing: rejected or archived company notifications move to 'archived' scope
+        if scope == "all_active":
+            if is_suppressed or n.notification_scope == "ARCHIVED":
+                continue
+        elif scope == "archived":
+            if not is_suppressed and n.notification_scope != "ARCHIVED":
+                continue
+
         if company_id not in bundles:
             bundles[company_id] = {
+
                 "company_id": company_id,
                 "company_name": company.name,
                 "role": company.role,

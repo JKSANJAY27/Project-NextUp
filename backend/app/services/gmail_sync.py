@@ -1183,7 +1183,7 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
         has_excel = any(str(a.get("filename", "")).lower().endswith((".xls", ".xlsx"))
                         for a in attachments)
         if (pe.event_type in ("SHORTLIST_RELEASED", "OA_RESULT", "INTERVIEW_RESULT",
-                              "OFFER_RELEASED", "SHORTLIST", "OFFER")
+                              "OFFER_RELEASED", "SHORTLIST", "OFFER", "OA", "INTERVIEW", "GENERAL_UPDATE")
                 and not has_excel and body):
             try:
                 body_neo_ids = extract_neo_ids_from_text(body)
@@ -1224,6 +1224,56 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
         db.commit()
         process_notification_jobs(db)
 
+def reconcile_all_pending_company_events(db: Session):
+    """
+    Sweeps through all PendingCompanyEvents with status 'PENDING_PARENT'.
+    Auto-creates Company workspaces for unknown companies and reconciles all events and shortlists.
+    """
+    pending = db.query(PendingCompanyEvent).filter(
+        PendingCompanyEvent.status == "PENDING_PARENT"
+    ).all()
+    if not pending:
+        return
+
+    logger.info(f"Sweeping {len(pending)} pending company events for reconciliation...")
+    by_company = {}
+    for pe in pending:
+        if pe.company_name and not is_generic_company_name(pe.company_name):
+            by_company.setdefault(pe.company_name.strip(), []).append(pe)
+
+    for comp_name, pe_list in by_company.items():
+        existing_companies = db.query(Company).all()
+        company = None
+        for c in existing_companies:
+            if is_company_name_match(comp_name, c.name):
+                company = c
+                break
+
+        if not company:
+            sample_pe = pe_list[0]
+            role_name = sample_pe.role_name or "Software Engineer"
+            norm_comp = re.sub(r'[^a-z0-9]+', ' ', comp_name.lower()).strip()
+            norm_role = re.sub(r'[^a-z0-9]+', ' ', role_name.lower()).strip()
+            fingerprint_input = f"{norm_comp}|{norm_role}|2025-2026"
+            fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
+
+            company = Company(
+                name=comp_name,
+                role=role_name,
+                roles=[{"role": role_name, "ctc": None, "stipend": None}],
+                category="Regular",
+                recruitment_cycle="2025-2026",
+                fingerprint=fingerprint,
+                requires_review=False
+            )
+            db.add(company)
+            db.commit()
+            db.refresh(company)
+            logger.info(f"Auto-created company workspace during sweep: {comp_name}")
+
+
+        reconcile_pending_events_for_company(db, company)
+
 def process_queued_jobs_cron():
     """Cron tick: drain up to PARSER_JOBS_PER_TICK pending emails.
 
@@ -1237,8 +1287,10 @@ def process_queued_jobs_cron():
         for _ in range(max(1, settings.PARSER_JOBS_PER_TICK)):
             if not process_queued_jobs(db):
                 break  # queue empty
+        reconcile_all_pending_company_events(db)
     finally:
         db.close()
+
 
 def process_all_jobs_loop():
     """Loops and processes all pending raw ingestion jobs in the background."""
@@ -2059,34 +2111,39 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
 
             # -----------------------------------------------------------------
             # GUARD: If this is an update mail (not an announcement) and we
-            # couldn't find an existing company, park it as a PendingCompanyEvent.
-            # We never let update mails create new company workspaces.
+            # couldn't find an existing company, check if it carries a shortlist
+            # or schedule event that warrants auto-creating a company workspace.
             # -----------------------------------------------------------------
             if not company and not is_announcement:
-                # Update email with no matching company in DB — park as PendingCompanyEvent.
-                # Most are old-season orphans (safely ignored by default), but this catches
-                # parser errors or misparsed company names, keeping them visible for debugging.
-                existing_pending = db.query(PendingCompanyEvent).filter(
-                    PendingCompanyEvent.raw_ingestion_job_id == job.id,
-                    PendingCompanyEvent.company_name == company_name,
-                ).first()
-                if not existing_pending:
-                    db.add(PendingCompanyEvent(
-                        raw_ingestion_job_id=job.id,
-                        company_name=company_name,
-                        role_name=role,
-                        event_type=event_type,
-                        status="PENDING_PARENT",
-                        parsed_payload=validated_info,
-                    ))
-                logger.info(
-                    f"Job {job.id}: update email ({event_type}) for '{company_name}' has no matching company. "
-                    f"Parked as PendingCompanyEvent (likely old-season, or parser error)."
-                )
-                log_execution_stage(db, job.id, "COMPANY_MATCHED", "SKIPPED",
-                    f"No matching company for update email '{company_name}'. Parked as PendingCompanyEvent.")
-                # Skip the rest of the role loop for this role
-                continue
+                has_inline_shortlist = bool(extract_neo_ids_from_text(body))
+                is_valid_update_event = event_type in ("OA", "INTERVIEW", "SHORTLIST", "SHORTLIST_RELEASED", "OA_RESULT", "INTERVIEW_RESULT", "OFFER", "OFFER_RELEASED")
+                if (has_inline_shortlist or is_valid_update_event) and company_name and not is_generic_company_name(company_name):
+                    logger.info(f"Job {job.id}: Auto-creating company workspace for update/shortlist email: '{company_name}'")
+                    is_announcement = True
+                else:
+                    # Update email with no matching company in DB — park as PendingCompanyEvent.
+                    existing_pending = db.query(PendingCompanyEvent).filter(
+                        PendingCompanyEvent.raw_ingestion_job_id == job.id,
+                        PendingCompanyEvent.company_name == company_name,
+                    ).first()
+                    if not existing_pending:
+                        db.add(PendingCompanyEvent(
+                            raw_ingestion_job_id=job.id,
+                            company_name=company_name,
+                            role_name=role,
+                            event_type=event_type,
+                            status="PENDING_PARENT",
+                            parsed_payload=validated_info,
+                        ))
+                    logger.info(
+                        f"Job {job.id}: update email ({event_type}) for '{company_name}' has no matching company. "
+                        f"Parked as PendingCompanyEvent (likely old-season, or parser error)."
+                    )
+                    log_execution_stage(db, job.id, "COMPANY_MATCHED", "SKIPPED",
+                        f"No matching company for update email '{company_name}'. Parked as PendingCompanyEvent.")
+                    # Skip the rest of the role loop for this role
+                    continue
+
 
             degree_types = r_item.get("degree_types", {}).get("value", [])
             specializations = r_item.get("specializations", {}).get("value", [])
