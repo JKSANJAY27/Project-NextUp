@@ -66,7 +66,7 @@ export default function CompensationDisplay({
             title="Click to view full compensation breakdown"
           >
 
-            {expanded ? "Hide" : `+${extraCount} more`}
+            {expanded ? "Show less" : "Show more"}
             {expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
           </button>
         </div>
@@ -159,7 +159,7 @@ export default function CompensationDisplay({
             }}
             className="inline-flex items-center gap-1 text-[9px] font-black uppercase text-accent hover:underline mt-1"
           >
-            {expanded ? "See less" : `See more (${items.length - 2} more)`}
+            {expanded ? "Show less" : "Show more"}
             {expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
           </button>
         )}
@@ -204,8 +204,7 @@ export default function CompensationDisplay({
               onClick={() => setExpanded(!expanded)}
               className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider bg-accent/10 border border-accent/40 text-accent hover:bg-accent hover:text-black transition-all mt-1"
             >
-
-              {expanded ? "See less details" : `See more (${items.length - 2} more components)`}
+              {expanded ? "Show less" : "Show more"}
               {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
             </button>
           )}
