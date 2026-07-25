@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { ChevronDown, ChevronUp, Info, Eye } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 
 interface CompensationDisplayProps {
   value?: string | null;
@@ -51,7 +51,6 @@ export default function CompensationDisplay({
     }
 
     const firstItem = items[0];
-    const extraCount = items.length - 1;
 
     return (
       <div className={`relative inline-block ${className}`}>
