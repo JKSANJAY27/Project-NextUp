@@ -10,6 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useDashboard, CACHE_KEYS } from "@/lib/queries";
 import { SkeletonDashboard } from "@/components/SkeletonLoader";
 import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
+import CompensationDisplay from "@/components/CompensationDisplay";
 import ConfirmArchiveModal from "@/components/ConfirmArchiveModal";
 import { 
   Plus, 
@@ -1394,7 +1395,7 @@ function DashboardPageContent() {
                         <div className="grid grid-cols-2 gap-2 py-2 border-t border-b border-border/40">
                           <div>
                             <span className="text-[8px] text-muted-foreground uppercase block">Package</span>
-                            <span className="text-[10px] font-bold text-foreground block">{comp.ctc || '—'}</span>
+                            <CompensationDisplay value={comp.ctc} mode="card" />
                             <span className="text-[8px] text-muted-foreground uppercase block mt-1">Stipend</span>
                             <span className="text-[10px] font-bold text-foreground">{comp.stipend || '—'}</span>
                           </div>
@@ -1861,7 +1862,7 @@ function DashboardPageContent() {
                             </td>
 
                             <td className="py-5 px-6">
-                              <p className="text-sm font-bold uppercase tracking-tight">{c.ctc || "—"}</p>
+                              <CompensationDisplay value={c.ctc} mode="table" />
                             </td>
 
                             <td className="py-5 px-6">
@@ -2083,7 +2084,7 @@ function DashboardPageContent() {
                                 </span>
                               </td>
                               <td className="py-5 px-6 text-xs text-foreground/80">
-                                <div><span className="text-[9px] text-muted-foreground uppercase">CTC:</span> <span className="font-mono font-bold">{c.ctc || "—"}</span></div>
+                                <div><span className="text-[9px] text-muted-foreground uppercase block mb-0.5">CTC:</span> <CompensationDisplay value={c.ctc} mode="table" /></div>
                                 <div className="mt-1"><span className="text-[9px] text-muted-foreground uppercase">Stipend:</span> <span className="font-mono font-bold">{c.stipend || "—"}</span></div>
                               </td>
                               <td className="py-5 px-6 text-xs text-muted-foreground">
@@ -2223,7 +2224,7 @@ function DashboardPageContent() {
                                   </td>
 
                                   <td className="py-4 px-6">
-                                    <span className="text-xs font-bold font-mono">{c.ctc || "—"}</span>
+                                    <CompensationDisplay value={c.ctc} mode="table" />
                                   </td>
 
                                   <td className="py-4 px-6">
@@ -2439,7 +2440,7 @@ function DashboardPageContent() {
                       const comp = companies.find(c => c.id === id);
                       return (
                         <td key={id} className="py-4 px-6 border-r border-border font-bold">
-                          {comp?.ctc || "—"}
+                          <CompensationDisplay value={comp?.ctc} mode="detail" />
                         </td>
                       );
                     })}

@@ -1908,14 +1908,14 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             ctc = r_item.get("ctc", {}).get("value")
             if ctc:
                 ctc = str(ctc).strip()
-                if len(ctc) > 100:
-                    ctc = ctc[:97] + "..."
+                if len(ctc) > 2000:
+                    ctc = ctc[:1997] + "..."
                     
             stipend = r_item.get("stipend", {}).get("value")
             if stipend:
                 stipend = str(stipend).strip()
-                if len(stipend) > 100:
-                    stipend = stipend[:97] + "..."
+                if len(stipend) > 2000:
+                    stipend = stipend[:1997] + "..."
                     
             eligible_branches = r_item.get("eligible_branches", {}).get("value", [])
             min_cgpa = r_item.get("min_cgpa", {}).get("value")

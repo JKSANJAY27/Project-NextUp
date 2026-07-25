@@ -4,6 +4,7 @@
 import React, { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Calendar, Link2, Award, X, AlertTriangle, ExternalLink, Globe, ArrowRight } from "lucide-react";
+import CompensationDisplay from "@/components/CompensationDisplay";
 import Link from "next/link";
 import api from "@/lib/api";
 import { useDashboard } from "@/lib/queries";
@@ -468,8 +469,7 @@ export default function CompanyWorkspaceModal({
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
                     <div className="space-y-1">
                       <span className="text-[9px] font-black text-muted-foreground uppercase block">CTC / Package</span>
-                      <span className="text-sm font-bold text-foreground block">{selectedCompany.ctc || "Will be announced later"}</span>
-
+                      <CompensationDisplay value={selectedCompany.ctc} mode="detail" />
                     </div>
                     <div className="space-y-1">
                       <span className="text-[9px] font-black text-muted-foreground uppercase block">Stipend</span>
@@ -831,7 +831,7 @@ export default function CompanyWorkspaceModal({
                         </span>
                       )}
                       <span className="text-[10px] font-black tracking-widest text-muted-foreground uppercase block">CTC / SALARY</span>
-                      <span className="text-lg font-black uppercase text-foreground">{selectedCompany.ctc || "—"}</span>
+                      <CompensationDisplay value={selectedCompany.ctc} mode="detail" />
                     </div>
                     <div className="border border-border p-4 bg-muted/5 relative">
                       {selectedCompany.requires_review && (

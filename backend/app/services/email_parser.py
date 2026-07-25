@@ -1073,9 +1073,9 @@ def _section_value(email_body: str, labels: set[str]) -> Optional[str]:
             if non_empty_count >= 3:
                 break
 
-        value = " ".join(values).strip()
-        if value and len(value) > 100:
-            value = value[:97] + "..."
+        value = "\n".join(values).strip() if len(values) > 1 else " ".join(values).strip()
+        if value and len(value) > 2000:
+            value = value[:1997] + "..."
         # Treat deferral cells as absent so the body-scan fallback can fire
         if _is_ctc_deferral(value):
             return None
@@ -1094,13 +1094,66 @@ def _scan_body_for_total_ctc(email_body: str) -> Optional[str]:
     Body-scan fallback for emails where the CDC summary table defers CTC
     to a compensation breakdown section (e.g. LSEG, Nutanix).
 
-    Strategy:
-      1. Look for labeled total lines: "Total Fixed Pay", "Total CTC",
-         "Total Annual Comp" etc. — return the first match.
-      2. If none found, scan for INR/₹ amounts tied to a 'total' keyword
-         and return the largest one (the overall package, not a component).
+    Extracts all compensation components as provided by the company,
+    preserving multi-line / multi-component structure without collapsing or
+    re-interpreting them into a single value.
     """
-    # Priority 1: explicitly labeled totals (most reliable)
+    if not email_body:
+        return None
+
+    # Priority 1: Multi-component compensation section scan
+    pos = email_body.lower().rfind("below mail body")
+    search_body = email_body[pos + 15:] if pos != -1 else email_body
+
+    m = re.search(
+        r"(?is)[\*•\-]*\s*Compensation\s*[:\-\–\—\*\s]*[\r\n]+(.*?)"
+        r"(?=(?:\r?\n)\s*[\*•\-]*\s*(?:Note|Registration|Eligibility|Selection\s+Process|Job\s+Locations?|Job\s+Description|Important|Website|Company\s+link|Warm\s+regards|Disclaimer|Tentative)|$)",
+        search_body
+    )
+    if not m:
+        m = re.search(
+            r"(?is)[\*•\-]*\s*(?:Compensation|CTC|Package)\s*[:\-\–\—\*\s]*[\r\n]+(.*?)"
+            r"(?=(?:\r?\n)\s*[\*•\-]*\s*(?:Note|Registration|Eligibility|Selection\s+Process|Job\s+Locations?|Job\s+Description|Important|Website|Company\s+link|Warm\s+regards|Disclaimer)|$)",
+            email_body
+        )
+    if m:
+        raw_block = m.group(1).strip()
+        skip_headers = {"compensation component", "amount", "component", "particulars", "details"}
+        raw_lines = [re.sub(r"<[^>]+>", " ", l).strip().strip("*_ ").strip() for l in raw_block.splitlines()]
+        raw_lines = [l for l in raw_lines if l and l.lower() not in skip_headers]
+        if raw_lines:
+            formatted = []
+            i = 0
+            while i < len(raw_lines):
+                line = raw_lines[i]
+                line = re.sub(r"^[•\-\*\s]+", "", line).strip().strip("*_ ").strip()
+                if not line:
+                    i += 1
+                    continue
+                if re.match(r"^(?:Job\s+Locations?|Tentative|Location|Registration|Website|Selection)\b", line, re.I):
+                    break
+                if ":" in line or re.search(r"\b(?:₹|INR|USD|Rs\.?)\b", line):
+                    while i + 1 < len(raw_lines) and (raw_lines[i+1].startswith("(") or raw_lines[i+1].startswith("~")):
+                        line += " " + raw_lines[i+1].strip()
+                        i += 1
+                    formatted.append(line)
+                elif i + 1 < len(raw_lines):
+                    next_l = raw_lines[i+1].strip()
+                    if any(k in next_l for k in ["INR", "USD", "₹", "Rs", "per", "%", "lakh"]) or (next_l and next_l[0].isdigit()):
+                        while i + 2 < len(raw_lines) and (raw_lines[i+2].startswith("(") or raw_lines[i+2].startswith("~")):
+                            next_l += " " + raw_lines[i+2].strip()
+                            i += 1
+                        formatted.append(f"{line}: {next_l}")
+                        i += 1
+                    else:
+                        formatted.append(line)
+                else:
+                    formatted.append(line)
+                i += 1
+            if formatted:
+                return "\n".join(formatted)
+
+    # Priority 2: explicitly labeled totals (single-line fallback)
     TOTAL_LABELS = [
         r"Total\s+(?:Fixed\s+)?(?:CTC|Package|Compensation|Annual\s+Comp(?:ensation)?)",
         r"Total\s+Annual\s+CTC",
@@ -1117,7 +1170,6 @@ def _scan_body_for_total_ctc(email_body: str) -> Optional[str]:
             email_body,
         )
         if not m:
-            # Same-line variant: "Total Fixed Pay: ₹1,21,0845 per annum"
             m = re.search(
                 rf"(?im){label}\s*[:\-–—|]\s*(?:INR|₹|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:\s*(?:per annum|p\.a\.|lakh|lakhs|L)?)?)",
                 email_body,
@@ -1125,15 +1177,6 @@ def _scan_body_for_total_ctc(email_body: str) -> Optional[str]:
         if m:
             raw = m.group(1).strip().rstrip(",")
             return f"₹{raw}" if not raw.upper().startswith("INR") else raw
-
-    # Priority 2: bullet-point format — "Total Fixed Pay: ₹1,21,0845 per annum"
-    m = re.search(
-        r"(?im)^\s*[•\-*]\s*Total\s+Fixed\s+Pay[:\s]+"
-        r"(?:₹|INR|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:\s*(?:per annum|p\.a\.))?)",
-        email_body,
-    )
-    if m:
-        return f"₹{m.group(1).strip()}"
 
     return None
 
