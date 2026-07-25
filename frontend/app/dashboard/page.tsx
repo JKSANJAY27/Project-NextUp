@@ -1797,7 +1797,8 @@ function DashboardPageContent() {
                         </th>
                         <th className="py-4 px-6">COMPANY / ROLE</th>
                         <th className="py-4 px-6">CATEGORY</th>
-                        <th className="py-4 px-6">CTC / STIPEND</th>
+                        <th className="py-4 px-6">CTC</th>
+                        <th className="py-4 px-6">STIPEND</th>
                         <th className="py-4 px-6">DEADLINE</th>
                         <th className="py-4 px-6">ELIGIBILITY</th>
                         <th className="py-4 px-6 text-right">ACTION</th>
@@ -1861,7 +1862,10 @@ function DashboardPageContent() {
 
                             <td className="py-5 px-6">
                               <p className="text-sm font-bold uppercase tracking-tight">{c.ctc || "—"}</p>
-                              <p className="text-[10px] text-muted-foreground uppercase">{c.stipend ? `Stipend: ${c.stipend}` : "No stipend listed"}</p>
+                            </td>
+
+                            <td className="py-5 px-6">
+                              <p className="text-xs font-bold uppercase tracking-tight text-foreground/80">{c.stipend || "—"}</p>
                             </td>
 
                             <td className="py-5 px-6">
@@ -2430,13 +2434,23 @@ function DashboardPageContent() {
                     })}
                   </tr>
                   <tr className="hover:bg-muted/10">
-                    <td className="py-4 px-6 border-r border-border font-black text-muted-foreground">CTC / STIPEND</td>
+                    <td className="py-4 px-6 border-r border-border font-black text-muted-foreground">CTC</td>
                     {selectedCompanyIds.slice(0, 3).map(id => {
                       const comp = companies.find(c => c.id === id);
                       return (
-                        <td key={id} className="py-4 px-6 border-r border-border">
-                          <p className="font-bold">{comp?.ctc || "—"}</p>
-                          <p className="text-[10px] text-muted-foreground">{comp?.stipend ? `Stipend: ${comp?.stipend}` : "No stipend"}</p>
+                        <td key={id} className="py-4 px-6 border-r border-border font-bold">
+                          {comp?.ctc || "—"}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  <tr className="hover:bg-muted/10">
+                    <td className="py-4 px-6 border-r border-border font-black text-muted-foreground">STIPEND</td>
+                    {selectedCompanyIds.slice(0, 3).map(id => {
+                      const comp = companies.find(c => c.id === id);
+                      return (
+                        <td key={id} className="py-4 px-6 border-r border-border font-bold">
+                          {comp?.stipend || "—"}
                         </td>
                       );
                     })}

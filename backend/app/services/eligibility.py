@@ -300,15 +300,18 @@ def check_eligibility(profile, company) -> Tuple[str, Optional[str], Dict[str, A
     women_only = bool(rules.get("women_only"))
 
     # ── RESULT ────────────────────────────────────────────────────────────────
-    # Track whether ANY criterion was actually evaluated. 'No data parsed →
+    # Track whether ANY specific criterion was actually evaluated. 'No data parsed →
     # ELIGIBLE' silently marked criteria-less drives green; the honest answer
     # is UNKNOWN with a pointer to the source mail.
+    has_specific_branches = bool(real_branch_entries)
     criteria_checked = (
-        branch_checked
+        has_specific_branches
         or min_cgpa is not None
         or min_tenth is not None
         or min_twelfth is not None
         or requires_no_arrears
+        or bool(specializations and not allow_all_specializations)
+        or bool(eligibility_raw_text and len(str(eligibility_raw_text).strip()) > 30)
     )
 
     if not failed and women_only:

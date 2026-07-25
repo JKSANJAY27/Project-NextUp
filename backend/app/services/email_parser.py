@@ -115,6 +115,15 @@ def is_generic_company_name(name: str) -> bool:
         r'\bstudents?\b',
         r'\bbatch\b',
         r'\bregistration\b',
+        r'\breg\b',
+        r'\bneo\s*id\b',
+        r'\bneo\s*id\s*reg\b',
+        r'\breg\s*no\b',
+        r'\bsl\s*no\b',
+        r'\broll\s*no\b',
+        r'\bcgpa\b',
+        r'\bbranch\b',
+        r'\bgender\b',
         r'\bapply\b',
         r'\bplacements\b',
         r'\binternship\s+registration\b',
@@ -123,6 +132,34 @@ def is_generic_company_name(name: str) -> bool:
     for pattern in generic_patterns:
         if re.search(pattern, cleaned):
             return True
+
+    # Reject Neo ID tokens (alternating letter-digit 8 chars, e.g. F3M5W9J9 or B5K6G7Q6)
+    if re.search(r'\b[a-z]\d[a-z]\d[a-z]\d[a-z]\d\b', cleaned) or re.search(r'[a-z]\d[a-z]\d[a-z]\d[a-z]\d', cleaned):
+        return True
+
+    # Reject names that look like student names (2-3 titlecase words with no corporate indicators/tokens)
+    # e.g., "Khushi Agarwal", "Sanjay Kumar"
+    CORPORATE_TOKENS = {
+        "pvt", "ltd", "inc", "corp", "corporation", "group", "india", "global",
+        "technologies", "technology", "solutions", "systems", "software", "services",
+        "labs", "lab", "limited", "private", "llp", "company", "co", "ai", "io", "hq",
+        "interactive", "bank", "capital", "energy", "pharma", "robotics", "networks",
+        "security", "consulting", "ventures", "enterprises", "studio", "media",
+        "mobility", "health", "healthcare", "financial", "motors", "automotive",
+        "holdings", "retail", "foods", "works", "analytics", "dynamics"
+    }
+    words = cleaned.split()
+    if 2 <= len(words) <= 3 and not any(w in CORPORATE_TOKENS for w in words):
+        if all(w.isalpha() for w in words):
+            VALID_TWO_WORD_BRANDS = {
+                "morgan stanley", "jpmorgan chase", "fischer jordan", "goldman sachs",
+                "ernst young", "bain company", "robert bosch", "alvarez marsal",
+                "oliver wyman", "schneider electric", "standard chartered", "baker hughes",
+                "societe generale", "deutsche bank", "barclays bank", "credit suisse",
+                "wells fargo", "bny mellon"
+            }
+            if cleaned not in VALID_TWO_WORD_BRANDS:
+                return True
 
     # Reject if the name is entirely numeric or a year
     if re.match(r'^\d+$', cleaned):

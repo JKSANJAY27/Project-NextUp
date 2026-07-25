@@ -2145,17 +2145,38 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                     all_cos = db.query(Company).all()
                     for c in all_cos:
                         db_key = clean_company_name_key(c.name).lower()
-                        if db_key == ext_key or _key_in_text(db_key, ext_key) or _key_in_text(ext_key, db_key):
+                        # Extract parenthetical aliases e.g. "ETERNAL (ZOMATO)" -> aliases "ETERNAL", "ZOMATO"
+                        c_aliases = [db_key]
+                        for p in re.findall(r'\(([^)]+)\)', c.name):
+                            if p.strip():
+                                c_aliases.append(clean_company_name_key(p).lower())
+                        without_p = clean_company_name_key(re.sub(r'\([^)]+\)', '', c.name)).lower()
+                        if without_p:
+                            c_aliases.append(without_p)
+
+                        matched_alias = False
+                        for ak in c_aliases:
+                            if not ak or len(ak) < 3:
+                                continue
+                            if ak == ext_key or _key_in_text(ak, ext_key) or _key_in_text(ext_key, ak):
+                                matched_alias = True
+                                break
+
+                        if matched_alias:
                             email_haystack = f"{subject}\n{body}".lower()
-                            if company_grounded_in_email(c.name, email_haystack) or company_grounded_in_email(company_name, email_haystack):
+                            if company_grounded_in_email(c.name, email_haystack) or company_grounded_in_email(company_name, email_haystack) or any(_key_in_text(ak, email_haystack) for ak in c_aliases if ak and len(ak) >= 3):
                                 company = c
                                 logger.info(f"Job {job.id}: Fuzzy-matched update email '{company_name}' -> existing company '{c.name}'")
                                 break
 
                     if not company:
-                        # No fuzzy match found — auto-create workspace
-                        logger.info(f"Job {job.id}: Auto-creating company workspace for update/shortlist email: '{company_name}'")
-                        is_announcement = True
+                        # Safety check: Do NOT auto-create company workspaces from shortlist/update emails
+                        # if company_name fails generic checks or looks like a person's name / Neo ID token.
+                        if not is_generic_company_name(company_name):
+                            logger.info(f"Job {job.id}: Auto-creating company workspace for update/shortlist email: '{company_name}'")
+                            is_announcement = True
+                        else:
+                            logger.info(f"Job {job.id}: Candidate name '{company_name}' rejected by is_generic_company_name for update email. Parking as PendingCompanyEvent.")
                 else:
                     # Update email with no matching company in DB — park as PendingCompanyEvent.
                     existing_pending = db.query(PendingCompanyEvent).filter(
