@@ -66,6 +66,9 @@ GENERIC_COMPANY_NAMES = frozenset({
     "2025 batch", "2026 batch", "2027 batch", "2028 batch",
     # Blank-ish
     "n/a", "na", "nil", "-",
+    # Neo ID / registration-table artefacts that parsers mistake for company names
+    "neo id", "neo id reg", "neo id registration", "neo pat", "neopat",
+    "reg no", "regd no", "roll no", "roll number", "student id",
 })
 
 def is_generic_company_name(name: str) -> bool:
@@ -128,6 +131,11 @@ def is_generic_company_name(name: str) -> bool:
         r'\bplacements\b',
         r'\binternship\s+registration\b',
         r'\bsuper\s+dream\s+internship\b',
+        # Neo ID / registration table artefacts
+        r'\bneo\s+id\b',        # catches "neo id reg", "neo id registration", etc.
+        r'\breg\s*no\b',         # catches "reg no", "regno"
+        r'\broll\s+no\b',        # catches "roll no"
+        r'\bstudent\s+id\b',     # catches "student id"
     ]
     for pattern in generic_patterns:
         if re.search(pattern, cleaned):
@@ -170,6 +178,41 @@ def is_generic_company_name(name: str) -> bool:
     # Reject single-character names
     if len(cleaned) < 2:
         return True
+
+    # ── NEW GUARDS ──────────────────────────────────────────────────────────
+    # Guard 1: Reject Neo ID tokens used as company names.
+    # Pattern: alternating letter-digit 8-char tokens like "F3M5W9J9" or
+    # two such tokens "F3M5W9J9 B5K6G7Q6" (Neo ID pair in a shortlist body).
+    # The LLM occasionally grabs these from the email body as the company name.
+    _neo_id_re = r'^[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d(?:\s+[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d)*$'
+    if re.match(_neo_id_re, name.strip()):
+        return True
+
+    # Guard 2: Reject apparent person names (first + last name).
+    # Heuristic: exactly 2–3 words, all purely alphabetic, no corporate-domain
+    # keyword in any word.  Catches "Khushi Agarwal"-style extractions where
+    # the LLM grabbed a student's name from a shortlist congratulation line.
+    _CORP_KEYWORDS = frozenset({
+        "tech", "technologies", "technology", "systems", "solutions", "labs",
+        "digital", "software", "services", "cloud", "data", "analytics",
+        "consulting", "consultancy", "financial", "capital", "ventures",
+        "group", "global", "corp", "enterprises", "innovations", "networks",
+        "media", "banking", "insurance", "payments", "fintech", "logistics",
+        "manufacturing", "pharma", "research", "electric", "motors", "auto",
+        "automobiles", "telecom", "energy", "power", "chemicals", "foods",
+        "healthcare", "hospital", "hotels", "construction", "infrastructure",
+        "aerospace", "defence", "securities", "asset", "management", "limited",
+        "pvt", "ltd", "inc", "llp", "ai", "ml", "iot", "robotics",
+    })
+    _words = cleaned.split()
+    if (
+        2 <= len(_words) <= 3
+        and all(re.match(r'^[a-z]{3,15}$', w) for w in _words)
+        and not any(w in _CORP_KEYWORDS for w in _words)
+    ):
+        return True
+    # ── END NEW GUARDS ───────────────────────────────────────────────────────
+
     return False
 
 
