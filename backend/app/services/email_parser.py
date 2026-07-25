@@ -1003,8 +1003,43 @@ def _plain_line(line: str) -> str:
     ).strip()
 
 
+# Phrases that CDC emails use in the summary table to defer compensation
+# details to a breakdown section lower in the email body.  When _section_value
+# detects one of these it returns None so the body-scan fallback can fire.
+_CTC_DEFERRAL_PHRASES = {
+    "below mail body", "below attachment", "below jd", "below mail",
+    "refer mail body", "refer to mail", "refer body", "see mail body",
+    "see below", "see attachment", "refer jd", "refer to jd",
+    "if converted", "as per industry", "to be announced", "will be announced",
+    "announced later", "as mentioned",
+}
+
+def _is_ctc_deferral(value: str) -> bool:
+    """Return True when a CTC/Stipend table cell defers to the email body."""
+    if not value:
+        return False
+    v = value.strip().lower()
+    # Exact match against known deferral phrases
+    if v in _CTC_DEFERRAL_PHRASES:
+        return True
+    # Contains a deferral keyword — e.g. "Below mail body (if converted)"
+    _DEFERRAL_KEYWORDS = (
+        "below mail", "below attachment", "below jd",
+        "refer mail", "refer body", "refer jd", "refer to",
+        "see below", "see attachment", "see mail",
+        "if converted", "as per industry",
+        "will be announced", "announced later",
+    )
+    return any(kw in v for kw in _DEFERRAL_KEYWORDS)
+
+
 def _section_value(email_body: str, labels: set[str]) -> Optional[str]:
-    """Read an explicit field whose value may start several blank lines later."""
+    """Read an explicit field whose value may start several blank lines later.
+
+    Returns None both when the field is absent AND when its value is a deferral
+    placeholder like 'Below mail body' or 'Below attachment' — callers should
+    then fall through to the body-scan extraction tier.
+    """
     lines = email_body.splitlines()
     for index, raw_line in enumerate(lines):
         line = _plain_line(raw_line)
@@ -1037,11 +1072,96 @@ def _section_value(email_body: str, labels: set[str]) -> Optional[str]:
             non_empty_count += 1
             if non_empty_count >= 3:
                 break
-                
+
         value = " ".join(values).strip()
         if value and len(value) > 100:
             value = value[:97] + "..."
+        # Treat deferral cells as absent so the body-scan fallback can fire
+        if _is_ctc_deferral(value):
+            return None
         return value or None
+    return None
+
+
+_INR_AMOUNT_RE = re.compile(
+    r"(?:₹|INR|Rs\.?)\s*([\d,]+(?:\.\d+)?(?:\s*(?:per annum|p\.a\.|lakh|lakhs|L))?)",
+    re.IGNORECASE,
+)
+
+
+def _scan_body_for_total_ctc(email_body: str) -> Optional[str]:
+    """
+    Body-scan fallback for emails where the CDC summary table defers CTC
+    to a compensation breakdown section (e.g. LSEG, Nutanix).
+
+    Strategy:
+      1. Look for labeled total lines: "Total Fixed Pay", "Total CTC",
+         "Total Annual Comp" etc. — return the first match.
+      2. If none found, scan for INR/₹ amounts tied to a 'total' keyword
+         and return the largest one (the overall package, not a component).
+    """
+    # Priority 1: explicitly labeled totals (most reliable)
+    TOTAL_LABELS = [
+        r"Total\s+(?:Fixed\s+)?(?:CTC|Package|Compensation|Annual\s+Comp(?:ensation)?)",
+        r"Total\s+Annual\s+CTC",
+        r"(?:Annual\s+)?CTC\s*\(Excludes?\s+Benefits?\)",
+        r"Total\s+Compensation\s*\(Excludes?\s+Benefits?\)",
+        r"Gross\s+(?:Annual\s+)?(?:CTC|Compensation|Salary)",
+        r"Annual\s+(?:Gross\s+)?(?:CTC|Salary|Compensation)",
+        r"Total\s+Fixed\s+Pay",
+    ]
+    for label in TOTAL_LABELS:
+        m = re.search(
+            rf"(?im)^[^\n]{{0,60}}{label}[^\n]{{0,30}}\n?[^\n]{{0,10}}"
+            r"(?:INR|₹|Rs\.?)\s*([\d,]+(?:\.\d+)?(?:\s*(?:per annum|p\.a\.|lakh|lakhs|L))?)",
+            email_body,
+        )
+        if not m:
+            # Same-line variant: "Total Fixed Pay: ₹1,21,0845 per annum"
+            m = re.search(
+                rf"(?im){label}\s*[:\-–—|]\s*(?:INR|₹|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:\s*(?:per annum|p\.a\.|lakh|lakhs|L)?)?)",
+                email_body,
+            )
+        if m:
+            raw = m.group(1).strip().rstrip(",")
+            return f"₹{raw}" if not raw.upper().startswith("INR") else raw
+
+    # Priority 2: bullet-point format — "Total Fixed Pay: ₹1,21,0845 per annum"
+    m = re.search(
+        r"(?im)^\s*[•\-*]\s*Total\s+Fixed\s+Pay[:\s]+"
+        r"(?:₹|INR|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:\s*(?:per annum|p\.a\.))?)",
+        email_body,
+    )
+    if m:
+        return f"₹{m.group(1).strip()}"
+
+    return None
+
+
+def _scan_body_for_total_stipend(email_body: str) -> Optional[str]:
+    """
+    Body-scan fallback for stipend when the CDC table says 'Below mail body'.
+    Looks for labeled stipend amounts in a compensation breakdown section.
+    """
+    STIPEND_LABELS = [
+        r"Intern(?:ship)?\s+Stipend",
+        r"Monthly\s+Stipend",
+        r"Stipend\s+(?:Amount|Per\s+Month)",
+    ]
+    for label in STIPEND_LABELS:
+        m = re.search(
+            rf"(?im){label}[^\n]{{0,30}}\n?[^\n]{{0,10}}"
+            r"(?:INR|₹|Rs\.?)\s*([\d,]+(?:\.\d+)?(?:\s*(?:per month|p\.m\.))?)",
+            email_body,
+        )
+        if not m:
+            m = re.search(
+                rf"(?im){label}\s*[:\-–—|]\s*(?:INR|₹|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+                email_body,
+            )
+        if m:
+            raw = m.group(1).strip().rstrip(",")
+            return f"₹{raw} per month"
     return None
 
 
@@ -1051,6 +1171,14 @@ def extract_explicit_compensation(email_body: str) -> tuple[Optional[str], Optio
 
     Unlabelled currency amounts are intentionally ignored: an absent field is
     None, so internship pay cannot silently become a full-time package.
+
+    Tier 1: label scan (_section_value) — reads the CDC summary table.
+            Returns None when the cell is a deferral placeholder ('Below mail
+            body', 'Below attachment', etc.).
+    Tier 2: inline regex — checks for 'CTC: ₹X' bullet/inline patterns.
+    Tier 3: body-scan fallback — searches for Total Fixed Pay / Total CTC /
+            Total Annual Comp sections used by LSEG, Nutanix, and similar
+            companies that detail compensation below the summary table.
     """
     ctc = _section_value(
         email_body,
@@ -1060,22 +1188,37 @@ def extract_explicit_compensation(email_body: str) -> tuple[Optional[str], Optio
         email_body, {"stipend", "internship stipend", "monthly stipend"}
     )
 
+    # Tier 2: inline regex for labeled single-line values
     if not ctc:
         match = re.search(
-            r"(?im)^\s*[*#>\-Ø•\s]*(?:CTC|Package|Salary|Annual\s+CTC|Compensation)"
-            r"\s*[:\-–—]\s*\*?([^\r\n*]+)",
+            r"(?im)^\s*[*#>\-\u00d8•\s]*(?:CTC|Package|Salary|Annual\s+CTC|Compensation)"
+            r"\s*[:\-\u2013\u2014]\s*\*?([^\r\n*]+)",
             email_body,
         )
         if match:
-            ctc = _plain_line(match.group(1))
+            candidate = _plain_line(match.group(1))
+            ctc = candidate if not _is_ctc_deferral(candidate) else None
     if not stipend:
         match = re.search(
-            r"(?im)^\s*[*#>\-Ø•\s]*(?:Internship\s+Stipend|Monthly\s+Stipend|Stipend)"
-            r"\s*[:\-–—]\s*\*?([^\r\n*]+)",
+            r"(?im)^\s*[*#>\-\u00d8•\s]*(?:Internship\s+Stipend|Monthly\s+Stipend|Stipend)"
+            r"\s*[:\-\u2013\u2014]\s*\*?([^\r\n*]+)",
             email_body,
         )
         if match:
-            stipend = _plain_line(match.group(1))
+            candidate = _plain_line(match.group(1))
+            stipend = candidate if not _is_ctc_deferral(candidate) else None
+
+    # Tier 3: body-scan fallback — fires when the table/inline tiers returned
+    # nothing (or a deferral placeholder that was already nulled).  Looks for
+    # compensation breakdown sections used by LSEG, Nutanix, etc.
+    if not ctc:
+        ctc = _scan_body_for_total_ctc(email_body)
+        if ctc:
+            logger.info("[email_parser] CTC extracted via body-scan fallback: %r", ctc)
+    if not stipend:
+        stipend = _scan_body_for_total_stipend(email_body)
+        if stipend:
+            logger.info("[email_parser] Stipend extracted via body-scan fallback: %r", stipend)
 
     return ctc, stipend
 
