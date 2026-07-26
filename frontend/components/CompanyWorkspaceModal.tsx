@@ -37,6 +37,15 @@ export default function CompanyWorkspaceModal({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [companyEvents, setCompanyEvents] = useState<any[]>([]);
 
+  // Manual drive progress update state
+  const [manualStage, setManualStage] = useState("ONLINE_ASSESSMENT");
+  const [manualDate, setManualDate] = useState("");
+  const [manualNotes, setManualNotes] = useState("");
+  const [manualResult, setManualResult] = useState("PASS");
+  const [manualLoading, setManualLoading] = useState(false);
+  const [manualError, setManualError] = useState("");
+  const [manualSuccess, setManualSuccess] = useState("");
+
   const [archiveConfirm, setArchiveConfirm] = useState<{
     isOpen: boolean;
     title: string;
@@ -217,6 +226,35 @@ export default function CompanyWorkspaceModal({
     } catch (err) {
       console.error("Failed to encrypt/save notes", err);
       alert("Failed to securely encrypt and save notes.");
+    }
+  };
+
+  const handleLogManualUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!companyId) return;
+    setManualLoading(true);
+    setManualError("");
+    setManualSuccess("");
+    try {
+      await api.post(`/companies/${companyId}/manual-update`, {
+        stage: manualStage,
+        date: manualDate ? new Date(manualDate).toISOString() : null,
+        notes: manualNotes.trim() || null,
+        result: manualResult,
+      });
+      setManualSuccess("PROGRESS UPDATE LOGGED SUCCESSFULLY.");
+      setManualNotes("");
+      setManualDate("");
+      // Refresh company events timeline
+      const res = await api.get(`/companies/${companyId}/events`);
+      setCompanyEvents(res.data || []);
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || err?.message || "Failed to log update.";
+      setManualError(typeof msg === "string" ? msg : "Failed to log update.");
+    } finally {
+      setManualLoading(false);
     }
   };
 
@@ -616,11 +654,108 @@ export default function CompanyWorkspaceModal({
                   {/* No milestones fallback */}
                   {milestoneEvents.length === 0 && (
                     <div className="border border-dashed border-border/50 p-6 text-center">
-                      <p className="text-[10px] text-muted-foreground uppercase font-bold">No structured milestones detected yet.</p>
-                      <p className="text-[9px] text-muted-foreground/60 mt-1">Dates will populate as CDC emails are processed.</p>
+                      <p className="text-[10px] text-muted-foreground uppercase font-bold">
+                        {selectedCompany.is_manual ? "No progress updates logged yet." : "No structured milestones detected yet."}
+                      </p>
+                      <p className="text-[9px] text-muted-foreground/60 mt-1">
+                        {selectedCompany.is_manual ? "Use the section below to log your next round or outcome." : "Dates will populate as CDC emails are processed."}
+                      </p>
                     </div>
                   )}
                 </div>
+
+                {/* MANUAL DRIVE PROGRESS UPDATE FORM */}
+                {selectedCompany.is_manual && (
+                  <div className="border-2 border-accent/40 bg-accent/5 p-6 space-y-4">
+                    <div className="flex items-center justify-between border-b border-accent/30 pb-3">
+                      <h4 className="text-xs font-black tracking-widest text-accent uppercase flex items-center gap-2">
+                        <span>➕</span> LOG PROGRESS UPDATE
+                      </h4>
+                      <span className="text-[9px] font-bold text-muted-foreground uppercase">PRIVATE MANUAL DRIVE</span>
+                    </div>
+
+                    {manualError && (
+                      <div className="border border-red-500/50 bg-red-500/10 p-3 text-[10px] font-bold text-red-400 uppercase">
+                        {manualError}
+                      </div>
+                    )}
+                    {manualSuccess && (
+                      <div className="border border-emerald-500/50 bg-emerald-500/10 p-3 text-[10px] font-bold text-emerald-400 uppercase">
+                        {manualSuccess}
+                      </div>
+                    )}
+
+                    <form onSubmit={handleLogManualUpdate} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                          RECRUITMENT STAGE
+                        </label>
+                        <select
+                          value={manualStage}
+                          onChange={(e) => setManualStage(e.target.value)}
+                          className="w-full h-10 border border-border bg-background text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none cursor-pointer"
+                        >
+                          <option value="ONLINE_ASSESSMENT">ONLINE ASSESSMENT (OA)</option>
+                          <option value="TECHNICAL_INTERVIEW">TECHNICAL INTERVIEW</option>
+                          <option value="HR_INTERVIEW">HR INTERVIEW</option>
+                          <option value="OFFER">OFFER RECEIVED</option>
+                          <option value="REJECTION">REJECTED</option>
+                          <option value="GENERAL_UPDATE">GENERAL UPDATE</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                          STAGE DATE & TIME
+                        </label>
+                        <input
+                          type="datetime-local"
+                          value={manualDate}
+                          onChange={(e) => setManualDate(e.target.value)}
+                          className="w-full h-10 border border-border bg-background text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none cursor-pointer"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5 md:col-span-2">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                          STAGE RESULT
+                        </label>
+                        <select
+                          value={manualResult}
+                          onChange={(e) => setManualResult(e.target.value)}
+                          className="w-full h-10 border border-border bg-background text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none cursor-pointer"
+                        >
+                          <option value="PASS">PASSED / SHORTLISTED</option>
+                          <option value="PENDING">PENDING RESULT</option>
+                          <option value="FAIL">FAILED / REJECTED</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1.5 md:col-span-2">
+                        <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                          NOTES / DETAILS (OPTIONAL)
+                        </label>
+                        <input
+                          type="text"
+                          value={manualNotes}
+                          onChange={(e) => setManualNotes(e.target.value)}
+                          placeholder="E.G. Cleared Round 1 coding test, interview scheduled on Meet"
+                          className="w-full h-10 border border-border bg-transparent text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none"
+                        />
+                      </div>
+
+                      <div className="md:col-span-2 pt-2">
+                        <button
+                          type="submit"
+                          disabled={manualLoading}
+                          className="h-10 px-6 border-2 border-accent bg-accent text-black font-extrabold text-xs uppercase tracking-widest hover:bg-accent/80 transition-all disabled:opacity-50"
+                        >
+                          {manualLoading ? "SAVING UPDATE..." : "SAVE PROGRESS UPDATE"}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
 
                 {/* Email Trail */}
                 <div className="space-y-4">

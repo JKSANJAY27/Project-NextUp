@@ -69,6 +69,7 @@ interface Company {
   source_email_body: string | null;
   additional_info: AdditionalInfo | null;
   requires_review?: boolean;
+  is_manual?: boolean;
   latest_event?: {
     id: string;
     event_type: string;
@@ -485,40 +486,24 @@ function DashboardPageContent() {
         ? compBranches.split(",").map((b) => b.trim().toUpperCase()).filter((b) => b)
         : [];
 
-      const fingerprintInput = `${compName.trim().toUpperCase()}|${compRole.trim().toUpperCase()}|${compCategory.trim().toUpperCase()}|${new Date().getFullYear()}|DEFAULT`;
-      const fingerprint = await calculateHash(fingerprintInput);
-
-      const eligibilityRules = {
+      const payload = {
+        name: compName.trim(),
+        category: compCategory,
+        role: compRole.trim(),
+        ctc: compCtc.trim() || null,
+        stipend: compStipend.trim() || null,
+        job_location: compLocation.trim() || null,
+        eligible_branches: branchesArray.length > 0 ? branchesArray : [],
         min_cgpa: compMinCgpa ? parseFloat(compMinCgpa) : null,
-        min_tenth_marks: null,
-        min_twelfth_marks: null,
-        requires_no_arrears: compRequiresNoArrears
+        requires_no_arrears: compRequiresNoArrears,
+        registration_deadline: compDeadline ? new Date(compDeadline).toISOString() : null,
+        registration_link: compRegLink.trim() || null,
+        jd_text: compJd.trim() || null,
       };
 
-      const { error } = await supabase
-        .from("companies")
-        .insert({
-          name: compName.trim(),
-          category: compCategory,
-          role: compRole.trim(),
-          ctc: compCtc.trim() || null,
-          stipend: compStipend.trim() || null,
-          job_location: compLocation.trim() || null,
-          eligible_branches: branchesArray.length > 0 ? branchesArray : [],
-          eligibility_rules: eligibilityRules,
-          registration_deadline: compDeadline ? new Date(compDeadline).toISOString() : null,
-          registration_link: compRegLink.trim() || null,
-          website: null,
-          jd_text: compJd.trim() || null,
-          jd_required_skills: [],
-          jd_ats_keywords: [],
-          recruitment_cycle: "Default",
-          fingerprint: fingerprint
-        });
+      await api.post('/companies/manual', payload);
 
-      if (error) throw error;
-
-      setFormSuccess("COMPANY DRIVE CREATED SUCCESSFULLY.");
+      setFormSuccess("COMPANY DRIVE CREATED SUCCESSFULLY AND AUTO-TRACKED.");
       fetchDashboardData();
       
       // Reset form
@@ -536,7 +521,8 @@ function DashboardPageContent() {
       setTimeout(() => setShowAddCompany(false), 1500);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
-      setFormError(err.message || "FAILED TO CREATE DRIVE.");
+      const msg = err?.response?.data?.detail || err?.message || "FAILED TO CREATE DRIVE.";
+      setFormError(typeof msg === 'string' ? msg : "FAILED TO CREATE DRIVE.");
     }
   };
 

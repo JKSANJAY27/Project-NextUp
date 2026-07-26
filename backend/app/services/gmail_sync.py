@@ -1978,29 +1978,38 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                     score = role_score
                     name_matched = False
 
-                    # NOTE: all containment checks are word-bounded (_key_in_text).
-                    # Raw substring matching let 'ion' (ION Group) match inside
-                    # 'selection'/'attention' and pulled Danfoss/Valeo emails
-                    # into the ION workspace.
+                    # Extract core brand tokens (e.g. "sabre" from "Sabre Corporation", "tekion" from "Tekion India Pvt Ltd")
+                    db_first_word = db_name_clean.split()[0] if db_name_clean else ""
+                    ext_first_word = ext_name_clean.split()[0] if ext_name_clean else ""
+
                     # 1. Exact name match
                     if db_name_clean == ext_name_clean:
                         score += 60
                         name_matched = True
-                    # 2. Word-bounded name containment (parsed company name contains/is-contained-by DB name)
+                    # 2. Brand token / prefix match (e.g. "Sabre" in "Sabre PPT & Online..." or "Sabre Corporation")
+                    elif (len(db_first_word) >= 3 and _key_in_text(db_first_word, ext_name_clean)) or \
+                         (len(db_first_word) >= 3 and _key_in_text(db_first_word, subject_clean)) or \
+                         (len(ext_first_word) >= 3 and _key_in_text(ext_first_word, db_name_clean)):
+                        score += 60
+                        name_matched = True
+                    # 3. Word-bounded name containment
                     elif _key_in_text(db_name_clean, ext_name_clean) or _key_in_text(ext_name_clean, db_name_clean):
                         overlap_ratio = len(db_name_clean) / len(ext_name_clean) if len(ext_name_clean) > 0 else 0
                         if overlap_ratio > 1:
                             overlap_ratio = 1 / overlap_ratio
                         score += int(30 * overlap_ratio) + 20
                         name_matched = True
-                    # 3. DB company name appears (word-bounded) in the email subject (catches cases where
-                    #    the parser returned the subject line as the company name, e.g., regex fallback failures)
+                    # 4. DB company name appears in subject
                     elif _key_in_text(db_name_clean, subject_clean):
                         score += 45
                         name_matched = True
 
                     if not name_matched:
                         continue
+
+                    # For update emails, if the brand token matches strongly, boost score and ignore default role mismatch
+                    if not is_announcement and name_matched:
+                        score += 20
                     
                     if c.recruitment_cycle.lower() == recruitment_cycle.lower():
                         score += 20
@@ -2199,9 +2208,26 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                                 f"auto-create gate. Parked as PendingCompanyEvent.")
                             continue
 
-                        # Name is legitimate — auto-create workspace
-                        logger.info(f"Job {job.id}: Auto-creating company workspace for update/shortlist email: '{company_name}'")
-                        is_announcement = True
+                        logger.warning(
+                            f"Job {job.id}: Update email for unknown company '{company_name}' has no matching drive in DB. "
+                            f"Parking as PendingCompanyEvent — never auto-creating workspace from update emails."
+                        )
+                        existing_pending = db.query(PendingCompanyEvent).filter(
+                            PendingCompanyEvent.raw_ingestion_job_id == job.id,
+                            PendingCompanyEvent.company_name == company_name,
+                        ).first()
+                        if not existing_pending:
+                            db.add(PendingCompanyEvent(
+                                raw_ingestion_job_id=job.id,
+                                company_name=company_name,
+                                role_name=role,
+                                event_type=event_type,
+                                status="PENDING_PARENT",
+                                parsed_payload=validated_info,
+                            ))
+                        log_execution_stage(db, job.id, "COMPANY_MATCHED", "SKIPPED",
+                            f"No matching company for update email '{company_name}'. Parked as PendingCompanyEvent.")
+                        continue
                 else:
                     # Update email with no matching company in DB — park as PendingCompanyEvent.
                     existing_pending = db.query(PendingCompanyEvent).filter(
@@ -3139,16 +3165,16 @@ def update_recruitment_states(db: Session, company: Company, event_type: str, ev
             pass
 
         elif event_type == 'OA':
-            # Normalize event_timestamp to naive UTC for comparison
-            ts = event_timestamp.replace(tzinfo=None) if event_timestamp.tzinfo else event_timestamp
-            is_past = ts < datetime.utcnow()
-            if is_past or any(k in email_body.lower() for k in ["completed", "results", "conducted", "held"]):
+            # Always ensure app.status advances to 'OA' for active applications
+            if app.status in ('Applied', 'Shortlisted', 'Registration', None):
+                app.status = 'OA'
+            ts = event_timestamp.replace(tzinfo=None) if (event_timestamp and event_timestamp.tzinfo) else event_timestamp
+            is_past = (ts and ts < datetime.utcnow()) or False
+            if is_past or any(k in email_body.lower() for k in ["test completed", "oa completed", "results released", "results published"]):
                 app.recruitment_state = 'Awaiting OA Result'
             else:
                 if app.recruitment_state in (None, 'Registration', 'Shortlisted', 'Awaiting Shortlist'):
                     app.recruitment_state = 'OA'
-                    if app.status in ('Applied', 'Shortlisted'):
-                        app.status = 'OA'
 
         elif event_type == 'OA_RESULT':
             # OA results announced — move waiting students forward
@@ -3156,15 +3182,15 @@ def update_recruitment_states(db: Session, company: Company, event_type: str, ev
                 app.recruitment_state = 'Awaiting OA Result'
 
         elif event_type == 'INTERVIEW':
-            ts = event_timestamp.replace(tzinfo=None) if event_timestamp.tzinfo else event_timestamp
-            is_past = ts < datetime.utcnow()
-            if is_past or any(k in email_body.lower() for k in ["completed", "results", "conducted", "held", "feedback"]):
+            if app.status in ('Applied', 'Shortlisted', 'OA', 'Registration', None):
+                app.status = 'Interview'
+            ts = event_timestamp.replace(tzinfo=None) if (event_timestamp and event_timestamp.tzinfo) else event_timestamp
+            is_past = (ts and ts < datetime.utcnow()) or False
+            if is_past or any(k in email_body.lower() for k in ["interview completed", "interviews completed", "feedback completed"]):
                 app.recruitment_state = 'Awaiting Interview Result'
             else:
                 if app.recruitment_state in (None, 'Registration', 'Shortlisted', 'OA', 'Awaiting OA Result'):
                     app.recruitment_state = 'Interview'
-                    if app.status in ('Applied', 'Shortlisted', 'OA'):
-                        app.status = 'Interview'
 
         elif event_type == 'INTERVIEW_RESULT':
             # Interview results announced — move waiting students to 'Awaiting Result'

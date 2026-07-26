@@ -69,6 +69,10 @@ GENERIC_COMPANY_NAMES = frozenset({
     # Neo ID / registration-table artefacts that parsers mistake for company names
     "neo id", "neo id reg", "neo id registration", "neo pat", "neopat",
     "reg no", "regd no", "roll no", "roll number", "student id",
+    # Generic drive/event/government headers mistaken for company names
+    "govt", "govt of india", "government", "govt org", "govt job",
+    "ppt & online", "ppt and online", "ppt online", "ppt", "online test",
+    "selection process", "placement process",
 })
 
 def is_generic_company_name(name: str) -> bool:
@@ -142,6 +146,11 @@ def is_generic_company_name(name: str) -> bool:
         r'\bbiotechnology\b',
         r'\baerospace\b',
         r'\bmechatronics\b',
+        r'\bgovt\b',
+        r'\bgovt\s+of\s+india\b',
+        r'\bppt\s*&\s*online\b',
+        r'\bppt\s+and\s+online\b',
+        r'\bppt\s+online\b',
     ]
     for pattern in generic_patterns:
         if re.search(pattern, cleaned):
