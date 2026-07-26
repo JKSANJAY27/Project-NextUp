@@ -182,14 +182,6 @@ interface Announcement {
 
 
 
-async function calculateHash(text: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(text);
-  const hashBuffer = await window.crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
 
 
 function DashboardPageContent() {
@@ -1053,7 +1045,7 @@ function DashboardPageContent() {
       const recruitStage = STAGE_ORDER[app.recruitment_state] ?? 0;
       return stage >= 3 || recruitStage >= 3;
     }).length,
-    [allApps]
+    [allApps, STAGE_ORDER]
   );
   // Interview reached: current status is Interview/Technical/HR/Offer, or recruitment_state shows they got there
   const interviewReachedCount = React.useMemo(() =>
@@ -1062,7 +1054,7 @@ function DashboardPageContent() {
       const recruitStage = STAGE_ORDER[app.recruitment_state] ?? 0;
       return stage >= 4 || recruitStage >= 4;
     }).length,
-    [allApps]
+    [allApps, STAGE_ORDER]
   );
   const offersCount = React.useMemo(() =>
     allApps.filter(app => app.status === "Offer").length,
