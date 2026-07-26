@@ -1908,14 +1908,14 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             ctc = r_item.get("ctc", {}).get("value")
             if ctc:
                 ctc = str(ctc).strip()
-                if len(ctc) > 100:
-                    ctc = ctc[:97] + "..."
+                if len(ctc) > 2000:
+                    ctc = ctc[:1997] + "..."
                     
             stipend = r_item.get("stipend", {}).get("value")
             if stipend:
                 stipend = str(stipend).strip()
-                if len(stipend) > 100:
-                    stipend = stipend[:97] + "..."
+                if len(stipend) > 2000:
+                    stipend = stipend[:1997] + "..."
                     
             eligible_branches = r_item.get("eligible_branches", {}).get("value", [])
             min_cgpa = r_item.get("min_cgpa", {}).get("value")
@@ -2170,13 +2170,38 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                                 break
 
                     if not company:
-                        # Safety check: Do NOT auto-create company workspaces from shortlist/update emails
-                        # if company_name fails generic checks or looks like a person's name / Neo ID token.
-                        if not is_generic_company_name(company_name):
-                            logger.info(f"Job {job.id}: Auto-creating company workspace for update/shortlist email: '{company_name}'")
-                            is_announcement = True
-                        else:
-                            logger.info(f"Job {job.id}: Candidate name '{company_name}' rejected by is_generic_company_name for update email. Parking as PendingCompanyEvent.")
+                        # Final safety gate before auto-creating from a shortlist/update email:
+                        # Re-run is_generic_company_name now that our stash has strengthened it
+                        # with Neo ID pattern detection, person-name heuristics, and neo-id-reg
+                        # keyword guards.  If the name still looks bad at this point, park it
+                        # as PendingCompanyEvent rather than creating a garbage workspace.
+                        if is_generic_company_name(company_name):
+                            logger.warning(
+                                f"Job {job.id}: company name '{company_name}' rejected by "
+                                f"is_generic_company_name at shortlist auto-create gate — "
+                                f"parking as PendingCompanyEvent. Subject: {subject!r}"
+                            )
+                            existing_pending = db.query(PendingCompanyEvent).filter(
+                                PendingCompanyEvent.raw_ingestion_job_id == job.id,
+                                PendingCompanyEvent.company_name == company_name,
+                            ).first()
+                            if not existing_pending:
+                                db.add(PendingCompanyEvent(
+                                    raw_ingestion_job_id=job.id,
+                                    company_name=company_name,
+                                    role_name=role,
+                                    event_type=event_type,
+                                    status="PENDING_PARENT",
+                                    parsed_payload=validated_info,
+                                ))
+                            log_execution_stage(db, job.id, "COMPANY_MATCHED", "SKIPPED",
+                                f"Company name '{company_name}' is generic/invalid at shortlist "
+                                f"auto-create gate. Parked as PendingCompanyEvent.")
+                            continue
+
+                        # Name is legitimate — auto-create workspace
+                        logger.info(f"Job {job.id}: Auto-creating company workspace for update/shortlist email: '{company_name}'")
+                        is_announcement = True
                 else:
                     # Update email with no matching company in DB — park as PendingCompanyEvent.
                     existing_pending = db.query(PendingCompanyEvent).filter(

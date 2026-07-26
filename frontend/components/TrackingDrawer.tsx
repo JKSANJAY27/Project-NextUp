@@ -1,6 +1,7 @@
 import React from "react";
 import { Company, Application, CompanyEvent } from "@/app/tracking/types";
 import { X, Calendar, Edit2, Archive, StickyNote, FileText, MapPin } from "lucide-react";
+import CompensationDisplay from "@/components/CompensationDisplay";
 
 interface TrackingDrawerProps {
   company: Company | null;
@@ -67,7 +68,7 @@ export default function TrackingDrawer({
           <div className="flex items-center gap-4 mt-4 pt-4 border-t border-border/50">
             <div>
               <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-0.5">Package</p>
-              <p className="text-sm font-mono font-bold uppercase">{company.ctc || "TBD"}</p>
+              <CompensationDisplay value={company.ctc} mode="card" />
             </div>
             <div>
               <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-0.5">Stipend</p>

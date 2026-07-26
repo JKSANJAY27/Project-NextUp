@@ -50,8 +50,8 @@ export default function Logo({
 
   const useLightLogo = !isDarkMode || onAccent;
   const srcOptions = useLightLogo
-    ? ["/logo_light.png", "/logo.png", "/logo.svg", "/logo.jpg"]
-    : ["/logo.png", "/logo_light.png", "/logo.svg", "/logo.jpg"];
+    ? ["/logo_light.png", "/logo.png", "/logo.jpg"]
+    : ["/logo.png", "/logo_light.png", "/logo.jpg"];
 
   const hasImageFailed = attemptIndex >= srcOptions.length;
 

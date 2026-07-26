@@ -3,6 +3,7 @@ import { Company, Application, CompanyEvent } from "@/app/tracking/types";
 import { Archive, HelpCircle } from "lucide-react";
 import api from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
+import CompensationDisplay from "@/components/CompensationDisplay";
 
 export const STAGE_COLORS = {
   REGISTRATION: "border-yellow-500 bg-yellow-500/5",
@@ -199,7 +200,7 @@ export default function TrackingCard({
       <div className="border-t border-border pt-3 mt-1 flex justify-between items-center bg-background/50 -mx-4 -mb-4 p-3 px-4">
         <div>
           <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-0.5">Package</p>
-          <p className="text-[10px] font-mono font-bold uppercase">{company.ctc || "TBD"}</p>
+          <CompensationDisplay value={company.ctc} mode="card" />
           <p className="text-[9px] text-muted-foreground uppercase mt-1">
             Stipend: <span className="font-mono font-bold text-foreground">{company.stipend || "TBD"}</span>
           </p>
