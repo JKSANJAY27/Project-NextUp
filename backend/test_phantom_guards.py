@@ -19,7 +19,13 @@ def test_is_generic_company_name_phantom_guards():
     assert is_generic_company_name("F3M5W9J9 B5K6G7Q6") is True
     assert is_generic_company_name("F3M5W9J9") is True
 
-    # 4. Genuine company names
+    # 4. Academic branch names
+    assert is_generic_company_name("MECHANICAL") is True
+    assert is_generic_company_name("Mechanical Engineering") is True
+    assert is_generic_company_name("Civil") is True
+    assert is_generic_company_name("Data Science & Business Statistics") is True
+
+    # 5. Genuine company names
     assert is_generic_company_name("Zomato") is False
     assert is_generic_company_name("ETERNAL (ZOMATO)") is False
     assert is_generic_company_name("Tekion India Pvt Ltd") is False

@@ -128,10 +128,34 @@ def is_generic_company_name(name: str) -> bool:
         r'\bplacements\b',
         r'\binternship\s+registration\b',
         r'\bsuper\s+dream\s+internship\b',
+        r'\bmechanical\b',
+        r'\bcivil\b',
+        r'\belectrical\b',
+        r'\belectronics\b',
+        r'\bbiotechnology\b',
+        r'\baerospace\b',
+        r'\bmechatronics\b',
     ]
     for pattern in generic_patterns:
         if re.search(pattern, cleaned):
             return True
+
+    # Reject engineering branch names and academic domain titles
+    BRANCH_NAMES = {
+        "mechanical", "mechanical engineering", "mech",
+        "civil", "civil engineering",
+        "electrical", "electrical engineering", "eee", "eie",
+        "electronics", "electronics & communication", "electronics and communication", "ece",
+        "computer science", "computer science & engineering", "computer science and engineering", "cse", "it", "information technology",
+        "biotechnology", "biotech", "bio-technology",
+        "chemical", "chemical engineering",
+        "aerospace", "aeronautical", "aerospace engineering",
+        "mechatronics", "robotics", "automotive", "automobile", "automobile engineering",
+        "data science", "business statistics", "data science & business statistics",
+        "software engineering"
+    }
+    if cleaned in BRANCH_NAMES or cleaned_punct in BRANCH_NAMES:
+        return True
 
     # Reject Neo ID tokens (alternating letter-digit 8 chars, e.g. F3M5W9J9 or B5K6G7Q6)
     if re.search(r'\b[a-z]\d[a-z]\d[a-z]\d[a-z]\d\b', cleaned) or re.search(r'[a-z]\d[a-z]\d[a-z]\d[a-z]\d', cleaned):
