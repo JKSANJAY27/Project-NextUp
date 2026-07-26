@@ -1950,9 +1950,9 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             # Check if company exists
             company = db.query(Company).filter(Company.fingerprint == fingerprint).first()
             
-            # Fuzzy match candidates
+            # Fuzzy match candidates (never match against user's private manual drives)
             if not company:
-                candidate_companies = db.query(Company).all()
+                candidate_companies = db.query(Company).filter(Company.is_manual == False).all()
                 best_match = None
                 best_score = -1
                 subject_clean = clean_company_name_key(subject).lower()
@@ -2142,7 +2142,7 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                 if (has_inline_shortlist or is_valid_update_event) and company_name and not is_generic_company_name(company_name):
                     # Do a fuzzy name scan before committing to creating a new workspace
                     ext_key = clean_company_name_key(company_name).lower()
-                    all_cos = db.query(Company).all()
+                    all_cos = db.query(Company).filter(Company.is_manual == False).all()
                     for c in all_cos:
                         db_key = clean_company_name_key(c.name).lower()
                         # Extract parenthetical aliases e.g. "ETERNAL (ZOMATO)" -> aliases "ETERNAL", "ZOMATO"

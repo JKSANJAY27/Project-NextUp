@@ -1,4 +1,5 @@
 import logging
+import hashlib
 from fastapi import APIRouter, Depends, Header, HTTPException, status, File, UploadFile, Form, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -8,8 +9,8 @@ from datetime import datetime
 
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.models import User, StudentProfile, Company, Application, CompanyEvent, Notification, IngestionAuditLog
-from app.schemas.schemas import CompanyCreate, CompanyOut, CompanyWithEligibilityOut
+from app.models.models import User, StudentProfile, Company, Application, CompanyEvent, Notification, IngestionAuditLog, OpportunityState
+from app.schemas.schemas import CompanyCreate, CompanyOut, CompanyWithEligibilityOut, ManualDriveCreate, ManualUpdateCreate
 from collections import defaultdict
 from app.services.eligibility import check_eligibility
 from app.services.email_parser import parse_placement_email
@@ -251,6 +252,187 @@ class CachedCompanyMock:
         self.eligible_branches = company_data.get("eligible_branches")
         self.eligibility_raw_text = company_data.get("eligibility_raw_text")
 
+@router.post("/manual", response_model=CompanyOut)
+def create_manual_company(
+    manual_in: ManualDriveCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Creates a private manual drive announcement for the current user.
+    Auto-tracks the drive for the user and isolates it from email parsing.
+    """
+    comp_name_clean = manual_in.name.strip()
+    role_clean = manual_in.role.strip()
+    category_clean = (manual_in.category or "Regular").strip()
+
+    fingerprint_input = f"{current_user.id}|MANUAL|{comp_name_clean.upper()}|{role_clean.upper()}|{category_clean.upper()}"
+    fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
+
+    existing = db.query(Company).filter(Company.fingerprint == fingerprint).first()
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="A manual drive for this company and role already exists."
+        )
+
+    branches_list = manual_in.eligible_branches or []
+    eligibility_rules = {
+        "min_cgpa": manual_in.min_cgpa,
+        "requires_no_arrears": manual_in.requires_no_arrears,
+        "date_of_visit": "Will be announced later"
+    }
+
+    new_company = Company(
+        name=comp_name_clean,
+        role=role_clean,
+        roles=[{"role": role_clean, "ctc": manual_in.ctc, "stipend": manual_in.stipend, "jd_text": manual_in.jd_text}],
+        category=category_clean,
+        ctc=manual_in.ctc,
+        stipend=manual_in.stipend,
+        job_location=manual_in.job_location,
+        eligible_branches=branches_list,
+        eligibility_rules=eligibility_rules,
+        registration_deadline=manual_in.registration_deadline,
+        registration_link=manual_in.registration_link,
+        jd_text=manual_in.jd_text,
+        recruitment_cycle="Default",
+        fingerprint=fingerprint,
+        is_manual=True,
+        created_by_user_id=current_user.id
+    )
+    db.add(new_company)
+    db.flush()
+
+    # Create initial company event for timeline display
+    initial_event = CompanyEvent(
+        company_id=new_company.id,
+        event_type="REGISTRATION",
+        stage="REGISTRATION",
+        subject=f"Manual Announcement: {comp_name_clean}",
+        body=manual_in.jd_text or f"Manual drive created for {comp_name_clean} ({role_clean})",
+        date=manual_in.registration_deadline or datetime.utcnow(),
+        status="completed",
+        parsed_metadata={"deadline_label": "Registration Deadline"}
+    )
+    db.add(initial_event)
+
+    # Auto-track for this user immediately
+    app = db.query(Application).filter(
+        Application.user_id == current_user.id,
+        Application.company_id == new_company.id
+    ).first()
+    if not app:
+        app = Application(
+            user_id=current_user.id,
+            company_id=new_company.id,
+            status="Applied",
+            recruitment_state="Registration",
+            current_round="Registration",
+            user_decision="tracking"
+        )
+        db.add(app)
+
+    opp_state = db.query(OpportunityState).filter(
+        OpportunityState.user_id == current_user.id,
+        OpportunityState.company_id == new_company.id
+    ).first()
+    if not opp_state:
+        opp_state = OpportunityState(
+            user_id=current_user.id,
+            company_id=new_company.id,
+            state="tracking"
+        )
+        db.add(opp_state)
+    else:
+        opp_state.state = "tracking"
+        db.add(opp_state)
+
+    db.commit()
+    db.refresh(new_company)
+    bump_companies_list_version()
+    bump_user_version(current_user.id)
+    return new_company
+
+
+@router.post("/{id}/manual-update")
+def add_manual_company_update(
+    id: UUID,
+    update_in: ManualUpdateCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Log a user-authored progress update on a manual drive (e.g. OA, Interview, Offer).
+    Creates a new CompanyEvent and updates the user's Application state.
+    """
+    company = db.query(Company).filter(Company.id == id).first()
+    if not company or not company.is_manual or company.created_by_user_id != current_user.id:
+        raise HTTPException(
+            status_code=404,
+            detail="Manual company drive not found or unauthorized."
+        )
+
+    stage_map = {
+        "ONLINE_ASSESSMENT": ("OA", "ONLINE_ASSESSMENT", "OA", "OA"),
+        "TECHNICAL_INTERVIEW": ("INTERVIEW", "TECHNICAL_INTERVIEW", "Technical Interview", "Interview"),
+        "HR_INTERVIEW": ("INTERVIEW", "HR_INTERVIEW", "HR Interview", "Interview"),
+        "OFFER": ("OFFER", "OFFER", "Offer", "Offer Received"),
+        "REJECTION": ("REJECTION", "REJECTION", "Rejected", "Rejected"),
+        "GENERAL_UPDATE": ("GENERAL_UPDATE", None, "General Update", None)
+    }
+
+    event_type, stage, state_label, app_status = stage_map.get(
+        update_in.stage.upper(),
+        ("GENERAL_UPDATE", None, update_in.stage, None)
+    )
+
+    evt_status = "completed"
+    if update_in.result == "FAIL":
+        evt_status = "failed"
+    elif update_in.result == "PENDING":
+        evt_status = "pending"
+
+    evt = CompanyEvent(
+        company_id=company.id,
+        event_type=event_type,
+        stage=stage,
+        subject=f"Manual Update: {state_label}",
+        body=update_in.notes or f"Manual update logged for {state_label}",
+        date=update_in.date or datetime.utcnow(),
+        status=evt_status,
+        parsed_metadata={
+            "deadline_label": state_label,
+            "result": update_in.result,
+            "notes": update_in.notes
+        }
+    )
+    db.add(evt)
+
+    # Update application status & state for current user
+    app = db.query(Application).filter(
+        Application.user_id == current_user.id,
+        Application.company_id == company.id
+    ).first()
+    if app:
+        if app_status:
+            app.status = app_status
+        if state_label and state_label != "General Update":
+            app.recruitment_state = state_label
+            app.current_round = state_label
+        app.last_user_activity_at = datetime.utcnow()
+        db.add(app)
+
+    db.commit()
+    bump_company_version(company.id)
+    bump_user_version(current_user.id)
+    return {
+        "message": "Manual update logged successfully",
+        "event_id": str(evt.id),
+        "status": app_status or (app.status if app else "Updated")
+    }
+
+
 @router.get("", response_model=List[CompanyWithEligibilityOut])
 def list_companies(
     skip: int = 0,
@@ -264,26 +446,16 @@ def list_companies(
     cached_list = get_cache(cache_key)
 
     if cached_list is None:
-        # Eager-load events in ONE batched query, with the heavy columns
-        # (full email bodies) deferred. Serialization touches latest_event /
-        # effective_deadline / deadline_label — each reads company.events, so
-        # lazy loading fired one query PER COMPANY pulling every email body.
-        # On a Redis cache miss that took long enough to saturate the single
-        # free-tier worker's thread/DB pool, and every other endpoint then
-        # timed out behind it (the intermittent ERR_CONNECTION_TIMED_OUT
-        # storms across the app).
         from sqlalchemy.orm import selectinload, defer
-        companies = db.query(Company).options(
+        # Filter OUT manual drives from global cache so global cache is strictly public CDC drives
+        companies = db.query(Company).filter(Company.is_manual == False).options(
             selectinload(Company.events).options(
                 defer(CompanyEvent.body),
                 defer(CompanyEvent.source_email),
             )
         ).all()
+
         def get_sort_key(c):
-            # Sort by when the drive's FIRST email actually arrived (earliest
-            # event timestamp), so the most recently announced company always
-            # appears at the top. created_at is only a fallback: it records
-            # parse time, which diverges from arrival order after re-ingestion.
             candidates = [e.timestamp for e in (c.events or []) if e.timestamp]
             dt = min(candidates) if candidates else c.created_at
             if dt is None:
@@ -298,30 +470,38 @@ def list_companies(
             reverse=True
         )
         
-        # Apply pagination after sorting
         paginated_companies = companies[skip : skip + limit]
-        
-        # Cache raw company data without eligibility check
         cached_list = [CompanyOut.from_orm(company).dict() for company in paginated_companies]
         set_cache(cache_key, cached_list, expire_seconds=600) # 10 min TTL
 
+    # Fetch user's own manual companies (never cached in global list)
+    from sqlalchemy.orm import selectinload, defer
+    user_manual_companies = db.query(Company).filter(
+        Company.is_manual == True,
+        Company.created_by_user_id == current_user.id
+    ).options(
+        selectinload(Company.events).options(
+            defer(CompanyEvent.body),
+            defer(CompanyEvent.source_email),
+        )
+    ).all()
+    user_manual_list = [CompanyOut.from_orm(c).dict() for c in user_manual_companies]
+
+    combined_list = user_manual_list + cached_list
+
     results = []
-    for company_data in cached_list:
+    for company_data in combined_list:
         mock_company = CachedCompanyMock(company_data)
         if current_user.profile:
             status, reason, explanation = check_eligibility(current_user.profile, mock_company)
         else:
             status, reason, explanation = "CHECK", "Student profile not set up.", None
         
-        # Merge eligibility fields
         comp_res = dict(company_data)
         comp_res["eligibility_status"] = status
         comp_res["eligibility_reason"] = reason
         comp_res["eligibility_explanation"] = explanation
         
-        # deadline_label is computed by the Company model (stage of the next
-        # upcoming milestone). Fall back to the latest event's stored label
-        # only when the model produced none.
         if not comp_res.get("deadline_label"):
             latest_evt = comp_res.get("latest_event")
             if latest_evt and latest_evt.get("parsed_metadata"):
@@ -359,6 +539,15 @@ def get_company(
         cached_company = CompanyOut.from_orm(company).dict()
         set_cache(cache_key, cached_company, expire_seconds=600) # 10 min TTL
 
+    # Guard: if company is manual, only the creator can view it
+    if cached_company.get("is_manual"):
+        created_by = cached_company.get("created_by_user_id")
+        if str(created_by) != str(current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Company not found."
+            )
+
     mock_company = CachedCompanyMock(cached_company)
     if current_user.profile:
         status_elig, reason_elig, explanation_elig = check_eligibility(current_user.profile, mock_company)
@@ -378,6 +567,7 @@ def get_company(
         company_res["deadline_label"] = "Registration Deadline"
         
     return company_res
+
 
 
 @router.get("/{id}/events")

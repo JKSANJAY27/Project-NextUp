@@ -84,6 +84,9 @@ class CompanyOut(CompanyCreate):
     # Multi-role drives: [{"role", "ctc", "stipend", "jd_text", ...}] — the
     # resume tailor lets the student pick which role's JD to target.
     roles: Optional[List[dict]] = None
+    # Manual drive flag — True if created by the user, not by email parsing.
+    is_manual: bool = False
+    created_by_user_id: Optional[UUID] = None
 
     @field_validator("roles", mode="before")
     @classmethod
@@ -100,6 +103,32 @@ class CompanyOut(CompanyCreate):
 
     class Config:
         from_attributes = True
+
+
+# Manual drive creation — called by the frontend "Manual Drive Announcement" form.
+class ManualDriveCreate(BaseModel):
+    name: str
+    category: str = "Regular"
+    role: str
+    ctc: Optional[str] = None
+    stipend: Optional[str] = None
+    job_location: Optional[str] = None
+    eligible_branches: Optional[List[str]] = None
+    min_cgpa: Optional[float] = None
+    requires_no_arrears: bool = False
+    registration_deadline: Optional[datetime] = None
+    registration_link: Optional[str] = None
+    jd_text: Optional[str] = None
+
+
+# User-logged update on a manual drive (adds a CompanyEvent + updates Application state).
+class ManualUpdateCreate(BaseModel):
+    stage: str   # ONLINE_ASSESSMENT | TECHNICAL_INTERVIEW | HR_INTERVIEW | OFFER | REJECTION | GENERAL_UPDATE
+    date: Optional[datetime] = None
+    notes: Optional[str] = None
+    result: Optional[str] = None  # "PASS" | "FAIL" | None (still pending)
+
+
 
 class EligibilityExplanation(BaseModel):
     # None = UNKNOWN verdict (restricted/criteria-less drives). A strict bool

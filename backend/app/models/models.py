@@ -97,6 +97,13 @@ class Company(Base):
     # The `role` column stays as the display string (joined role names);
     # per-role data lives here and is what resume tailoring targets.
     roles = Column(JSON, default=list)
+    # Manual drive: created by a user directly (not by email parsing).
+    # is_manual=True drives are:
+    #   1. Only visible to the user who created them (created_by_user_id).
+    #   2. Completely invisible to the email parser / fuzzy-match loop.
+    #   3. Never matched against incoming placement emails.
+    is_manual = Column(Boolean, default=False, nullable=False)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     applications = relationship("Application", back_populates="company", cascade="all, delete-orphan")
     events = relationship("CompanyEvent", back_populates="company", cascade="all, delete-orphan")
