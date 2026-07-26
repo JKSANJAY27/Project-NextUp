@@ -227,11 +227,19 @@ def is_generic_company_name(name: str) -> bool:
         "aerospace", "defence", "securities", "asset", "management", "limited",
         "pvt", "ltd", "inc", "llp", "ai", "ml", "iot", "robotics",
     })
+    _KNOWN_TWO_WORD_COMPANIES = frozenset({
+        "jpmorgan chase", "morgan stanley", "fischer jordan", "goldman sachs",
+        "ernst young", "bain company", "robert bosch", "alvarez marsal",
+        "oliver wyman", "schneider electric", "standard chartered", "baker hughes",
+        "societe generale", "deutsche bank", "barclays bank", "credit suisse",
+        "wells fargo", "bny mellon", "walmart global", "target corporation", "shell india"
+    })
     _words = cleaned.split()
     if (
         2 <= len(_words) <= 3
         and all(re.match(r'^[a-z]{3,15}$', w) for w in _words)
         and not any(w in _CORP_KEYWORDS for w in _words)
+        and cleaned not in _KNOWN_TWO_WORD_COMPANIES
     ):
         return True
     # ── END NEW GUARDS ───────────────────────────────────────────────────────
