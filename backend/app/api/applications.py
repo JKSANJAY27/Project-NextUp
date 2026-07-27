@@ -173,6 +173,8 @@ def list_applications(
             "decision_pending_since": opp.decision_pending_since.isoformat() if opp.decision_pending_since else None,
             "snoozed_until": opp.snoozed_until.isoformat() if opp.snoozed_until else None,
             "previous_state": opp.previous_state,
+            "bootstrap_inferred_stage": opp.bootstrap_inferred_stage,
+            "state_source": opp.state_source or "MANUAL",
             "updated_at": opp.updated_at.isoformat() if opp.updated_at else None,
             "company": company_out,
         })
@@ -269,26 +271,27 @@ def delete_application(
 @router.post("/opportunity-state")
 def upsert_opportunity_state(
     company_id: UUID,
-    action: str,  # "track" | "archive" | "snooze" | "restore"
+    action: str,  # "track" | "accept_suggestion" | "decline_suggestion" | "archive" | "snooze" | "restore"
     reason: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Lightweight endpoint for decision_pending / unseen → state transitions
+    Lightweight endpoint for decision_pending / suggested_tracking / unseen → state transitions
     that don't require a full Application workspace yet.
     
     action:
-      - "track"   → Create Application + set state to 'tracking'
-      - "archive" → Set state to 'archived' (keeps Application if exists)
-      - "snooze"  → Remind me later (7-day snooze on decision_pending)
-      - "restore" → Restore from archived to previous_state
+      - "track" / "accept_suggestion" → Create Application + set state to 'tracking'
+      - "decline_suggestion"          → Archive suggestion (previous_state=decision_pending)
+      - "archive"                     → Set state to 'archived' (keeps Application if exists)
+      - "snooze"                      → Remind me later (7-day snooze on decision_pending)
+      - "restore"                     → Restore from archived to previous_state
     """
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found.")
 
-    if action == "track":
+    if action in ("track", "accept_suggestion"):
         # Create Application workspace if not exists
         existing_app = db.query(Application).filter(
             Application.user_id == current_user.id,
@@ -308,12 +311,42 @@ def upsert_opportunity_state(
         else:
             existing_app.user_decision = 'tracking'
 
-        set_tracking(db=db, user_id=current_user.id, company_id=company_id)
+        opp_state = set_tracking(db=db, user_id=current_user.id, company_id=company_id)
+        if opp_state:
+            opp_state.bootstrap_inferred_stage = None
+            opp_state.state_source = "MANUAL"
         db.commit()
         from app.services.calendar_sync import sync_user_calendar_events
         sync_user_calendar_events(db, current_user.id, company_id)
         bump_user_version(current_user.id)
         return {"status": "tracking", "company_id": str(company_id)}
+
+    elif action == "decline_suggestion":
+        # Decline a bootstrap suggestion: move to archived, but explicitly set previous_state
+        # to 'decision_pending' so if restored later, it doesn't return to suggested_tracking.
+        opp_state = db.query(OpportunityState).filter(
+            OpportunityState.user_id == current_user.id,
+            OpportunityState.company_id == company_id
+        ).first()
+        if not opp_state:
+            opp_state = OpportunityState(
+                id=uuid.uuid4(),
+                user_id=current_user.id,
+                company_id=company_id,
+            )
+            db.add(opp_state)
+        
+        opp_state.previous_state = "decision_pending"
+        opp_state.state = "archived"
+        opp_state.archive_reason = "BOOTSTRAP_DECLINED"
+        opp_state.archived_at = datetime.utcnow()
+        opp_state.bootstrap_inferred_stage = None
+        opp_state.state_source = "MANUAL"
+        db.commit()
+        from app.services.calendar_sync import sync_user_calendar_events
+        sync_user_calendar_events(db, current_user.id, company_id)
+        bump_user_version(current_user.id)
+        return {"status": "archived", "company_id": str(company_id), "archive_reason": "BOOTSTRAP_DECLINED"}
 
     elif action == "archive":
         # Set archived state on OpportunityState (and Application if exists)
@@ -325,7 +358,9 @@ def upsert_opportunity_state(
             existing_app.user_decision = 'archived'
 
         archive_reason = reason or "MANUAL_NOT_INTERESTED"
-        set_archived(db=db, user_id=current_user.id, company_id=company_id, reason=archive_reason)
+        opp_state = set_archived(db=db, user_id=current_user.id, company_id=company_id, reason=archive_reason)
+        if opp_state:
+            opp_state.state_source = "MANUAL"
         db.commit()
         from app.services.calendar_sync import sync_user_calendar_events
         sync_user_calendar_events(db, current_user.id, company_id)
@@ -333,7 +368,9 @@ def upsert_opportunity_state(
         return {"status": "archived", "company_id": str(company_id), "archive_reason": archive_reason}
 
     elif action == "snooze":
-        set_snooze(db=db, user_id=current_user.id, company_id=company_id)
+        opp_state = set_snooze(db=db, user_id=current_user.id, company_id=company_id)
+        if opp_state:
+            opp_state.state_source = "MANUAL"
         db.commit()
         from app.services.calendar_sync import sync_user_calendar_events
         sync_user_calendar_events(db, current_user.id, company_id)
@@ -344,6 +381,7 @@ def upsert_opportunity_state(
         opp_state = restore_state(db=db, user_id=current_user.id, company_id=company_id)
         if not opp_state:
             raise HTTPException(status_code=404, detail="No opportunity state found to restore.")
+        opp_state.state_source = "MANUAL"
         # If restoring to 'tracking', ensure Application workspace exists
         if opp_state.state == "tracking":
             existing_app = db.query(Application).filter(
@@ -370,4 +408,4 @@ def upsert_opportunity_state(
         return {"status": opp_state.state, "company_id": str(company_id)}
 
     else:
-        raise HTTPException(status_code=400, detail=f"Unknown action '{action}'. Must be track, archive, snooze, or restore.")
+        raise HTTPException(status_code=400, detail=f"Unknown action '{action}'. Must be track, accept_suggestion, decline_suggestion, archive, snooze, or restore.")

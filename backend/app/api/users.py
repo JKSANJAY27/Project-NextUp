@@ -94,14 +94,44 @@ def update_user_me(
     else:
         # Exclude unset fields, but pop special blind index neo_id
         update_data = user_in.dict(exclude_unset=True)
+        old_hash = profile.neo_id_hash
+        new_hash = None
         if "neo_id" in update_data:
             neo_id = update_data.pop("neo_id")
             if neo_id:
-                profile.neo_id_hash = generate_blind_index(neo_id, settings.PEPPER)
+                new_hash = generate_blind_index(neo_id, settings.PEPPER)
+                profile.neo_id_hash = new_hash
                 
         for field, value in update_data.items():
             if hasattr(profile, field):
                 setattr(profile, field, value)
+
+    # Bootstrap & Notification Baseline trigger
+    curr_hash = profile.neo_id_hash or ""
+    is_valid_hash = curr_hash and not curr_hash.startswith("RESET-") and curr_hash != "UNSET"
+
+    if is_valid_hash:
+        # 1. Establish notification baseline on first valid NEO ID save
+        if profile.notification_baseline_at is None:
+            profile.notification_baseline_at = datetime.utcnow()
+
+        # 2. Handle NEO ID change vs first-time queue
+        from app.services.bootstrap import create_bootstrap_job
+        from app.models.models import BootstrapJob
+
+        if old_hash and new_hash and old_hash != new_hash and not old_hash.startswith("RESET-") and old_hash != "UNSET":
+            # Cancel stale job if running/pending
+            stale_job = db.query(BootstrapJob).filter(
+                BootstrapJob.user_id == current_user.id,
+                BootstrapJob.status.in_(["pending", "running"])
+            ).first()
+            if stale_job:
+                stale_job.status = "cancelled"
+                stale_job.cancelled_at = datetime.utcnow()
+                stale_job.error_message = "NEO ID changed by user profile update"
+            create_bootstrap_job(db, current_user.id, new_hash, trigger="neo_id_changed")
+        else:
+            create_bootstrap_job(db, current_user.id, curr_hash, trigger="onboarding")
             
     db.commit()
     bump_user_version(current_user.id)

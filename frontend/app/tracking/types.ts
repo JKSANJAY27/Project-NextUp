@@ -66,3 +66,18 @@ export interface CompanyEvent {
   user_notification_msg: string | null;
   attachments?: Array<{ id: string; file_type: string; file_name: string }>;
 }
+
+export interface OpportunityState {
+  record_type: "opportunity_state";
+  company_id: string;
+  state: "unseen" | "tracking" | "suggested_tracking" | "decision_pending" | "archived" | "auto_archived";
+  archive_reason: string | null;
+  archived_at: string | null;
+  decision_pending_since: string | null;
+  snoozed_until: string | null;
+  previous_state: string | null;
+  bootstrap_inferred_stage: string | null;
+  state_source: "MANUAL" | "BOOTSTRAP" | "LIFECYCLE" | "SYSTEM" | null;
+  updated_at: string | null;
+  company: Company | null;
+}

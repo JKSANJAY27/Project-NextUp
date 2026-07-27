@@ -12,6 +12,7 @@ import { SkeletonDashboard } from "@/components/SkeletonLoader";
 import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
 import CompensationDisplay from "@/components/CompensationDisplay";
 import ConfirmArchiveModal from "@/components/ConfirmArchiveModal";
+import SuggestedTrackingCard from "@/components/SuggestedTrackingCard";
 import { 
   Plus, 
   Lock, 
@@ -26,7 +27,8 @@ import {
   Award,
   AlertTriangle,
   Megaphone,
-  Archive
+  Archive,
+  Sparkles
 } from "lucide-react";
 
 interface ImportantLink {
@@ -618,13 +620,13 @@ function DashboardPageContent() {
     }
   };
 
-  const handleOpportunityAction = async (companyId: string, action: "track" | "archive" | "snooze" | "restore", reason?: string) => {
+  const handleOpportunityAction = async (companyId: string, action: "track" | "accept_suggestion" | "decline_suggestion" | "archive" | "snooze" | "restore", reason?: string) => {
     const prevOppStates = { ...opportunityStates };
     const prevApps = { ...applications };
 
     try {
       // Optimistic UI updates
-      if (action === "track") {
+      if (action === "track" || action === "accept_suggestion") {
         setOpportunityStates(prev => {
           const next = { ...prev };
           const existing = next[companyId] || {
@@ -666,7 +668,7 @@ function DashboardPageContent() {
           };
           return next;
         });
-      } else if (action === "archive") {
+      } else if (action === "archive" || action === "decline_suggestion") {
         setOpportunityStates(prev => {
           const next = { ...prev };
           const existing = next[companyId] || {
@@ -684,9 +686,10 @@ function DashboardPageContent() {
           next[companyId] = {
             ...existing,
             state: "archived",
-            archive_reason: reason || "MANUAL_NOT_INTERESTED",
+            archive_reason: action === "decline_suggestion" ? "BOOTSTRAP_DECLINED" : (reason || "MANUAL_NOT_INTERESTED"),
             archived_at: new Date().toISOString(),
-            previous_state: existing.state
+            // decline_suggestion restores to decision_pending (not suggested_tracking)
+            previous_state: action === "decline_suggestion" ? "decision_pending" : existing.state
           };
           return next;
         });
@@ -941,6 +944,8 @@ function DashboardPageContent() {
       if (app && app.user_decision === "tracking") return false;
       // Hide decision_pending — deadline passed, card belongs in Action Center
       if (effectiveState === "decision_pending") return false;
+      // Hide suggested_tracking — belongs in Action Center's SUGGESTED TRACKING section
+      if (effectiveState === "suggested_tracking") return false;
       // Hide any company whose deadline has already passed, even before the scheduler runs
       if (c.registration_deadline && new Date(c.registration_deadline) < new Date()) return false;
     }
@@ -961,6 +966,12 @@ function DashboardPageContent() {
   const decisionPendingCompanies = React.useMemo(() => companies.filter(c => {
     const oppState = opportunityStates[c.id];
     return oppState?.state === "decision_pending";
+  }), [companies, opportunityStates]);
+
+  // Companies suggested by bootstrap based on historical email evidence
+  const suggestedTrackingCompanies = React.useMemo(() => companies.filter(c => {
+    const oppState = opportunityStates[c.id];
+    return oppState?.state === "suggested_tracking";
   }), [companies, opportunityStates]);
 
   // Active decision-pending (not snoozed) — shown in Action Center
@@ -1276,6 +1287,44 @@ function DashboardPageContent() {
                 )}
               </div>
             </div>
+
+            {/* ─── SUGGESTED TRACKING — Historical Evidence Found ─── */}
+            {suggestedTrackingCompanies.length > 0 && (
+              <div className="border-2 border-purple-500/70 bg-purple-950/10 p-6 space-y-6">
+                <div className="flex items-center gap-3 border-b border-purple-500/40 pb-4">
+                  <div className="h-8 w-8 bg-purple-500 text-white flex items-center justify-center shrink-0 animate-pulse">
+                    <Sparkles size={16} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-black tracking-widest uppercase text-purple-300">
+                      SUGGESTED TRACKING
+                      <span className="ml-2 bg-purple-500 text-white text-[10px] font-black px-1.5 py-0.5">
+                        {suggestedTrackingCompanies.length}
+                      </span>
+                    </h4>
+                    <p className="text-[10px] text-purple-400 uppercase tracking-wide mt-0.5">
+                      Historical email evidence found. Confirm if you participated in these drives.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {suggestedTrackingCompanies.map((comp) => {
+                    const opp = opportunityStates[comp.id];
+                    return (
+                      <SuggestedTrackingCard
+                        key={comp.id}
+                        company={comp}
+                        inferredStage={opp?.bootstrap_inferred_stage || null}
+                        onAccept={() => handleOpportunityAction(comp.id, "accept_suggestion")}
+                        onDecline={() => handleOpportunityAction(comp.id, "decline_suggestion")}
+                        onLater={() => handleOpportunityAction(comp.id, "snooze")}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* ─── DECISION REQUIRED — Priority Section ─── */}
             {activeDecisionPendingCompanies.length > 0 && (

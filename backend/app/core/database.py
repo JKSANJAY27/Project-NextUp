@@ -53,6 +53,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+# Exposed for dialect-specific code paths (e.g. FOR UPDATE skipped on SQLite)
+DATABASE_URL_IS_SQLITE: bool = settings.DATABASE_URL.startswith("sqlite")
+
 def get_db():
     db = SessionLocal()
     try:

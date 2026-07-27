@@ -83,6 +83,19 @@ class Settings(BaseSettings):
     RESUME_JOBS_DAILY_LIMIT_PER_USER: int = 10
     RESUME_JOBS_MAX_BACKLOG: int = 300     # reject new jobs beyond this queue depth
 
+    # --- Historical Bootstrap worker ---
+    # Number of pending user BootstrapJobs to process per 1-minute scheduler tick.
+    # At 5 users/tick with BOOTSTRAP_CHUNK_SIZE=25 companies each, 400 students
+    # onboarding during orientation week complete in ~80 minutes.
+    BOOTSTRAP_MAX_USERS_PER_TICK: int = 5
+    # Number of companies processed per user per tick. Keeps individual ticks short
+    # and makes the worker resumable across restarts.
+    BOOTSTRAP_CHUNK_SIZE: int = 25
+    # Current parser/schema versions — used ONLY by backfill_snapshots.py to detect
+    # stale snapshots that need rebuilding. Runtime bootstrap code ignores these.
+    BOOTSTRAP_CURRENT_PARSER_VERSION: str = "v1.0"
+    BOOTSTRAP_CURRENT_SCHEMA_VERSION: int = 1
+
     class Config:
         case_sensitive = True
         env_file = ".env"

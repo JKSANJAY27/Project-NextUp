@@ -50,6 +50,10 @@ class StudentProfile(Base):
     ug_cgpa = Column(Numeric(4, 2), nullable=True)
     skills = Column(ARRAY(String), default=list)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Bootstrap: timestamp after which historical notifications are suppressed for
+    # this user. Set to utcnow() when the first valid NEO ID is saved. NULL for
+    # existing users (no baseline — all historical notifications still permitted).
+    notification_baseline_at = Column(DateTime, default=None, nullable=True)
 
     user = relationship("User", back_populates="profile")
 
@@ -330,10 +334,10 @@ class OpportunityState(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
-    # States: unseen, tracking, decision_pending, archived, auto_archived
+    # States: unseen, tracking, suggested_tracking, decision_pending, archived, auto_archived
     state = Column(String, default="unseen", index=True)
     # Archive metadata
-    archive_reason = Column(String, default=None, nullable=True)  # MANUAL, DEADLINE_EXPIRED, AUTO_ARCHIVED, NOT_ELIGIBLE
+    archive_reason = Column(String, default=None, nullable=True)  # MANUAL, DEADLINE_EXPIRED, AUTO_ARCHIVED, NOT_ELIGIBLE, BOOTSTRAP_REJECTED, BOOTSTRAP_DECLINED
     archived_at = Column(DateTime, default=None, nullable=True)
     # Decision pending metadata
     decision_pending_since = Column(DateTime, default=None, nullable=True)  # Set once when first moved to decision_pending
@@ -342,6 +346,13 @@ class OpportunityState(Base):
     # Restore target: what state to restore to when user clicks Restore
     previous_state = Column(String, default=None, nullable=True)  # unseen, tracking, decision_pending
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Bootstrap: highest stage where NEO ID was found in historical shortlists.
+    # Set by the bootstrap worker; cleared when the user accepts or declines the suggestion.
+    # Values: 'OA' | 'Interview' | 'Offer' | None
+    bootstrap_inferred_stage = Column(String(20), default=None, nullable=True)
+    # Audit: who last transitioned this state.
+    # MANUAL = user action, BOOTSTRAP = bootstrap worker, LIFECYCLE = cron job, SYSTEM = Gmail pipeline
+    state_source = Column(String(20), default='MANUAL', nullable=True)
 
     user = relationship("User", back_populates="opportunity_states")
     company = relationship("Company", back_populates="opportunity_states")
@@ -551,3 +562,130 @@ class UserGoogleCredentials(Base):
     user = relationship("User")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Bootstrap Feature Models
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CompanyHistoricalSnapshot(Base):
+    """
+    Derived cache of shortlist NEO ID hashes per pipeline stage, per company.
+
+    Maintained by `update_company_historical_snapshot()` inside
+    `apply_shortlist_matches()` — updated atomically within the same Gmail
+    ingestion transaction that writes Application / Notification records.
+
+    Source of truth: CompanyEvent + AttachmentMetadata (stored Excel files).
+    This table is a cache and can be rebuilt from source via backfill_snapshots.py.
+
+    Scalability note: each JSONB array holds <500 hashes (64-byte hex strings)
+    per stage — well within JSONB performance bounds for V1. A normalized
+    CompanySnapshotEntry table is the long-term model if volume grows.
+    """
+    __tablename__ = "company_historical_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    # Blind-index hashes (generate_blind_index output) of NEO IDs from shortlists.
+    # Set-union accumulated — adding an already-present hash is a no-op.
+    oa_hashes        = Column(JSONB, nullable=False, default=list)  # OA / SHORTLIST lists
+    interview_hashes = Column(JSONB, nullable=False, default=list)  # INTERVIEW / OA_RESULT lists
+    offer_hashes     = Column(JSONB, nullable=False, default=list)  # OFFER lists
+    rejected_hashes  = Column(JSONB, nullable=False, default=list)  # REJECTION lists
+    # Informational — highest stage any shortlist for this company has reached.
+    latest_stage = Column(String(20), nullable=True)
+    # Administrative metadata: used ONLY by backfill_snapshots.py to determine
+    # whether a snapshot was built with an older parser version and needs rebuilding.
+    # Runtime bootstrap code must NOT branch on these fields.
+    snapshot_schema_version = Column(Integer, nullable=False, default=1)
+    parser_version          = Column(String(20), nullable=False, default="v1.0")
+    last_updated = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    company = relationship("Company")
+
+
+class BootstrapJob(Base):
+    """
+    One record per user per bootstrap run.
+    Processed by bootstrap_jobs_cron (APScheduler, 1-minute interval).
+    """
+    __tablename__ = "bootstrap_jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # pending | running | completed | completed_with_errors | cancelled | failed
+    status = Column(String(30), nullable=False, default="pending", index=True)
+    # onboarding | neo_id_changed | manual
+    trigger = Column(String(20), nullable=False, default="onboarding")
+    # Snapshot of neo_id_hash when bootstrap started.
+    # Checked on every tick — if hash changed, job is cancelled and a new one queued.
+    neo_id_hash_at_start = Column(String(64), nullable=True)
+    # Counters (updated at end of run)
+    total_companies = Column(Integer, nullable=False, default=0)
+    processed_count = Column(Integer, nullable=False, default=0)
+    archived_count  = Column(Integer, nullable=False, default=0)
+    suggested_count = Column(Integer, nullable=False, default=0)
+    failed_count    = Column(Integer, nullable=False, default=0)
+    # Timestamps
+    started_at   = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    error_message = Column(String, nullable=True)
+    created_at   = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    user     = relationship("User")
+    progress = relationship("BootstrapJobProgress", back_populates="job",
+                            cascade="all, delete-orphan")
+
+
+class BootstrapJobProgress(Base):
+    """
+    Per-company progress record for a BootstrapJob.
+    Enables resumability: on crash, the worker restarts and skips companies
+    already in status='done' or status='skipped'.
+    Admin retry re-processes only companies in status='failed'.
+    """
+    __tablename__ = "bootstrap_job_progress"
+    __table_args__ = (
+        UniqueConstraint("bootstrap_job_id", "company_id", name="uq_bootstrap_progress"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    bootstrap_job_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("bootstrap_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    company_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # pending | done | skipped | failed
+    status = Column(String(20), nullable=False, default="pending")
+    # Outcome codes:
+    #   suggested_tracking           — NEO ID found in a stage shortlist
+    #   archived_not_eligible        — failed eligibility check
+    #   archived_rejected            — NEO ID found in a rejection list
+    #   decision_pending_no_evidence — no matching snapshot data found
+    #   skipped_existing             — OpportunityState already existed
+    #   skipped_manual_drive         — company.is_manual = True
+    #   failed                       — unhandled exception during processing
+    outcome = Column(String(40), nullable=True)
+    # OA | Interview | Offer — only set when outcome = 'suggested_tracking'
+    inferred_stage = Column(String(20), nullable=True)
+    processed_at   = Column(DateTime, nullable=True)
+
+    job     = relationship("BootstrapJob", back_populates="progress")
+    company = relationship("Company")

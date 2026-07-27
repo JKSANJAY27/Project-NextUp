@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError as SAOperationalError
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.api import auth, users, companies, applications, gmail, notifications, resumes, ai, calendar, announcements, dashboard
+from app.api import auth, users, companies, applications, gmail, notifications, resumes, ai, calendar, announcements, dashboard, bootstrap
 from app.services.gmail_sync import start_scheduler, shutdown_scheduler
 
 # NOTE: Do NOT call Base.metadata.create_all() at module level.
@@ -88,6 +88,7 @@ for api_prefix in [settings.API_V1_STR, "/api/v1"]:
     app.include_router(calendar.router, prefix=api_prefix)
     app.include_router(announcements.router, prefix=api_prefix)
     app.include_router(dashboard.router, prefix=api_prefix)
+    app.include_router(bootstrap.router, prefix=api_prefix)
 
 @app.on_event("startup")
 def on_startup():

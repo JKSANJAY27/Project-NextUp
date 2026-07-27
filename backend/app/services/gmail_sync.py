@@ -225,8 +225,16 @@ def start_scheduler():
             coalesce=True, misfire_grace_time=600, max_instances=1,
         )
         scheduler.add_job(opportunity_lifecycle_cron, "interval", hours=6, id="opportunity_lifecycle_job", replace_existing=True, coalesce=True, misfire_grace_time=3600)
+        # Bootstrap: processes pending BootstrapJobs for newly-onboarded users.
+        # Runs every minute; processes up to BOOTSTRAP_MAX_USERS_PER_TICK users
+        # per tick, each chunked by BOOTSTRAP_CHUNK_SIZE companies.
+        scheduler.add_job(
+            _bootstrap_jobs_cron_wrapper, "interval", minutes=1,
+            id="bootstrap_jobs_cron", replace_existing=True,
+            coalesce=True, misfire_grace_time=120, max_instances=1,
+        )
         scheduler.start()
-        logger.info("Background queue processor, view refresher, and opportunity lifecycle scheduler started.")
+        logger.info("Background queue processor, view refresher, opportunity lifecycle, and bootstrap scheduler started.")
         # Run opportunity lifecycle check once on startup immediately
         try:
             logger.info("Running initial opportunity lifecycle update on startup...")
@@ -249,6 +257,19 @@ def opportunity_lifecycle_cron():
         logger.error(f"Opportunity lifecycle cron failed: {e}", exc_info=True)
     finally:
         db.close()
+
+def _bootstrap_jobs_cron_wrapper():
+    """Scheduled job: process pending BootstrapJobs every 1 minute.
+
+    Each invocation processes up to BOOTSTRAP_MAX_USERS_PER_TICK user jobs,
+    each chunked by BOOTSTRAP_CHUNK_SIZE companies. Isolated per-user sessions
+    ensure one user's failure does not affect other users in the same tick.
+    """
+    try:
+        from app.services.bootstrap import bootstrap_jobs_cron
+        bootstrap_jobs_cron()
+    except Exception as e:
+        logger.error(f"Bootstrap jobs cron failed: {e}", exc_info=True)
 
 def recover_stale_jobs(db: Session):
     """
@@ -809,7 +830,29 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
             f"{company.name} (sig={list_sig}) — no stage advancement/notifications."
         )
 
-    # Dedup notifications per event across all users (the unique constraint
+    # ── Bootstrap snapshot update ──────────────────────────────────────────────
+    # Maintain the CompanyHistoricalSnapshot for this company so the bootstrap
+    # worker can determine historical participation without replaying events.
+    # Only runs for non-roster, non-repeat shortlists (same guards as stage
+    # advancement). Runs within this transaction — rolls back if ingestion fails.
+    if not is_roster and not is_repeat_list:
+        try:
+            from app.services.bootstrap import update_company_historical_snapshot
+            update_company_historical_snapshot(
+                db=db,
+                company_id=company.id,
+                stage=event_type_hint,
+                new_hashes=shortlist_hashes,
+            )
+        except Exception as _snap_exc:
+            # Snapshot failure is non-fatal — do not let it block shortlist matching
+            logger.error(
+                f"Shortlist ({source}): snapshot update failed for {company.name}: "
+                f"{_snap_exc}",
+                exc_info=True,
+            )
+    # ── End snapshot update ────────────────────────────────────────────────────
+
     # (user_id, company_event_id) makes duplicates a commit-time error).
     notified_user_ids = set()
     if event:
@@ -3034,6 +3077,12 @@ def process_notification_jobs(db: Session):
             ev_severity, is_high_vis = EVENT_SEVERITY.get(event.event_type, (1, False))
 
             for profile in profiles:
+                # Baseline guard: skip events that predate this user's notification baseline.
+                # Prevents historical notification flood for newly-onboarded students.
+                if profile.notification_baseline_at is not None and event.timestamp:
+                    if event.timestamp < profile.notification_baseline_at:
+                        continue
+
                 # Check eligibility
                 status_elig, _, _ = check_eligibility(profile, company)
                 if status_elig == "NOT_ELIGIBLE":

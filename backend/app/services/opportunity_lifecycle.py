@@ -142,33 +142,44 @@ def update_expired_opportunities(db: Session, user_id: UUID):
 
 def auto_archive_expired_decisions(db: Session, user_id: UUID):
     """
-    Find all decision_pending opportunities that have been pending for > 90 days
-    (measured from decision_pending_since) and auto-archive them.
-    
+    Find all decision_pending and suggested_tracking opportunities that have been
+    pending for > 90 days (measured from decision_pending_since) and auto-archive them.
+
+    For suggested_tracking: decision_pending_since is reset to utcnow() when the
+    suggestion is created, so the user always gets a full 90-day window regardless
+    of when the company's deadline originally passed.
+
     Should be called from a scheduled background job, NOT from GET /applications.
     """
     cutoff = datetime.utcnow() - timedelta(days=AUTO_ARCHIVE_DAYS)
-    
+
     expired_decisions = db.query(OpportunityState).filter(
         OpportunityState.user_id == user_id,
-        OpportunityState.state == "decision_pending",
+        OpportunityState.state.in_(["decision_pending", "suggested_tracking"]),
         OpportunityState.decision_pending_since != None,
         OpportunityState.decision_pending_since < cutoff,
     ).all()
-    
+
     archived_count = 0
     for os_record in expired_decisions:
-        os_record.previous_state = os_record.state
+        os_record.previous_state = (
+            # When archiving from suggested_tracking, restore must land in
+            # decision_pending (not suggested_tracking which the user already saw).
+            "decision_pending"
+            if os_record.state == "suggested_tracking"
+            else os_record.state
+        )
         os_record.state = "auto_archived"
         os_record.archive_reason = "AUTO_ARCHIVED"
         os_record.archived_at = datetime.utcnow()
         os_record.updated_at = datetime.utcnow()
+        os_record.state_source = "LIFECYCLE"
         archived_count += 1
 
     if archived_count > 0:
         db.commit()
         bump_user_version(user_id)
-        logger.info(f"Auto-archived {archived_count} expired decisions for user {user_id}")
+        logger.info(f"Auto-archived {archived_count} expired decisions/suggestions for user {user_id}")
 
 
 def run_lifecycle_for_all_users(db: Session):
