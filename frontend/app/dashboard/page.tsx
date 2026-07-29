@@ -114,12 +114,14 @@ interface Application {
 interface OpportunityState {
   record_type: "opportunity_state";
   company_id: string;
-  state: string; // unseen | tracking | decision_pending | archived | auto_archived
+  state: string; // unseen | tracking | suggested_tracking | decision_pending | archived | auto_archived
   archive_reason: string | null;
   archived_at: string | null;
   decision_pending_since: string | null;
   snoozed_until: string | null;
   previous_state: string | null;
+  bootstrap_inferred_stage?: string | null;
+  state_source?: string | null;
   updated_at: string;
   company: Company | null;
 }
