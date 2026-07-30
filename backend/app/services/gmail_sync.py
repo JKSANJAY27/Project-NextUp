@@ -320,7 +320,7 @@ def recover_stale_jobs(db: Session):
                 UPDATE raw_ingestion_jobs
                 SET status = 'pending'
                 WHERE status = 'failed'
-                  AND retry_count < 5
+                  AND (retry_count < 5 OR error_message LIKE 'AI unavailable:%')
                   AND (locked_at IS NULL OR locked_at < datetime('now', '-{backoff_minutes} minutes'))
             """))
         else:
@@ -328,7 +328,7 @@ def recover_stale_jobs(db: Session):
                 UPDATE raw_ingestion_jobs
                 SET status = 'pending'
                 WHERE status = 'failed'
-                  AND retry_count < 5
+                  AND (retry_count < 5 OR error_message LIKE 'AI unavailable:%')
                   AND (locked_at IS NULL OR locked_at < NOW() - INTERVAL '{backoff_minutes} minutes')
             """))
         db.commit()
@@ -760,13 +760,36 @@ def _shortlist_target_stage(event_type_hint: str, event) -> Optional[str]:
         return "Interview"
     if event_type_hint in ("REGISTRATION", "NEW_DRIVE", "GENERAL_UPDATE"):
         return None  # roster/FYI mails carry lists that are not selections
+    # The AI parser labels the purpose of a shortlist separately from the
+    # carrying event. Read that contextual label before using text rules.
+    metadata = getattr(event, "parsed_metadata", None) if event is not None else None
+    ai_intent = metadata.get("shortlist_for") if isinstance(metadata, dict) else None
+    if isinstance(ai_intent, dict):
+        ai_intent = ai_intent.get("value")
+    ai_targets = {
+        "ONLINE_ASSESSMENT": "OA", "OA": "OA", "INTERVIEW": "Interview",
+        "OFFER": "Offer", "NEXT_ROUND": "NEXT_STAGE", "UNKNOWN": None,
+    }
+    if isinstance(ai_intent, str) and ai_intent.upper() in ai_targets:
+        return ai_targets[ai_intent.upper()]
     text = ""
     if event is not None:
         text = f"{getattr(event, 'subject', '') or ''} {getattr(event, 'body', '') or ''}".lower()
     if any(k in text for k in ("online test", "online assessment", "aptitude test",
                                "oa ", "ppt", "pre-placement talk")):
         return "OA"
-    if "interview" in text or "selection process" in text:
+    if "interview" in text:
+        return "Interview"
+    if "next round" in text or "selection process" in text:
+        return "NEXT_STAGE"
+    return None
+
+
+def _next_shortlist_stage(current_status: Optional[str]) -> Optional[str]:
+    """Advance one known stage for a vague 'next round' list, never to Offer."""
+    if current_status in (None, "Applied", "Shortlisted"):
+        return "OA"
+    if current_status == "OA":
         return "Interview"
     return None
 
@@ -894,26 +917,33 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
             # Application status logic: advance directly to the round the
             # shortlist is for (no intermediate 'Shortlisted' stage).
             app = apps_by_user_id.get(profile.user_id)
+            resolved_stage = (
+                _next_shortlist_stage(app.status if app else None)
+                if target_stage == "NEXT_STAGE" else target_stage
+            )
+            # A vague list cannot establish a stage for a student without an
+            # existing application. Track the match without inventing one.
+            no_resolved_stage = resolved_stage is None
             if not app:
                 # recruitment_state has a DB CHECK constraint that has no
                 # 'Applied' value — roster matches sit at 'Registration'.
                 app = Application(
                     user_id=profile.user_id,
                     company_id=company.id,
-                    status=target_stage if not is_roster else 'Applied',
-                    recruitment_state=target_stage if not is_roster else 'Registration',
-                    current_round=target_stage if not is_roster else 'Applied',
+                    status=resolved_stage if not is_roster and not no_resolved_stage else 'Applied',
+                    recruitment_state=resolved_stage if not is_roster and not no_resolved_stage else 'Registration',
+                    current_round=resolved_stage if not is_roster and not no_resolved_stage else 'Applied',
                     user_decision='tracking',
                 )
                 db.add(app)
-            elif not is_repeat_list and not is_roster:
+            elif not is_repeat_list and not is_roster and not no_resolved_stage:
                 if app.status not in ('Offer', 'Rejected', 'Declined', 'Ignored'):
                     # only move forward, never demote — and a re-sent copy of
                     # an already-processed list never advances anyone.
-                    if _STAGE_ORDER.get(target_stage, 1) >= _STAGE_ORDER.get(app.status, 0):
-                        app.status = target_stage
-                        app.recruitment_state = target_stage
-                        app.current_round = target_stage
+                    if _STAGE_ORDER.get(resolved_stage, 1) >= _STAGE_ORDER.get(app.status, 0):
+                        app.status = resolved_stage
+                        app.recruitment_state = resolved_stage
+                        app.current_round = resolved_stage
                     app.user_decision = 'tracking'
 
             # OpportunityState logic
@@ -1091,7 +1121,11 @@ def extract_event_metadata(body: str, subject: str, event_type: str, ext_data: d
     meta = {
         "deadline_iso": ext_data.get("deadline_iso", {}).get("value"),
         "registration_link": ext_data.get("registration_link", {}).get("value"),
-        "job_location": ext_data.get("job_location", {}).get("value")
+        "job_location": ext_data.get("job_location", {}).get("value"),
+        # Retain the model's explicit shortlist intent for stage handling.
+        # It is deliberately kept as a field object so its confidence remains
+        # auditable alongside the original parsed output.
+        "shortlist_for": ext_data.get("shortlist_for", {}).get("value")
     }
     
     # 1. Detect OA platform
@@ -1686,7 +1720,7 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
         try:
             raw_parsed_info = parse_placement_email(body, subject, attachment_text, email_timestamp=email_timestamp)
         except AIUnavailableError as ai_err:
-            if (job.retry_count or 0) < settings.PARSER_MAX_AI_RETRIES:
+            if (job.retry_count or 0) < settings.PARSER_MAX_AI_RETRIES or not settings.PARSER_ALLOW_REGEX_FALLBACK:
                 raise  # marked failed; auto-retried on a later cron tick
             logger.warning(
                 f"Job {job.id}: AI providers exhausted after {job.retry_count} retries "
@@ -1929,6 +1963,12 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
 
         # Multi-Role Splitting: Process each role in validated_info["extracted_data"]["roles"]
         roles_list = ext_data.get("roles", [])
+        # Updates commonly omit the original role. Without a placeholder this
+        # loop never runs and a successfully parsed update never creates an
+        # event. The value only enables company-name matching for updates.
+        if not roles_list and not is_announcement:
+            roles_list = [{"role": {"value": "Software Engineer"}}]
+            logger.info("Job %s: update has no role data; routing by company name.", job.id)
 
         # Same-email deduplication guard:
         # Tracks Company objects we create from THIS specific email by normalized company name key.
@@ -3029,12 +3069,19 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
             db.begin_nested() # use nested transaction to bypass rollback state
             db.add(job)
             job.retry_count += 1
-            if job.retry_count >= 5:
+            ai_unavailable = isinstance(e, AIUnavailableError)
+            if ai_unavailable and not settings.PARSER_ALLOW_REGEX_FALLBACK:
+                # Preserve the raw email until an AI provider recovers. A
+                # transient HF Space/router outage must not convert it to a
+                # regex parse or permanently discard it after five attempts.
+                job.status = 'failed'
+                job.error_message = f"AI unavailable: {str(e)}"
+            elif job.retry_count >= 5:
                 job.status = 'dead_letter'
                 clean_job_payload(job)
             else:
                 job.status = 'failed'
-            job.error_message = str(e)
+                job.error_message = str(e)
             db.commit()
         except Exception as err:
             logger.error(f"Failed to record job failure: {str(err)}")

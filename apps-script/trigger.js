@@ -37,9 +37,12 @@ function checkPlacementsMail() {
     processedIds = [];
   }
 
-  // 2. Query Gmail for placement cell emails (last 48 hours to save search overhead)
-  var searchFilter = 'from:(noreply.cdcinfo@vit.ac.in OR cdc@vit.ac.in OR vitianscdc2027@vitstudent.ac.in OR vitianscdc2026@vitstudent.ac.in OR vitianscdc@vitstudent.ac.in OR "Helpdesk CDC" OR helpdesk.cdc@vit.ac.in)';
-  var threads = GmailApp.search(searchFilter, 0, 20);
+  // 2. Query a sufficiently large, recent window of CDC threads. The old
+  // limit of 20 meant a busy day could push a valid company mail (for example
+  // Zanskar) out of the result set before this trigger saw it. Message-ID
+  // deduplication below keeps this broader search safe on every run.
+  var searchFilter = 'from:(noreply.cdcinfo@vit.ac.in OR cdc@vit.ac.in OR vitianscdc2027@vitstudent.ac.in OR vitianscdc2026@vitstudent.ac.in OR vitianscdc@vitstudent.ac.in OR "Helpdesk CDC" OR helpdesk.cdc@vit.ac.in) newer_than:14d';
+  var threads = GmailApp.search(searchFilter, 0, 100);
 
   var newMessagesToProcess = [];
   var maxTimestampFound = lastProcessedTimestamp;

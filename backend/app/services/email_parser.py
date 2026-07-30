@@ -464,6 +464,10 @@ Required JSON Output Format:
       "value": "NEW_DRIVE",
       "confidence": 0.98
     }},
+    "shortlist_for": {{
+      "value": null,
+      "confidence": 0.0
+    }},
     "job_location": {{
       "value": "Bangalore",
       "confidence": 0.90
@@ -568,6 +572,13 @@ Guidelines for event_type (choose exactly ONE):
 - REJECTION_RELEASED: Regret / non-selected lists.
 - GENERAL_UPDATE: Venue changes, corrections, general instructions.
 
+Guidelines for shortlist_for (only when event_type is SHORTLIST_RELEASED; otherwise null):
+- ONLINE_ASSESSMENT: the listed students are invited to an OA/test/PPT.
+- INTERVIEW: the listed students are invited to an interview/GD/selection round.
+- OFFER: the listed students are final selected/placed candidates.
+- NEXT_ROUND: the email says only "next round of selection" without naming the round.
+- UNKNOWN: it is a shortlist but its purpose cannot be determined.
+
 Guidelines for events[] array:
 - Extract ALL recruitment milestones mentioned in the email — registration deadline, online test, PPT, interview rounds, etc.
 - "stage" must be one of: REGISTRATION, ONLINE_ASSESSMENT, PRE_PLACEMENT_TALK, TECHNICAL_INTERVIEW, HR_INTERVIEW, OFFER, REJECTION, GENERAL_UPDATE
@@ -662,6 +673,7 @@ def parse_with_ai_gateway(context_text: str) -> Dict[str, Any]:
         max_tokens=800,
         temperature=0.1,
         json_mode=True,
+        timeout=settings.PARSER_AI_TIMEOUT_SECONDS,
         purpose="email_parser",
     )
 

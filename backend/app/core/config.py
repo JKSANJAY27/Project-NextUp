@@ -54,6 +54,10 @@ class Settings(BaseSettings):
                               os.getenv("HUGGINGFACE_RESUME_SPACE_URL", ""))
     PARSER_AI_MODEL: str = "qwen2.5:3b"
     PARSER_AI_AUTH_TOKEN: str = ""
+    # Cold/free HF Spaces need materially longer than the generic API timeout
+    # for a structured email parse; 45 seconds caused every valid parse to be
+    # abandoned while the Space was still generating.
+    PARSER_AI_TIMEOUT_SECONDS: int = 210
     # Free HF Spaces run on 2 vCPU: a slim prompt + ~900 output tokens still
     # takes several minutes. This is fine — resume jobs are async.
     RESUME_AI_TIMEOUT_SECONDS: int = 40
@@ -73,6 +77,9 @@ class Settings(BaseSettings):
     PARSER_JOBS_PER_TICK: int = 3          # drain up to N emails per 5-min cron tick
     PARSER_FAILED_RETRY_MINUTES: int = 10  # backoff before a failed parse is re-queued
     PARSER_MAX_AI_RETRIES: int = 2         # AI attempts before regex fallback kicks in
+    # Rule parsing is an opt-in emergency recovery only. It lacks the context
+    # needed to safely classify drive updates and shortlist stages.
+    PARSER_ALLOW_REGEX_FALLBACK: bool = False
 
     # --- Resume generation worker ---
     RESUME_WORKER_ENABLED: bool = True
