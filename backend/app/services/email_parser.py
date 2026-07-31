@@ -6,6 +6,8 @@ from typing import Dict, Any, List, Optional
 import dateparser
 import requests
 
+from app.core.config import settings
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
