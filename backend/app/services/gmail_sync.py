@@ -1006,6 +1006,7 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
             profile = unmatched_profiles_by_user_id.get(app.user_id)
             if profile and profile.neo_id_hash not in shortlist_hashes:
                 app.status = 'Likely Rejected'
+                app.recruitment_state = 'Rejected'
                 logger.info(f"Student {app.user_id} marked as Likely Rejected for company {company.name}")
                 if event and not is_repeat_list and app.user_id not in notified_user_ids:
                     db.add(Notification(
