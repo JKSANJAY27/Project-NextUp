@@ -728,8 +728,9 @@ def _is_roster_list(event, filename: str = "") -> bool:
         text += f"{getattr(event, 'subject', '') or ''} {getattr(event, 'body', '') or ''}"
     tl = text.lower()
     return any(k in tl for k in (
-        "applied students", "applied list", "applications received",
-        "registered students", "registration list", "registrations list",
+        "applied students", "applied list", "applied_list", "applied_students",
+        "applications received", "registered students", "registered_students",
+        "registration list", "registrations list", "registration_list",
         "opt out", "opt-out", "withdraw", "list of students who applied",
     ))
 
