@@ -1010,6 +1010,44 @@ function DashboardPageContent() {
 
   // Pre-calculate variables for Action Center and My Applications
   const todayEvents = React.useMemo(() => getTodayEvents(), [getTodayEvents]);
+  const tomorrowEvents = React.useMemo(() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const startOfTomorrow = new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate()).getTime();
+    const endOfTomorrow = startOfTomorrow + 24 * 60 * 60 * 1000;
+    const events: TodayEvent[] = [];
+    companies.forEach(comp => {
+      if (isCompanyRejected(comp.id)) return;
+      if (comp.registration_deadline) {
+        const dlTime = new Date(comp.registration_deadline).getTime();
+        if (dlTime >= startOfTomorrow && dlTime < endOfTomorrow) {
+          events.push({
+            time: new Date(comp.registration_deadline),
+            title: `${comp.name} Deadline`,
+            description: `Registration closes at ${new Date(comp.registration_deadline).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })}.`,
+            type: "deadline",
+            companyId: comp.id
+          });
+        }
+      }
+    });
+    notificationBundles.forEach(bundle => {
+      if (isCompanyRejected(bundle.company_id)) return;
+      bundle.notifications.forEach((n) => {
+        const eventTime = n.timestamp ? new Date(n.timestamp).getTime() : new Date(n.created_at).getTime();
+        if (eventTime >= startOfTomorrow && eventTime < endOfTomorrow) {
+          events.push({
+            time: new Date(eventTime),
+            title: `${bundle.company_name} - ${n.notification_type.toUpperCase()}`,
+            description: n.message,
+            type: n.notification_type,
+            companyId: bundle.company_id
+          });
+        }
+      });
+    });
+    return events.sort((a, b) => a.time.getTime() - b.time.getTime());
+  }, [companies, notificationBundles, isCompanyRejected]);
   const trackedApps = React.useMemo(() => Object.values(applications)
     .filter(app => app.user_decision === 'tracking' && !isSnoozed(app))
     .sort((a, b) => b.priority_score - a.priority_score), [applications]);
@@ -1191,13 +1229,6 @@ function DashboardPageContent() {
                   Your mission control hub: scannable task timelines and notification triage
                 </p>
               </div>
-              <button
-                onClick={handleTriggerSync}
-                disabled={syncing}
-                className="flex items-center justify-center h-14 px-6 border-2 border-border bg-background font-extrabold tracking-wider hover:bg-muted transition-all active:scale-95 uppercase text-sm disabled:opacity-50"
-              >
-                <span>{syncing ? "SYNCING..." : "SYNC PLACEMENTS"}</span>
-              </button>
             </div>
 
             {/* Smart Daily Digest Banner */}
@@ -1251,42 +1282,84 @@ function DashboardPageContent() {
               })
             }
 
-            {/* Today's Schedule Timeline — full width */}
-            <div className="border-2 border-border p-6 bg-muted/10 space-y-4">
-              <div className="border-b border-border pb-3 flex justify-between items-center">
-                <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
-                  📅 TODAY&apos;S SCHEDULE TIMELINE
-                </h4>
-                <span className="text-[10px] font-bold bg-muted px-2 py-0.5 border border-border">
-                  {todayEvents.length} EVENT{todayEvents.length !== 1 ? 'S' : ''}
-                </span>
-              </div>
-              <div className="overflow-y-auto max-h-[220px] space-y-4 pr-1">
-                {todayEvents.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center text-center py-10 text-muted-foreground gap-1">
-                    <span className="text-xs font-bold uppercase tracking-wider">NO EVENTS TODAY</span>
-                    <span className="text-[10px] uppercase">All clear for the rest of the day.</span>
-                  </div>
-                ) : (
-                  <div className="relative border-l-2 border-border ml-2 pl-4 space-y-6">
-                    {todayEvents.map((evt, idx) => (
-                      <div key={idx} className="relative">
-                        <div className="absolute -left-[23px] top-1 h-3 w-3 bg-accent border-2 border-black" />
-                        <div className="space-y-1">
-                          <span className="text-[10px] font-bold font-mono text-accent">
-                            {evt.time.toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                          <h5 className="text-xs font-bold uppercase tracking-tight text-foreground">
-                            {evt.title}
-                          </h5>
-                          <p className="text-[11px] text-muted-foreground leading-normal">
-                            {evt.description}
-                          </p>
+            {/* Today + Tomorrow Schedule Timelines — side by side */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Today's Schedule */}
+              <div className="border-2 border-border p-6 bg-muted/10 space-y-4">
+                <div className="border-b border-border pb-3 flex justify-between items-center">
+                  <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
+                    📅 TODAY&apos;S SCHEDULE
+                  </h4>
+                  <span className="text-[10px] font-bold bg-muted px-2 py-0.5 border border-border">
+                    {todayEvents.length} EVENT{todayEvents.length !== 1 ? 'S' : ''}
+                  </span>
+                </div>
+                <div className="overflow-y-auto max-h-[220px] space-y-4 pr-1">
+                  {todayEvents.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center text-center py-10 text-muted-foreground gap-1">
+                      <span className="text-xs font-bold uppercase tracking-wider">NO EVENTS TODAY</span>
+                      <span className="text-[10px] uppercase">All clear for the rest of the day.</span>
+                    </div>
+                  ) : (
+                    <div className="relative border-l-2 border-border ml-2 pl-4 space-y-6">
+                      {todayEvents.map((evt, idx) => (
+                        <div key={idx} className="relative">
+                          <div className="absolute -left-[23px] top-1 h-3 w-3 bg-accent border-2 border-black" />
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-bold font-mono text-accent">
+                              {evt.time.toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                            <h5 className="text-xs font-bold uppercase tracking-tight text-foreground">
+                              {evt.title}
+                            </h5>
+                            <p className="text-[11px] text-muted-foreground leading-normal">
+                              {evt.description}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Tomorrow's Schedule */}
+              <div className="border-2 border-border p-6 bg-muted/10 space-y-4">
+                <div className="border-b border-border pb-3 flex justify-between items-center">
+                  <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
+                    🗓 TOMORROW&apos;S SCHEDULE
+                  </h4>
+                  <span className="text-[10px] font-bold bg-muted px-2 py-0.5 border border-border">
+                    {tomorrowEvents.length} EVENT{tomorrowEvents.length !== 1 ? 'S' : ''}
+                  </span>
+                </div>
+                <div className="overflow-y-auto max-h-[220px] space-y-4 pr-1">
+                  {tomorrowEvents.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center text-center py-10 text-muted-foreground gap-1">
+                      <span className="text-xs font-bold uppercase tracking-wider">NOTHING TOMORROW</span>
+                      <span className="text-[10px] uppercase">No events scheduled for tomorrow.</span>
+                    </div>
+                  ) : (
+                    <div className="relative border-l-2 border-border ml-2 pl-4 space-y-6">
+                      {tomorrowEvents.map((evt, idx) => (
+                        <div key={idx} className="relative">
+                          <div className="absolute -left-[23px] top-1 h-3 w-3 bg-accent/60 border-2 border-black" />
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-bold font-mono text-accent/70">
+                              {evt.time.toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                            <h5 className="text-xs font-bold uppercase tracking-tight text-foreground/80">
+                              {evt.title}
+                            </h5>
+                            <p className="text-[11px] text-muted-foreground leading-normal">
+                              {evt.description}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 

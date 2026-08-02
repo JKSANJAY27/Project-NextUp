@@ -49,7 +49,7 @@ GENERIC_COMPANY_NAMES = frozenset({
     "super dream", "dream", "regular", "mass recruiter", "internship",
     "super dream internship", "dream internship", "dream placement",
     "regular internship", "summer intern", "summer internship",
-    "super dream placement", "dream offer",
+    "super dream placement", "dream offer", "team size", "team size:*",
     # Common email intros
     "congratulations", "congrats", "dear students", "dear student",
     "kind attention", "kind attn", "hi", "hello",
