@@ -295,6 +295,16 @@ class CalendarEventOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_validator("date", "created_at", "updated_at", mode="before")
+    @classmethod
+    def ensure_utc_iso(cls, v):
+        if isinstance(v, datetime):
+            from datetime import timezone
+            if v.tzinfo is None:
+                v = v.replace(tzinfo=timezone.utc)
+            return v
+        return v
+
     class Config:
         from_attributes = True
 

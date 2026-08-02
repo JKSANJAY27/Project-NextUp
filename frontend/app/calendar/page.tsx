@@ -144,6 +144,13 @@ export default function CalendarPage() {
   ];
   const daysOfWeek = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 
+  // Sorted applications list by company name
+  const sortedApplications = React.useMemo(() => {
+    return [...applications].sort((a, b) => 
+      (a.company?.name || "").localeCompare(b.company?.name || "", undefined, { sensitivity: "base" })
+    );
+  }, [applications]);
+
   // Filter application dictionary
   const appMap = React.useMemo(() => {
     const map: Record<string, Application> = {};
@@ -433,7 +440,7 @@ export default function CalendarPage() {
               className="bg-card border-2 border-border text-xs font-bold uppercase tracking-wider px-3 h-9 text-foreground focus:outline-none focus:border-accent"
             >
               <option value="">COMPANY OVERLAY</option>
-              {applications.map(app => (
+              {sortedApplications.map(app => (
                 <option key={app.company_id} value={app.company_id}>
                   {app.company.name.toUpperCase()}
                 </option>
@@ -735,7 +742,7 @@ export default function CalendarPage() {
                     className="w-full h-11 border-b-2 border-border bg-card text-xs font-bold uppercase tracking-wider px-1 text-foreground focus:outline-none focus:border-accent"
                   >
                     <option value="">NO LINK</option>
-                    {applications.map(app => (
+                    {sortedApplications.map(app => (
                       <option key={app.company_id} value={app.company_id}>
                         {app.company.name.toUpperCase()} ({app.company.role.toUpperCase()})
                       </option>

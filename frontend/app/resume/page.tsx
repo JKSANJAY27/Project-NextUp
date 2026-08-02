@@ -117,6 +117,7 @@ export default function ResumePage() {
       setLoadingCompanies(true);
       const res = await api.get("/companies");
       const list: Company[] = (res.data || []).filter((c: { archived?: boolean }) => !c.archived);
+      list.sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
       setCompanies(list);
       // Keep the workspace deep-link (?company=<id>) selection when it exists
       // in the list; otherwise fall back to the first drive so the select is

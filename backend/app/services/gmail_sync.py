@@ -2797,6 +2797,15 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                         logger.info(
                             f"Updated company deadline from {event_type} event: {new_deadline_dt} ({event.id})"
                         )
+                        # Sync user calendar events so deadline changes immediately reflect in calendar
+                        from app.services.calendar_sync import sync_user_calendar_events
+                        from app.models.models import Application
+                        apps_to_sync = db.query(Application).filter(Application.company_id == company.id).all()
+                        for app_item in apps_to_sync:
+                            try:
+                                sync_user_calendar_events(db, app_item.user_id, company.id)
+                            except Exception as sync_err:
+                                logger.error(f"Failed to sync calendar on deadline update for user {app_item.user_id}: {sync_err}")
                     except (ValueError, TypeError) as e:
                         logger.warning(f"Could not parse deadline_iso from event {event.id}: {e}")
 
