@@ -828,8 +828,10 @@ def apply_shortlist_matches(db: Session, company: Company, event: Optional[Compa
     # list content; a previously-seen list may still match NEW students but
     # never advances stages or re-notifies.
     import hashlib as _hl
-    list_sig = _hl.sha256("|".join(sorted(
-        n.strip().upper() for n in neo_ids)).encode()).hexdigest()[:16]
+    # Include event_type_hint/target_stage in signature so an identical list reused for a 
+    # NEW round (e.g. OA list vs Interview list) is not falsely flagged as a repeat.
+    sig_raw = f"{event_type_hint}|" + "|".join(sorted(n.strip().upper() for n in neo_ids))
+    list_sig = _hl.sha256(sig_raw.encode()).hexdigest()[:16]
     is_repeat_list = False
     if event is not None:
         prior = db.query(CompanyEvent).filter(
@@ -1720,12 +1722,11 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
         from app.services.ai_provider import AIUnavailableError
         try:
             raw_parsed_info = parse_placement_email(body, subject, attachment_text, email_timestamp=email_timestamp)
-        except AIUnavailableError as ai_err:
-            if (job.retry_count or 0) < settings.PARSER_MAX_AI_RETRIES or not settings.PARSER_ALLOW_REGEX_FALLBACK:
+        except (AIUnavailableError, Exception) as ai_err:
+            if not settings.PARSER_ALLOW_REGEX_FALLBACK and isinstance(ai_err, AIUnavailableError) and (job.retry_count or 0) < settings.PARSER_MAX_AI_RETRIES:
                 raise  # marked failed; auto-retried on a later cron tick
             logger.warning(
-                f"Job {job.id}: AI providers exhausted after {job.retry_count} retries "
-                f"({str(ai_err)[:200]}). Falling back to regex parser."
+                f"Job {job.id}: AI unavailable/failed ({str(ai_err)[:200]}). Falling back to regex parser."
             )
             from app.services.email_parser import ground_role_facts_in_source
             raw_parsed_info = ground_role_facts_in_source(
@@ -3195,7 +3196,7 @@ def process_notification_jobs(db: Session):
                             is_found = check_if_student_shortlisted(db, profile.user_id, event)
                             if not is_found:
                                 msg = f"⚠️ Shortlist released for {company.name} ({company.role}), but your Neo ID was not found. Please manually check and confirm."
-                                notif_type = 'confirm_archive'
+                                notif_type = 'shortlist'
                                 severity = 5
                             else:
                                 msg = f"🎉 Congratulations! You are shortlisted for {company.name} ({company.role})! Prepare for next steps."
