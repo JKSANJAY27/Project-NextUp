@@ -463,7 +463,7 @@ export default function ProfilePage() {
         personal: {
           ...resumeData.personal,
           name: fullName.trim(),
-          email: user?.email || resumeData.personal.email || ""
+          email: resumeData.personal.email || user?.email || ""
         },
         skills: skillsArray
       };
@@ -867,7 +867,7 @@ export default function ProfilePage() {
               <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
                 Personal Contact details
               </h4>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-1">
                   <label className="text-[10px] font-black uppercase text-zinc-500">Title / Headline</label>
                   <input
@@ -876,6 +876,16 @@ export default function ProfilePage() {
                     onChange={(e) => updatePersonal("title", e.target.value)}
                     placeholder="E.g. Software Engineer"
                     className="w-full h-10 border border-border bg-background text-xs font-bold uppercase px-3 focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-zinc-500">Email Address</label>
+                  <input
+                    type="text"
+                    value={resumeData.personal.email || ""}
+                    onChange={(e) => updatePersonal("email", e.target.value)}
+                    placeholder="your.email@example.com"
+                    className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
                   />
                 </div>
                 <div className="space-y-1">
@@ -905,6 +915,26 @@ export default function ProfilePage() {
                     value={resumeData.personal.github || ""}
                     onChange={(e) => updatePersonal("github", e.target.value)}
                     placeholder="github.com/username"
+                    className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-zinc-500">LinkedIn Url</label>
+                  <input
+                    type="text"
+                    value={resumeData.personal.linkedin || ""}
+                    onChange={(e) => updatePersonal("linkedin", e.target.value)}
+                    placeholder="linkedin.com/in/username"
+                    className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-zinc-500">Portfolio / Website Url</label>
+                  <input
+                    type="text"
+                    value={resumeData.personal.website || ""}
+                    onChange={(e) => updatePersonal("website", e.target.value)}
+                    placeholder="portfolio.dev"
                     className="w-full h-10 border border-border bg-background text-xs font-bold px-3 focus:border-accent focus:outline-none"
                   />
                 </div>
