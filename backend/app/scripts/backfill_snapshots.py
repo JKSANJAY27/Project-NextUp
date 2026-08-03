@@ -37,9 +37,12 @@ def run_backfill():
     logger.info("Starting historical snapshot backfill...")
 
     try:
+        from sqlalchemy.orm import joinedload
+
         # 1. Backfill from AttachmentMetadata (SHORTLIST_EXCEL files)
         excel_attachments = (
             db.query(AttachmentMetadata)
+            .options(joinedload(AttachmentMetadata.company_event))
             .filter(
                 AttachmentMetadata.file_type == "SHORTLIST_EXCEL",
                 AttachmentMetadata.company_event_id.isnot(None),
@@ -75,11 +78,13 @@ def run_backfill():
                     stage=event_type,
                     new_hashes=hashes,
                 )
+                db.commit()
 
                 excel_success += 1
                 excel_total_ids += len(neo_ids)
 
             except Exception as exc:
+                db.rollback()
                 logger.warning(
                     f"Failed to process attachment {att.id} ({att.file_name}): {exc}"
                 )
@@ -113,9 +118,9 @@ def run_backfill():
             neo_ids = meta.get("matched_neo_ids") or meta.get("neo_ids") or []
 
             if not neo_ids and evt.body:
-                # Basic regex scan for NEO IDs in body text
+                # Scan for NEO IDs in body text
                 import re
-                neo_id_pattern = re.compile(settings.NEO_ID_REGEX, re.IGNORECASE)
+                neo_id_pattern = re.compile(r"\b[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d\b", re.IGNORECASE)
                 neo_ids = list(set(neo_id_pattern.findall(evt.body)))
 
             if not neo_ids:

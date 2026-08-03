@@ -1531,14 +1531,33 @@ function DashboardPageContent() {
 
                 {/* Result Toast Notice */}
                 {autoFilterResult && (
-                  <div className="bg-emerald-950/40 border border-emerald-500/60 p-3 flex items-center justify-between gap-2">
-                    <p className="text-[11px] font-bold text-emerald-400 uppercase tracking-wide">
-                      ✅ Auto-Filter Complete: Processed {autoFilterResult.processed_count} drives ({autoFilterResult.tracked_count} moved to tracking, {autoFilterResult.archived_count} archived
-                      {autoFilterResult.skipped_count > 0 ? `, ${autoFilterResult.skipped_count} kept for manual review due to missing shortlist emails` : ""}).
-                    </p>
+                  <div className="bg-emerald-950/60 border border-emerald-500/50 p-3 flex items-start justify-between gap-3 rounded-sm">
+                    <div className="flex items-start gap-2 min-w-0">
+                      <span className="text-emerald-400 text-sm mt-0.5 shrink-0">✅</span>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-emerald-300 leading-snug">
+                          Auto-Filter Complete
+                        </p>
+                        <p className="text-xs text-emerald-400/90 leading-snug mt-0.5">
+                          {autoFilterResult.tracked_count > 0 && (
+                            <span className="text-emerald-300 font-semibold">{autoFilterResult.tracked_count} moved to tracking</span>
+                          )}
+                          {autoFilterResult.tracked_count > 0 && autoFilterResult.archived_count > 0 && <span className="text-emerald-500"> · </span>}
+                          {autoFilterResult.archived_count > 0 && (
+                            <span>{autoFilterResult.archived_count} archived</span>
+                          )}
+                          {autoFilterResult.skipped_count > 0 && (
+                            <span className="text-amber-400/90"> · {autoFilterResult.skipped_count} kept for manual review (no shortlist email yet)</span>
+                          )}
+                          {autoFilterResult.processed_count === 0 && autoFilterResult.skipped_count === 0 && (
+                            <span className="text-emerald-400/70">No drives needed processing.</span>
+                          )}
+                        </p>
+                      </div>
+                    </div>
                     <button
                       onClick={() => setAutoFilterResult(null)}
-                      className="text-xs text-emerald-400 font-bold hover:text-white uppercase px-1"
+                      className="text-sm text-emerald-500 font-bold hover:text-white shrink-0 mt-0.5 leading-none"
                     >
                       ✕
                     </button>
