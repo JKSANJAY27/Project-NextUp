@@ -108,15 +108,20 @@ def get_current_user(request: Request, token: str = Depends(oauth2_scheme), db: 
                     detail=f"Only @{settings.ALLOWED_GOOGLE_DOMAIN} Google accounts are allowed.",
                 )
 
-            user = User(id=user_id, email=email, role="student")
-            db.add(user)
-            try:
-                db.commit()
-                db.refresh(user)
-            except Exception as e:
-                db.rollback()
-                logging.error(f"Failed to auto-create user: {str(e)}")
-                raise credentials_exception
+            # Check if user already exists by email (e.g., registered via password earlier, now logging in with Google)
+            existing_user = db.query(User).filter(User.email.ilike(email.strip())).first()
+            if existing_user:
+                user = existing_user
+            else:
+                user = User(id=user_id, email=email, role="student")
+                db.add(user)
+                try:
+                    db.commit()
+                    db.refresh(user)
+                except Exception as e:
+                    db.rollback()
+                    logging.error(f"Failed to auto-create user: {str(e)}")
+                    raise credentials_exception
     except SAOperationalError as e:
         logging.error(f"DB connection error in get_current_user: {str(e)}")
         raise HTTPException(

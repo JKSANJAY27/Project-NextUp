@@ -71,6 +71,9 @@ GENERIC_COMPANY_NAMES = frozenset({
     # Neo ID / registration-table artefacts that parsers mistake for company names
     "neo id", "neo id reg", "neo id registration", "neo pat", "neopat",
     "reg no", "regd no", "roll no", "roll number", "student id",
+    # Branch / degree headers mistaken for company names
+    "cse & it", "cse/it", "cse and it", "cse & it-related", "cse & it-related branches",
+    "m.tech integrated 5-year", "m.tech integrated 5 year", "mtech integrated 5-year",
     # Generic drive/event/government headers mistaken for company names
     "govt", "govt of india", "government", "govt org", "govt job",
     "ppt & online", "ppt and online", "ppt online", "ppt", "online test",
@@ -603,7 +606,10 @@ Eligibility Rules — IMPORTANT:
 - DO NOT add branches like ECE, EEE, EIE, Mechanical, Civil, Aerospace, or any non-CSE branches unless they are EXPLICITLY named as eligible in the email's "Eligible Branches" section.
 - eligible_branches: Extract ONLY the branches explicitly listed in the "Eligible Branches" or "Eligible Departments" section of the email. Do NOT infer branches from job title or role description.
 - degree_types: A list of strings from: BTECH, MTECH, MCA, MSC. Parse from the Eligible Branches section only.
-- specializations: A list of strings from: CSE_CORE, CSE_INFO_SEC, CSE_IOT, CSE_DATA_SCIENCE, CSE_BLOCKCHAIN, CSE_AI_ML. CRITICAL RULE: If the email says ALL of the following are eligible together — CSE, IT, ECE, or combinations like "B.Tech (CSE/IT/ECE) related branches" — this means ALL CSE specializations are open. Output ["CSE_CORE"] and set allow_all_specializations=true. ONLY add specific individual specializations (e.g. ["CSE_AI_ML", "CSE_DATA_SCIENCE"]) when they are explicitly named as separate entries. ECE, IT, EEE are NOT specialization codes — their presence in the eligible branches means allow_all_specializations=true.
+- specializations: A list of strings from: CSE_CORE, CSE_INFO_SEC, CSE_IOT, CSE_DATA_SCIENCE, CSE_BLOCKCHAIN, CSE_AI_ML. CRITICAL SPECIALIZATION RULES:
+  1. If the email lists ONLY specific specialization branches (e.g., "AI and ML", "Cyber Security", "AI and Robotics", "Data Science") WITHOUT explicitly listing Core CSE ("B.Tech Computer Science and Engineering" or "B.Tech CSE" without specialization), set `allow_all_specializations: false` and include ONLY those specific specializations in the `specializations` array. Do NOT include CSE_CORE.
+  2. If the email explicitly includes Core CSE or general CSE/IT/ECE related branches (e.g. "B.Tech CSE / IT", "CSE related branches", "B.Tech (CSE/IT/ECE)"), output `["CSE_CORE"]` and set `allow_all_specializations: true`.
+  3. ALWAYS populate `eligible_branches` with the verbatim list of branch/specialization names from the email text so they display cleanly in the UI.
 - min_tenth_marks: Extract the minimum percentage required for Class 10 (e.g. 60.0 or 70.0). Null if not mentioned.
 - min_twelfth_marks: Extract the minimum percentage required for Class 12 (e.g. 60.0 or 70.0). Null if not mentioned.
 - min_ug_cgpa: Only for PG programs (e.g. M.Tech, MCA) if they mention a minimum UG CGPA (e.g. "UG CGPA >= 7.0"). Null if not mentioned.
