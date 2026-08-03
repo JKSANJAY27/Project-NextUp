@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useAppStore } from "@/lib/store";
 import {
@@ -22,9 +22,46 @@ import {
   Zap,
   GitMerge,
   Search,
+  Sun,
+  Moon,
 } from "lucide-react";
 import Tooltip from "@/components/Tooltip";
 import Logo from "@/components/Logo";
+
+// ─── Floating Emoji Background ────────────────────────────────────────────────
+const FLOATING_EMOJIS = [
+  { emoji: "📧", x: 5,  y: 15, size: 2.2, dur: 18, delay: 0   },
+  { emoji: "✅", x: 12, y: 65, size: 1.6, dur: 22, delay: 3   },
+  { emoji: "🎯", x: 85, y: 20, size: 2.0, dur: 20, delay: 1.5 },
+  { emoji: "📋", x: 90, y: 70, size: 1.8, dur: 25, delay: 4   },
+  { emoji: "🔔", x: 50, y: 5,  size: 1.5, dur: 16, delay: 2   },
+  { emoji: "💼", x: 75, y: 50, size: 1.9, dur: 23, delay: 6   },
+  { emoji: "🚀", x: 25, y: 80, size: 1.7, dur: 19, delay: 0.5 },
+  { emoji: "📊", x: 60, y: 85, size: 1.6, dur: 21, delay: 5   },
+  { emoji: "🔍", x: 40, y: 55, size: 1.4, dur: 24, delay: 7   },
+  { emoji: "⚡", x: 18, y: 35, size: 1.5, dur: 17, delay: 2.5 },
+];
+
+function FloatingEmojis() {
+  return (
+    <div aria-hidden className="absolute inset-0 overflow-hidden pointer-events-none select-none">
+      {FLOATING_EMOJIS.map((item, i) => (
+        <span
+          key={i}
+          className="absolute opacity-[0.07] dark:opacity-[0.05]"
+          style={{
+            left: `${item.x}%`,
+            top: `${item.y}%`,
+            fontSize: `${item.size}rem`,
+            animation: `floatEmoji ${item.dur}s ease-in-out ${item.delay}s infinite`,
+          }}
+        >
+          {item.emoji}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 // ─── FAQ Data ─────────────────────────────────────────────────────────────────
 const faqs = [
@@ -278,6 +315,27 @@ function BuilderCard({ b }: { b: (typeof builders)[number] }) {
 // ─── Main Page ───────────────────────────────────────────────────────────────
 export default function LandingPage() {
   const { token } = useAppStore();
+  const [isDark, setIsDark] = useState(true);
+
+  // Initialise from saved pref or system pref
+  useEffect(() => {
+    const saved = localStorage.getItem("landing-theme");
+    if (saved) {
+      const dark = saved === "dark";
+      setIsDark(dark);
+      document.documentElement.classList.toggle("dark", dark);
+    } else {
+      // default dark
+      document.documentElement.classList.add("dark");
+    }
+  }, []);
+
+  const toggleTheme = () => {
+    const next = !isDark;
+    setIsDark(next);
+    document.documentElement.classList.toggle("dark", next);
+    localStorage.setItem("landing-theme", next ? "dark" : "light");
+  };
 
   return (
     <main className="min-h-screen bg-background text-foreground flex flex-col font-sans">
@@ -318,6 +376,14 @@ export default function LandingPage() {
           >
             Sign In
           </Link>
+          {/* Theme Toggle */}
+          <button
+            onClick={toggleTheme}
+            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            className="flex items-center justify-center w-10 h-10 border-2 border-border hover:border-accent hover:text-accent transition-all active:scale-95"
+          >
+            {isDark ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
           <Link
             href={token ? "/dashboard" : "/register"}
             className="flex items-center justify-center border-2 border-border bg-foreground text-background px-6 h-10 text-xs font-bold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95"
@@ -347,12 +413,16 @@ export default function LandingPage() {
         </div>
       </div>
 
-      {/* Hero Section */}
+      {/* Hero Section — fills remaining viewport so no scroll needed to see the CTA buttons */}
       <section
-        className="flex flex-col items-center justify-center text-center py-24 px-8 border-b-2 border-border max-w-[95vw] mx-auto w-full"
+        className="relative flex flex-col items-center justify-center text-center px-8 border-b-2 border-border w-full overflow-hidden"
+        style={{ minHeight: "calc(100svh - 80px - 60px)" }}
         aria-labelledby="hero-heading"
       >
-        <div className="space-y-6 max-w-4xl">
+        {/* Floating emoji layer */}
+        <FloatingEmojis />
+
+        <div className="relative z-10 space-y-4 max-w-4xl py-10">
           <div className="inline-flex items-center gap-2 border-2 border-border bg-muted/30 px-4 py-2 text-xs font-extrabold tracking-widest text-accent uppercase">
             <Bell size={14} />
             <span>NextUp — Free VIT Placement Tracker</span>
@@ -360,14 +430,14 @@ export default function LandingPage() {
 
           <h1
             id="hero-heading"
-            className="text-[clamp(2.5rem,10vw,8rem)] font-extrabold tracking-tighter uppercase leading-[0.85] text-foreground"
+            className="text-[clamp(2.2rem,9vw,7rem)] font-extrabold tracking-tighter uppercase leading-[0.85] text-foreground"
           >
             Never Miss
             <br />
             a Shortlist
           </h1>
 
-          <p className="text-lg md:text-xl font-medium text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+          <p className="text-base md:text-lg font-medium text-muted-foreground max-w-2xl mx-auto leading-relaxed">
             NextUp automatically reads your CDC emails, detects shortlists, checks eligibility,
             and keeps all your applications organised — so you can focus on preparing, not tracking.
           </p>
@@ -377,10 +447,10 @@ export default function LandingPage() {
             NextUp VIT &middot; Placement Tracker for VIT Vellore &middot; VIT CDC shortlist detector &middot; Free for all VIT students
           </p>
 
-          <div className="pt-8 flex flex-col sm:flex-row justify-center gap-4">
+          <div className="pt-4 flex flex-col sm:flex-row justify-center gap-4">
             <Link
               href={token ? "/dashboard" : "/register"}
-              className="flex items-center justify-center gap-3 h-16 px-10 border-2 border-border bg-foreground text-background text-sm font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all"
+              className="flex items-center justify-center gap-3 h-14 px-10 border-2 border-border bg-foreground text-background text-sm font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all"
               aria-label={token ? "Go to dashboard" : "Register for free"}
             >
               <span>{token ? "Go to Dashboard" : "Get Started — It's Free"}</span>
@@ -388,7 +458,7 @@ export default function LandingPage() {
             </Link>
             <Link
               href="#how-it-works"
-              className="flex items-center justify-center h-16 px-10 border-2 border-border bg-transparent text-foreground text-sm font-extrabold tracking-widest uppercase hover:bg-muted transition-all active:scale-95"
+              className="flex items-center justify-center h-14 px-10 border-2 border-border bg-transparent text-foreground text-sm font-extrabold tracking-widest uppercase hover:bg-muted transition-all active:scale-95"
             >
               See How It Works
             </Link>
