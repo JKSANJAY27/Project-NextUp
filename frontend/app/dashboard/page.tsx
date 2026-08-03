@@ -2272,6 +2272,18 @@ function DashboardPageContent() {
                           } else if (rawReason === "DEADLINE_EXPIRED" || rawReason === "AUTO_ARCHIVED") {
                             reasonText = "EXPIRED DRIVE";
                             reasonColor = "border-amber-500/30 text-amber-400 bg-amber-500/5";
+                          } else if (rawReason === "NOT_ELIGIBLE" || rawReason === "INELIGIBLE") {
+                            reasonText = "NOT ELIGIBLE";
+                            reasonColor = "border-orange-500/30 text-orange-400 bg-orange-500/5";
+                          } else if (rawReason === "BOOTSTRAP_REJECTED" || rawReason === "LIKELY_REJECTED") {
+                            reasonText = "LIKELY REJECTED";
+                            reasonColor = "border-red-600/30 text-red-500 bg-red-600/5";
+                          } else if (rawReason === "BOOTSTRAP_DECLINED") {
+                            reasonText = "DECLINED SUGGESTION";
+                            reasonColor = "border-zinc-500/30 text-zinc-400 bg-zinc-500/5";
+                          } else if (rawReason === "MANUAL_NOT_INTERESTED" || rawReason === "MANUAL") {
+                            reasonText = "NOT INTERESTED";
+                            reasonColor = "border-zinc-500/30 text-zinc-400 bg-zinc-500/5";
                           }
 
                           return (
