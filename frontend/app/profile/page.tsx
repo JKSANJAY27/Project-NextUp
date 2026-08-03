@@ -1344,7 +1344,7 @@ export default function ProfilePage() {
                 </label>
                 <input
                   type="number"
-                  step="0.01"
+                  step="any"
                   min="0"
                   max="10"
                   required
@@ -1362,7 +1362,7 @@ export default function ProfilePage() {
                   </label>
                   <input
                     type="number"
-                    step="0.01"
+                    step="any"
                     min="0"
                     max="10"
                     required
@@ -1380,7 +1380,7 @@ export default function ProfilePage() {
                 </label>
                 <input
                   type="number"
-                  step="0.1"
+                  step="any"
                   min="0"
                   max="100"
                   required
@@ -1397,7 +1397,7 @@ export default function ProfilePage() {
                 </label>
                 <input
                   type="number"
-                  step="0.1"
+                  step="any"
                   min="0"
                   max="100"
                   required
