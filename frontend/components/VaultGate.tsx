@@ -85,7 +85,7 @@ export default function VaultGate({ children }: { children: React.ReactNode }) {
 
       if (isFirstTime) {
         // Seal the vault marker so future sessions unlock with this password.
-        const encryptedNeoId = await encryptData("", key);
+        const encryptedNeoId = await encryptData("VAULT_SEALED", key);
         setEncryptionKey(key, keyHex);
         const res = await api.put("/users/me", { neo_id_enc: encryptedNeoId, neo_id: "" });
         setUser(res.data);

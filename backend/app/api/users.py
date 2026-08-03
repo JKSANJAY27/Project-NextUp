@@ -84,11 +84,11 @@ def update_user_me(
             specialization=user_in.specialization or "CSE_CORE",
             batch_year=user_in.batch_year or datetime.utcnow().year,
             neo_id_enc=user_in.neo_id_enc or "UNSET",
-            neo_id_hash=generate_blind_index(user_in.neo_id, settings.PEPPER) if user_in.neo_id else "UNSET",
+            neo_id_hash=generate_blind_index(user_in.neo_id, settings.PEPPER) if user_in.neo_id else f"UNSET-{current_user.id}",
             cgpa=user_in.cgpa or 0.0,
             tenth_marks=user_in.tenth_marks or 0.0,
             twelfth_marks=user_in.twelfth_marks or 0.0,
-            has_arrears=user_in.has_arrears or False,
+            has_arrears=user_in.has_arrears if user_in.has_arrears is not None else False,
             ug_cgpa=user_in.ug_cgpa,
             skills=user_in.skills or []
         )
@@ -96,6 +96,7 @@ def update_user_me(
     else:
         # Exclude unset fields, but pop special blind index neo_id
         update_data = user_in.dict(exclude_unset=True)
+        old_hash = profile.neo_id_hash
         if "neo_id" in update_data:
             neo_id = update_data.pop("neo_id")
             if neo_id:
@@ -108,7 +109,7 @@ def update_user_me(
 
     # Bootstrap & Notification Baseline trigger
     curr_hash = profile.neo_id_hash or ""
-    is_valid_hash = curr_hash and not curr_hash.startswith("RESET-") and curr_hash != "UNSET"
+    is_valid_hash = curr_hash and not curr_hash.startswith("RESET-") and not curr_hash.startswith("UNSET")
 
     if is_valid_hash:
         # 1. Establish notification baseline on first valid NEO ID save
@@ -119,7 +120,7 @@ def update_user_me(
         from app.services.bootstrap import create_bootstrap_job
         from app.models.models import BootstrapJob
 
-        if old_hash and new_hash and old_hash != new_hash and not old_hash.startswith("RESET-") and old_hash != "UNSET":
+        if old_hash and new_hash and old_hash != new_hash and not old_hash.startswith("RESET-") and not old_hash.startswith("UNSET"):
             # Cancel stale job if running/pending
             stale_job = db.query(BootstrapJob).filter(
                 BootstrapJob.user_id == current_user.id,

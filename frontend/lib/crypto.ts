@@ -78,7 +78,7 @@ export async function exportKeyToHex(key: CryptoKey): Promise<string> {
  * Returns a Base64 string containing concatenated: IV (12 bytes) + Ciphertext (with Tag).
  */
 export async function encryptData(plaintext: string, key: CryptoKey): Promise<string> {
-  if (!plaintext) return "";
+  if (plaintext === null || plaintext === undefined) return "";
   
   const encoder = new TextEncoder();
   const dataBytes = encoder.encode(plaintext);

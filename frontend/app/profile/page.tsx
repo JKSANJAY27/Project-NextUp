@@ -172,7 +172,8 @@ export default function ProfilePage() {
       let dNeoId = "";
       try {
         if (user.neo_id_enc && user.neo_id_enc !== "UNSET") {
-          dNeoId = await decryptData(user.neo_id_enc, encryptionKey);
+          const decVal = await decryptData(user.neo_id_enc, encryptionKey);
+          dNeoId = decVal === "VAULT_SEALED" ? "" : decVal;
         }
       } catch (decErr) {
         console.error("Failed to decrypt Neo ID (key mismatch), resetting field:", decErr);

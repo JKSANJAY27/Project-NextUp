@@ -235,10 +235,11 @@ def start_scheduler():
         )
         scheduler.start()
         logger.info("Background queue processor, view refresher, opportunity lifecycle, and bootstrap scheduler started.")
-        # Run opportunity lifecycle check once on startup immediately
+        # Run opportunity lifecycle check once on startup immediately in background thread
         try:
-            logger.info("Running initial opportunity lifecycle update on startup...")
-            opportunity_lifecycle_cron()
+            logger.info("Running initial opportunity lifecycle update on startup (background)...")
+            import threading
+            threading.Thread(target=opportunity_lifecycle_cron, name="init-lifecycle", daemon=True).start()
         except Exception as e:
             logger.error(f"Failed to run initial opportunity lifecycle update: {e}", exc_info=True)
 
