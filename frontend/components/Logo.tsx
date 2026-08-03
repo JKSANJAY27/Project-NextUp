@@ -78,17 +78,25 @@ export default function Logo({
   const hasImageFailed = attemptIndex >= srcOptions.length;
 
   const sizeClasses =
-    size === "sm" ? "h-6 w-auto" : size === "lg" ? "h-10 w-auto" : "h-8 w-auto";
+    size === "sm"
+      ? "h-6 w-auto max-h-6 max-w-[24px]"
+      : size === "lg"
+      ? "h-10 w-auto max-h-10 max-w-[40px]"
+      : "h-8 w-auto max-h-8 max-w-[32px]";
 
   return (
-    <div className={`flex items-center gap-2.5 ${className}`}>
+    <div className={`flex items-center gap-2.5 shrink-0 ${className}`}>
       {!hasImageFailed ? (
         /* eslint-disable-next-line @next/next/no-img-element */
         <img
           key={srcOptions[attemptIndex] + attemptIndex}
           src={srcOptions[attemptIndex]}
           alt="NextUp.AI Logo"
-          className={`object-contain ${sizeClasses}`}
+          className={`object-contain shrink-0 ${sizeClasses}`}
+          style={{
+            maxHeight: size === "sm" ? "24px" : size === "lg" ? "40px" : "32px",
+            maxWidth: size === "sm" ? "24px" : size === "lg" ? "40px" : "32px",
+          }}
           onError={() => {
             setAttemptIndex((prev) => prev + 1);
           }}
