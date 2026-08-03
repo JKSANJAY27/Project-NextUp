@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 556 761" width="100%" height="100%">
+  <g stroke="#000000" stroke-width="22" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Left Collar -->
+    <polygon points="76,20 20,119 159,287 262,168" fill="#FFFFFF" />
+    <!-- Right Collar -->
+    <polygon points="480,22 535,120 399,288 294,170" fill="#FFFFFF" />
+    <!-- Knot -->
+    <polygon points="278,216 343,288 315,356 239,356 212,287" fill="#DFE104" />
+    <!-- Tie Body -->
+    <polygon points="239,395 317,397 369,645 279,740 188,650" fill="#DFE104" />
+  </g>
+</svg>

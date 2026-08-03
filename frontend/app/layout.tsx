@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, Inter } from "next/font/google";
+import { Space_Grotesk, Inter, Press_Start_2P } from "next/font/google";
 import Providers from "@/components/Providers";
 import "./globals.css";
 
@@ -13,6 +13,13 @@ const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
   weight: ["400", "500", "600"],
+});
+
+const pressStart2P = Press_Start_2P({
+  subsets: ["latin"],
+  weight: ["400"],
+  variable: "--font-pixel",
+  display: "swap",
 });
 
 const BASE_URL = "https://project-next-up.vercel.app";
@@ -228,7 +235,7 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdFaq) }}
         />
       </head>
-      <body className={`${spaceGrotesk.variable} ${inter.variable} antialiased selection:bg-accent selection:text-accent-foreground`}>
+      <body className={`${spaceGrotesk.variable} ${inter.variable} ${pressStart2P.variable} antialiased selection:bg-accent selection:text-accent-foreground`}>
 
         <Providers>
           {children}

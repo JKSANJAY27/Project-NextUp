@@ -27,41 +27,11 @@ import {
 } from "lucide-react";
 import Tooltip from "@/components/Tooltip";
 import Logo from "@/components/Logo";
+import dynamic from "next/dynamic";
 
-// ─── Floating Emoji Background ────────────────────────────────────────────────
-const FLOATING_EMOJIS = [
-  { emoji: "📧", x: 5,  y: 15, size: 2.2, dur: 18, delay: 0   },
-  { emoji: "✅", x: 12, y: 65, size: 1.6, dur: 22, delay: 3   },
-  { emoji: "🎯", x: 85, y: 20, size: 2.0, dur: 20, delay: 1.5 },
-  { emoji: "📋", x: 90, y: 70, size: 1.8, dur: 25, delay: 4   },
-  { emoji: "🔔", x: 50, y: 5,  size: 1.5, dur: 16, delay: 2   },
-  { emoji: "💼", x: 75, y: 50, size: 1.9, dur: 23, delay: 6   },
-  { emoji: "🚀", x: 25, y: 80, size: 1.7, dur: 19, delay: 0.5 },
-  { emoji: "📊", x: 60, y: 85, size: 1.6, dur: 21, delay: 5   },
-  { emoji: "🔍", x: 40, y: 55, size: 1.4, dur: 24, delay: 7   },
-  { emoji: "⚡", x: 18, y: 35, size: 1.5, dur: 17, delay: 2.5 },
-];
+const HeroScene = dynamic(() => import("@/components/hero/HeroScene"), { ssr: false });
 
-function FloatingEmojis() {
-  return (
-    <div aria-hidden className="absolute inset-0 overflow-hidden pointer-events-none select-none">
-      {FLOATING_EMOJIS.map((item, i) => (
-        <span
-          key={i}
-          className="absolute opacity-[0.07] dark:opacity-[0.05]"
-          style={{
-            left: `${item.x}%`,
-            top: `${item.y}%`,
-            fontSize: `${item.size}rem`,
-            animation: `floatEmoji ${item.dur}s ease-in-out ${item.delay}s infinite`,
-          }}
-        >
-          {item.emoji}
-        </span>
-      ))}
-    </div>
-  );
-}
+
 
 // ─── FAQ Data ─────────────────────────────────────────────────────────────────
 const faqs = [
@@ -413,44 +383,52 @@ export default function LandingPage() {
         </div>
       </div>
 
-      {/* Hero Section — fills remaining viewport so no scroll needed to see the CTA buttons */}
+      {/* Hero Section — pixel art scene with left-aligned text overlay */}
       <section
-        className="relative flex flex-col items-center justify-center text-center px-8 border-b-2 border-border w-full overflow-hidden"
+        className="relative w-full overflow-hidden border-b-2 border-border"
         style={{ minHeight: "calc(100svh - 80px - 60px)" }}
         aria-labelledby="hero-heading"
       >
-        {/* Floating emoji layer */}
-        <FloatingEmojis />
+        {/* Animated pixel-art background scene */}
+        <HeroScene />
 
-        <div className="relative z-10 space-y-4 max-w-4xl py-10">
-          <div className="inline-flex items-center gap-2 border-2 border-border bg-muted/30 px-4 py-2 text-xs font-extrabold tracking-widest text-accent uppercase">
+        {/* Text overlay — left-aligned, z above scene */}
+        <div
+          className="relative z-10 flex flex-col justify-center px-8 md:px-14 lg:px-20 py-16"
+          style={{ minHeight: "calc(100svh - 80px - 60px)", maxWidth: "620px" }}
+        >
+          {/* Badge */}
+          <div className="inline-flex items-center gap-2 border-2 border-white/30 bg-black/40 px-4 py-2 text-xs font-extrabold tracking-widest text-accent uppercase mb-6 w-fit backdrop-blur-sm">
             <Bell size={14} />
             <span>NextUp — Free VIT Placement Tracker</span>
           </div>
 
+          {/* Heading — Press Start 2P pixel font */}
           <h1
             id="hero-heading"
-            className="text-[clamp(2.2rem,9vw,7rem)] font-extrabold tracking-tighter uppercase leading-[0.85] text-foreground"
+            className="hero-pixel-heading uppercase mb-6"
           >
-            Never Miss
-            <br />
-            a Shortlist
+            <span className="text-white">Never<br />Miss a<br /></span>
+            <span className="text-accent">Shortlist</span>
           </h1>
 
-          <p className="text-base md:text-lg font-medium text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-            NextUp automatically reads your CDC emails, detects shortlists, checks eligibility,
-            and keeps all your applications organised — so you can focus on preparing, not tracking.
+          {/* Description */}
+          <p className="text-sm md:text-base font-medium text-white/80 max-w-md leading-relaxed mb-3">
+            NextUp automatically reads your CDC emails, detects shortlists,
+            checks eligibility, and keeps all your applications organised —
+            so you can focus on preparing, not tracking.
           </p>
 
-          {/* SEO anchor — visible to crawlers, de-emphasised visually */}
-          <p className="text-[11px] text-muted-foreground/50 max-w-xl mx-auto font-mono tracking-wide" aria-hidden="false">
-            NextUp VIT &middot; Placement Tracker for VIT Vellore &middot; VIT CDC shortlist detector &middot; Free for all VIT students
+          {/* SEO anchor */}
+          <p className="text-[11px] text-white/50 max-w-sm font-mono tracking-wide mb-8" aria-hidden="false">
+            NextUp VIT · Placement Tracker for VIT Vellore · VIT CDC shortlist detector · Free for all VIT students
           </p>
 
-          <div className="pt-4 flex flex-col sm:flex-row justify-center gap-4">
+          {/* CTAs */}
+          <div className="flex flex-col sm:flex-row gap-4">
             <Link
               href={token ? "/dashboard" : "/register"}
-              className="flex items-center justify-center gap-3 h-14 px-10 border-2 border-border bg-foreground text-background text-sm font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all"
+              className="flex items-center justify-center gap-3 h-14 px-8 border-2 border-accent bg-accent text-black text-sm font-extrabold tracking-widest uppercase hover:bg-white hover:border-white hover:text-black active:scale-95 transition-all w-fit"
               aria-label={token ? "Go to dashboard" : "Register for free"}
             >
               <span>{token ? "Go to Dashboard" : "Get Started — It's Free"}</span>
@@ -458,7 +436,7 @@ export default function LandingPage() {
             </Link>
             <Link
               href="#how-it-works"
-              className="flex items-center justify-center h-14 px-10 border-2 border-border bg-transparent text-foreground text-sm font-extrabold tracking-widest uppercase hover:bg-muted transition-all active:scale-95"
+              className="flex items-center justify-center h-14 px-8 border-2 border-white/60 bg-black/40 text-white text-sm font-extrabold tracking-widest uppercase hover:border-white hover:bg-white/10 transition-all active:scale-95 w-fit backdrop-blur-sm"
             >
               See How It Works
             </Link>
