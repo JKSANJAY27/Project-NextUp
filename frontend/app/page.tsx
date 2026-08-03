@@ -341,7 +341,7 @@ export default function LandingPage() {
     <main className="min-h-screen bg-background text-foreground flex flex-col font-sans">
 
       {/* Navigation */}
-      <header className="flex h-20 items-center justify-between border-b-2 border-border px-8 md:px-16 w-full bg-background z-10 sticky top-0 backdrop-blur-md">
+      <header className="flex h-20 items-center justify-between border-b-2 border-border px-8 md:px-16 w-full bg-background z-50 sticky top-0">
         <Link href="/" aria-label="NEXTUP.AI home" className="flex items-center">
           <Logo size="md" />
         </Link>

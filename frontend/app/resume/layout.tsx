@@ -20,7 +20,7 @@ export default function ResumeLayout({
         <Sidebar />
       </Suspense>
       <div className="flex-1 md:pl-64 flex flex-col min-h-screen w-full">
-        <header className="flex h-16 w-full items-center justify-between border-b-2 border-border bg-card/50 backdrop-blur-md px-8 sticky top-0 z-30">
+        <header className="flex h-16 w-full items-center justify-between border-b-2 border-border bg-card px-8 sticky top-0 z-40">
           <div className="flex items-center gap-4">
             <h1 className="text-xs font-black tracking-widest text-muted-foreground uppercase font-mono">
               SYSTEM // RESUME
