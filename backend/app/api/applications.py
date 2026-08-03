@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload, defer
 from typing import List, Any, Dict, Optional
 from uuid import UUID
 from datetime import datetime
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.models import User, Application, Company, OpportunityState, CompanyEvent
+from app.models.models import User, Application, Company, OpportunityState, CompanyEvent, CompanyHistoricalSnapshot
+from app.core.config import settings
 
 
 def _company_with_light_events(rel):
@@ -409,3 +411,160 @@ def upsert_opportunity_state(
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action '{action}'. Must be track, accept_suggestion, decline_suggestion, archive, snooze, or restore.")
+
+
+class AutoFilterRequest(BaseModel):
+    company_ids: Optional[List[UUID]] = None
+
+
+@router.post("/auto-filter")
+def auto_filter_decision_pending(
+    body: AutoFilterRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Bulk processes decision-pending drives for the user based on eligibility and historical shortlist snapshots.
+    
+    Rules per drive:
+    1. If user is NOT_ELIGIBLE for the drive -> move to archived (reason: INELIGIBLE)
+    2. If drive has NO shortlist snapshot (no shortlist email received yet) -> leave in decision_pending untouched.
+    3. If drive HAS shortlist snapshot:
+       - Check if user's neo_id_hash is present in offer_hashes, interview_hashes, or oa_hashes:
+           - In offer_hashes -> track with status 'Offer'
+           - In interview_hashes -> track with status 'Interview'
+           - In oa_hashes -> track with status 'OA'
+       - In rejected_hashes or NOT present in any list -> move to archived (reason: LIKELY_REJECTED)
+    """
+    from app.services.eligibility import check_eligibility
+    from app.services.calendar_sync import sync_user_calendar_events
+
+    user_neo_hash = current_user.profile.neo_id_hash if current_user.profile else None
+
+    # Query target companies
+    query = db.query(Company)
+    if body.company_ids:
+        query = query.filter(Company.id.in_(body.company_ids))
+    companies = query.all()
+
+    # Get user's current opportunity states and applications
+    opp_states = db.query(OpportunityState).filter(OpportunityState.user_id == current_user.id).all()
+    opp_map = {opp.company_id: opp for opp in opp_states}
+
+    apps = db.query(Application).filter(Application.user_id == current_user.id).all()
+    app_map = {app.company_id: app for app in apps}
+
+    # Fetch all historical snapshots for these companies
+    snapshots = db.query(CompanyHistoricalSnapshot).filter(
+        CompanyHistoricalSnapshot.company_id.in_([c.id for c in companies])
+    ).all()
+    snapshot_map = {snap.company_id: snap for snap in snapshots}
+
+    processed_count = 0
+    tracked_count = 0
+    archived_count = 0
+    skipped_count = 0
+    details = []
+
+    for comp in companies:
+        opp = opp_map.get(comp.id)
+
+        # Check eligibility
+        if current_user.profile:
+            elig_status, elig_reason, _ = check_eligibility(current_user.profile, comp)
+        else:
+            elig_status = "UNKNOWN"
+
+        # 1. Ineligible -> Archive regardless of shortlists
+        if elig_status == "NOT_ELIGIBLE":
+            existing_app = app_map.get(comp.id)
+            if existing_app:
+                existing_app.user_decision = 'archived'
+
+            archive_reason = "INELIGIBLE"
+            set_archived(db=db, user_id=current_user.id, company_id=comp.id, reason=archive_reason)
+            sync_user_calendar_events(db, current_user.id, comp.id)
+            processed_count += 1
+            archived_count += 1
+            details.append({"company": comp.name, "action": "archived", "reason": "Ineligible for drive"})
+            continue
+
+        # 2. Check if shortlist snapshot exists for this company
+        snap = snapshot_map.get(comp.id)
+        if not snap or (not snap.oa_hashes and not snap.interview_hashes and not snap.offer_hashes and not snap.rejected_hashes):
+            # No shortlist email / data ingested for this company -> Leave in Decision Required
+            skipped_count += 1
+            details.append({"company": comp.name, "action": "skipped", "reason": "No shortlist data ingested yet"})
+            continue
+
+        # 3. Drive HAS shortlist snapshot data -> Check NEO ID match
+        has_hash = bool(user_neo_hash and user_neo_hash != "UNSET")
+
+        target_stage = None
+        if has_hash:
+            if user_neo_hash in (snap.offer_hashes or []):
+                target_stage = "Offer"
+            elif user_neo_hash in (snap.interview_hashes or []):
+                target_stage = "Interview"
+            elif user_neo_hash in (snap.oa_hashes or []):
+                target_stage = "OA"
+
+        if target_stage:
+            # User selected / shortlisted -> Track in workspace
+            existing_app = app_map.get(comp.id)
+            rec_state = "Awaiting Shortlist"
+            if target_stage == "OA":
+                rec_state = "Awaiting OA Result"
+            elif target_stage == "Interview":
+                rec_state = "Awaiting Interview Result"
+            elif target_stage == "Offer":
+                rec_state = "Selected"
+
+            if not existing_app:
+                new_app = Application(
+                    user_id=current_user.id,
+                    company_id=comp.id,
+                    status=target_stage,
+                    current_round=target_stage,
+                    match_score=0,
+                    user_decision='tracking',
+                    recruitment_state=rec_state,
+                )
+                db.add(new_app)
+            else:
+                existing_app.user_decision = 'tracking'
+                existing_app.status = target_stage
+                existing_app.recruitment_state = rec_state
+
+            opp_state = set_tracking(db=db, user_id=current_user.id, company_id=comp.id)
+            if opp_state:
+                opp_state.bootstrap_inferred_stage = target_stage
+                opp_state.state_source = "AUTO_FILTER"
+
+            sync_user_calendar_events(db, current_user.id, comp.id)
+            processed_count += 1
+            tracked_count += 1
+            details.append({"company": comp.name, "action": "tracked", "stage": target_stage})
+        else:
+            # Shortlist exists but user NEO ID was not found -> Likely Rejected / Archive
+            existing_app = app_map.get(comp.id)
+            if existing_app:
+                existing_app.user_decision = 'archived'
+
+            set_archived(db=db, user_id=current_user.id, company_id=comp.id, reason="LIKELY_REJECTED")
+            sync_user_calendar_events(db, current_user.id, comp.id)
+            processed_count += 1
+            archived_count += 1
+            details.append({"company": comp.name, "action": "archived", "reason": "Not found in shortlist"})
+
+    db.commit()
+    bump_user_version(current_user.id)
+
+    return {
+        "status": "success",
+        "processed_count": processed_count,
+        "tracked_count": tracked_count,
+        "archived_count": archived_count,
+        "skipped_count": skipped_count,
+        "details": details
+    }

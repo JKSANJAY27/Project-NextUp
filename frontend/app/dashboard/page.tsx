@@ -212,6 +212,15 @@ function DashboardPageContent() {
   const [filterEligibility, setFilterEligibility] = useState("ALL");
   const [selectedCompany, setSelectedCompany] = useState<CompanyWithEligibility | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [decisionEligibilityFilter, setDecisionEligibilityFilter] = useState<"ALL" | "ELIGIBLE" | "NOT_ELIGIBLE" | "UNKNOWN">("ALL");
+  const [autoFiltering, setAutoFiltering] = useState(false);
+  const [showAutoFilterModal, setShowAutoFilterModal] = useState(false);
+  const [autoFilterResult, setAutoFilterResult] = useState<{
+    processed_count: number;
+    tracked_count: number;
+    archived_count: number;
+    skipped_count: number;
+  } | null>(null);
   // Bulk Selection and Comparison states
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([]);
   const [showComparison, setShowComparison] = useState(false);
@@ -983,6 +992,37 @@ function DashboardPageContent() {
     return new Date(oppState.snoozed_until) <= new Date();
   }), [decisionPendingCompanies, opportunityStates]);
 
+  // Filter active decision-pending companies by eligibility filter
+  const filteredDecisionPendingCompanies = React.useMemo(() => {
+    return activeDecisionPendingCompanies.filter(c => {
+      if (decisionEligibilityFilter === "ALL") return true;
+      return c.eligibility_status === decisionEligibilityFilter;
+    });
+  }, [activeDecisionPendingCompanies, decisionEligibilityFilter]);
+
+  const handleRunAutoFilter = async () => {
+    setAutoFiltering(true);
+    setShowAutoFilterModal(false);
+    try {
+      const targetCompanyIds = activeDecisionPendingCompanies.map(c => c.id);
+      const res = await api.post("/applications/auto-filter", { company_ids: targetCompanyIds });
+      if (res.data) {
+        setAutoFilterResult({
+          processed_count: res.data.processed_count || 0,
+          tracked_count: res.data.tracked_count || 0,
+          archived_count: res.data.archived_count || 0,
+          skipped_count: res.data.skipped_count || 0
+        });
+      }
+      await fetchDashboardData();
+    } catch (err) {
+      console.error("Auto-filter failed:", err);
+      alert("Failed to run auto-filter. Please try again.");
+    } finally {
+      setAutoFiltering(false);
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case "Applied": return "bg-blue-600 text-white";
@@ -1403,9 +1443,22 @@ function DashboardPageContent() {
 
             {/* ─── DECISION REQUIRED — Priority Section ─── */}
             {activeDecisionPendingCompanies.length > 0 && (
-              <div className="border-2 border-amber-500/70 bg-amber-500/5 p-6 space-y-6">
+              <div className="border-2 border-amber-500/70 bg-amber-500/5 p-6 space-y-6 relative">
+                {/* Auto-Filter Processing Overlay */}
+                {autoFiltering && (
+                  <div className="absolute inset-0 bg-background/90 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-6 space-y-4 border-2 border-accent">
+                    <div className="h-10 w-10 border-4 border-accent border-t-transparent rounded-full animate-spin" />
+                    <div className="text-center space-y-1">
+                      <h4 className="text-sm font-black uppercase tracking-widest text-accent">Auto-Filtering Decision Required Drives...</h4>
+                      <p className="text-xs text-muted-foreground font-bold uppercase tracking-wider max-w-md">
+                        Checking eligible criteria & matching your Neo ID against historical shortlist attachments in bulk...
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Section header */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-500/40 pb-4">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-amber-500/40 pb-4">
                   <div className="flex items-center gap-3">
                     <div className="h-8 w-8 bg-amber-500 text-black flex items-center justify-center shrink-0 animate-pulse">
                       <AlertTriangle size={16} />
@@ -1418,36 +1471,83 @@ function DashboardPageContent() {
                         </span>
                       </h4>
                       <p className="text-[10px] text-amber-500/70 uppercase tracking-wide mt-0.5">
-                        These registration windows have closed. Did you apply?
+                        These registration windows have closed. Review manually or auto-filter based on shortlists.
                       </p>
                     </div>
                   </div>
-                  {/* Batch archive */}
-                  {selectedDecisionIds.length > 0 && (
+
+                  {/* Filter Pills + Auto-Filter Action Button */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Eligibility Filter Pills */}
+                    <div className="flex items-center border border-amber-500/40 bg-background/60 p-0.5">
+                      {(["ALL", "ELIGIBLE", "NOT_ELIGIBLE", "UNKNOWN"] as const).map((filter) => (
+                        <button
+                          key={filter}
+                          onClick={() => setDecisionEligibilityFilter(filter)}
+                          className={`px-2 py-1 text-[9px] font-black uppercase tracking-wider transition-all ${
+                            decisionEligibilityFilter === filter
+                              ? "bg-amber-500 text-black"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {filter === "NOT_ELIGIBLE" ? "INELIGIBLE" : filter}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Auto-Filter Button */}
                     <button
-                      onClick={() => {
-                        setArchiveConfirm({
-                          isOpen: true,
-                          title: "Archive Selected",
-                          message: `Are you sure you want to archive the ${selectedDecisionIds.length} selected opportunities?`,
-                          onConfirm: async () => {
-                            setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
-                            await Promise.all(selectedDecisionIds.map(id => handleOpportunityAction(id, 'archive', 'NOT_APPLIED')));
-                            setSelectedDecisionIds([]);
-                          }
-                        });
-                      }}
-                      className="flex items-center gap-2 h-8 px-4 border border-red-500/50 bg-red-500/10 text-red-400 font-bold text-[10px] uppercase tracking-wider hover:bg-red-500 hover:text-white transition-all shrink-0"
+                      onClick={() => setShowAutoFilterModal(true)}
+                      className="flex items-center gap-1.5 h-8 px-3 bg-accent text-black font-extrabold text-[10px] uppercase tracking-wider hover:bg-accent/80 transition-all border border-accent shrink-0 shadow-sm"
+                      title="Automatically filter remaining decision-pending drives using shortlist matching"
                     >
-                      <Archive size={12} />
-                      Archive Selected ({selectedDecisionIds.length})
+                      <Sparkles size={12} />
+                      ⚡ Auto-Filter Drives
                     </button>
-                  )}
+
+                    {/* Batch archive */}
+                    {selectedDecisionIds.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setArchiveConfirm({
+                            isOpen: true,
+                            title: "Archive Selected",
+                            message: `Are you sure you want to archive the ${selectedDecisionIds.length} selected opportunities?`,
+                            onConfirm: async () => {
+                              setArchiveConfirm(prev => ({ ...prev, isOpen: false }));
+                              await Promise.all(selectedDecisionIds.map(id => handleOpportunityAction(id, 'archive', 'NOT_APPLIED')));
+                              setSelectedDecisionIds([]);
+                            }
+                          });
+                        }}
+                        className="flex items-center gap-2 h-8 px-4 border border-red-500/50 bg-red-500/10 text-red-400 font-bold text-[10px] uppercase tracking-wider hover:bg-red-500 hover:text-white transition-all shrink-0"
+                      >
+                        <Archive size={12} />
+                        Archive Selected ({selectedDecisionIds.length})
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                {/* Cards grid — newest expired first */}
+                {/* Result Toast Notice */}
+                {autoFilterResult && (
+                  <div className="bg-emerald-950/40 border border-emerald-500/60 p-3 flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-bold text-emerald-400 uppercase tracking-wide">
+                      ✅ Auto-Filter Complete: Processed {autoFilterResult.processed_count} drives ({autoFilterResult.tracked_count} moved to tracking, {autoFilterResult.archived_count} archived
+                      {autoFilterResult.skipped_count > 0 ? `, ${autoFilterResult.skipped_count} kept for manual review due to missing shortlist emails` : ""}).
+                    </p>
+                    <button
+                      onClick={() => setAutoFilterResult(null)}
+                      className="text-xs text-emerald-400 font-bold hover:text-white uppercase px-1"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
+                {/* Cards grid — filtered by eligibility */}
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {[...activeDecisionPendingCompanies]
+                  {[...filteredDecisionPendingCompanies]
                     .sort((a, b) => {
                       const dA = a.registration_deadline ? new Date(a.registration_deadline).getTime() : 0;
                       const dB = b.registration_deadline ? new Date(b.registration_deadline).getTime() : 0;
@@ -2700,6 +2800,81 @@ function DashboardPageContent() {
           companyId={selectedCompany.id}
           onClose={() => setSelectedCompany(null)}
         />
+      )}
+
+      {/* Auto-Filter Explanation Modal */}
+      {showAutoFilterModal && (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-background border-2 border-accent max-w-lg w-full p-6 space-y-6 shadow-2xl relative">
+            <div className="flex items-start justify-between border-b border-border pb-4">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-accent/10 border border-accent text-accent">
+                  <Sparkles size={20} />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base uppercase tracking-wider text-foreground">AUTOMATIC DRIVE FILTERING</h3>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-widest mt-0.5">How your pending drives will be processed</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAutoFilterModal(false)}
+                className="text-muted-foreground hover:text-foreground text-sm font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs font-bold uppercase tracking-wider text-muted-foreground leading-relaxed">
+              <div className="p-3 border border-border bg-muted/20 space-y-2">
+                <div className="flex items-center gap-2 text-foreground font-black text-xs">
+                  <span>1. ELIGIBILITY VERIFICATION</span>
+                </div>
+                <p className="text-[11px] normal-case text-muted-foreground font-normal">
+                  If your profile does not satisfy a company’s eligibility rules (CGPA, branch, arrears), the drive is automatically <strong className="text-red-400 uppercase font-black">Archived as Ineligible</strong>.
+                </p>
+              </div>
+
+              <div className="p-3 border border-border bg-muted/20 space-y-2">
+                <div className="flex items-center gap-2 text-foreground font-black text-xs">
+                  <span>2. SHORTLIST & NEO ID MATCHING</span>
+                </div>
+                <p className="text-[11px] normal-case text-muted-foreground font-normal">
+                  For eligible drives with ingested shortlist attachments, your encrypted Neo ID hash is matched against the candidate lists:
+                </p>
+                <ul className="list-disc list-inside text-[11px] normal-case text-muted-foreground font-normal space-y-1 pl-2">
+                  <li><strong className="text-emerald-400 font-bold">Found in shortlist:</strong> Moved to Active Tracking at the exact stage (OA / Interview / Offer).</li>
+                  <li><strong className="text-red-400 font-bold">Not found in shortlist:</strong> Archived as Likely Rejected.</li>
+                </ul>
+              </div>
+
+              <div className="p-3 border border-amber-500/40 bg-amber-500/10 space-y-1">
+                <div className="flex items-center gap-2 text-amber-400 font-black text-xs">
+                  <AlertTriangle size={14} />
+                  <span>3. DRIVES WITHOUT SHORTLIST EMAILS</span>
+                </div>
+                <p className="text-[11px] normal-case text-amber-200/80 font-normal">
+                  If no shortlist email has been received yet for a drive, it will be <strong>left untouched in Decision Required</strong> so you can review it manually.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-border pt-4">
+              <button
+                onClick={() => setShowAutoFilterModal(false)}
+                className="h-10 px-4 border border-border bg-muted/30 hover:bg-muted text-xs font-bold uppercase tracking-wider transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRunAutoFilter}
+                className="h-10 px-5 bg-accent text-black font-black text-xs uppercase tracking-wider hover:bg-accent/80 transition-all border border-accent flex items-center gap-2"
+              >
+                <Sparkles size={14} />
+                Run Auto-Filter Now ({activeDecisionPendingCompanies.length} Drives)
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <ConfirmArchiveModal
