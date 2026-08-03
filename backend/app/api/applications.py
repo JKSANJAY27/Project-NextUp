@@ -483,7 +483,6 @@ def auto_filter_decision_pending(
 
             archive_reason = "INELIGIBLE"
             set_archived(db=db, user_id=current_user.id, company_id=comp.id, reason=archive_reason)
-            sync_user_calendar_events(db, current_user.id, comp.id)
             processed_count += 1
             archived_count += 1
             details.append({"company": comp.name, "action": "archived", "reason": "Ineligible for drive"})
@@ -541,7 +540,6 @@ def auto_filter_decision_pending(
                 opp_state.bootstrap_inferred_stage = target_stage
                 opp_state.state_source = "AUTO_FILTER"
 
-            sync_user_calendar_events(db, current_user.id, comp.id)
             processed_count += 1
             tracked_count += 1
             details.append({"company": comp.name, "action": "tracked", "stage": target_stage})
@@ -552,13 +550,19 @@ def auto_filter_decision_pending(
                 existing_app.user_decision = 'archived'
 
             set_archived(db=db, user_id=current_user.id, company_id=comp.id, reason="LIKELY_REJECTED")
-            sync_user_calendar_events(db, current_user.id, comp.id)
             processed_count += 1
             archived_count += 1
             details.append({"company": comp.name, "action": "archived", "reason": "Not found in shortlist"})
 
     db.commit()
     bump_user_version(current_user.id)
+
+    # Single bulk calendar sync after all state changes are committed —
+    # replaces the previous per-company calls that caused 200+ DB round-trips and timed out.
+    try:
+        sync_user_calendar_events(db, current_user.id, company_id=None)
+    except Exception as e:
+        logger.warning(f"Calendar sync after auto-filter failed (non-fatal): {e}")
 
     return {
         "status": "success",
