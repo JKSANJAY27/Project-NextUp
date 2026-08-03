@@ -71,6 +71,8 @@ def update_user_me(
     db: Session = Depends(get_db)
 ):
     profile = db.query(StudentProfile).filter(StudentProfile.user_id == current_user.id).first()
+    old_hash = profile.neo_id_hash if profile else None
+    new_hash = None
     
     # If student profile does not exist, initialize it
     if not profile:
@@ -94,8 +96,6 @@ def update_user_me(
     else:
         # Exclude unset fields, but pop special blind index neo_id
         update_data = user_in.dict(exclude_unset=True)
-        old_hash = profile.neo_id_hash
-        new_hash = None
         if "neo_id" in update_data:
             neo_id = update_data.pop("neo_id")
             if neo_id:
