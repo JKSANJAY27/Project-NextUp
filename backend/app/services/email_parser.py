@@ -78,6 +78,9 @@ GENERIC_COMPANY_NAMES = frozenset({
     "govt", "govt of india", "government", "govt org", "govt job",
     "ppt & online", "ppt and online", "ppt online", "ppt", "online test",
     "selection process", "placement process",
+    # Marks and grade headers mistaken for company names
+    "x", "xii", "x/xii", "x and xii", "x & xii", "10th", "12th", "10th & 12th",
+    "10th and 12th", "class 10", "class 12", "class x", "class xii",
 })
 
 def is_generic_company_name(name: str) -> bool:
@@ -1757,7 +1760,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     #    1c. Subject line extraction (last resort, very cleaned)
     #    1d. Unknown Company (never guess)
     comp_match = re.search(
-        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Name of the Company|Company Name|Name of the Organisation|Organisation|\bCompany\b(?!\s*(?:website|profile|url|link|domain|page|site|info|description|overview|logo|details)))\s*[\*_]*\s*[:\-\–\—\s][:\-\–\—\s\*_]*\s*\*?([^\n\r*]+)",
+        r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Name of the Company|Company Name|Name of the Organisation|Organisation|\bCompany\b(?!\s*(?:website|profile|url|link|domain|page|site|info|description|overview|logo|details)))\s*[\*_]*\s*[:\-\–\—\s]*[\n\r\s\*_]*\*?([A-Za-z0-9\s&.,\'\(\)\-]+?)(?=\s*[\n\r]|\s*\*|$)",
         email_body,
         re.IGNORECASE
     )
