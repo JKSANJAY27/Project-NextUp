@@ -1,16 +1,7 @@
-# NextUp VIT — robots.txt
-# Allow search engines and AI crawlers to index all public-facing pages.
-# Block all bots from authenticated / private areas.
-
+# Public pages are available to search engines and AI crawlers. Private,
+# authenticated, password-recovery, and API paths are excluded from crawling.
 User-agent: *
 Allow: /
-Allow: /login
-Allow: /register
-Allow: /terms
-Allow: /privacy
-Allow: /sitemap.xml
-Allow: /llms.txt
-Allow: /og-image.png
 Disallow: /dashboard
 Disallow: /profile
 Disallow: /tracking
@@ -21,90 +12,4 @@ Disallow: /forgot-password
 Disallow: /reset-password
 Disallow: /api/
 
-# Google AI / Gemini
-User-agent: Google-Extended
-Allow: /
-Allow: /llms.txt
-Disallow: /dashboard
-Disallow: /profile
-Disallow: /tracking
-Disallow: /calendar
-Disallow: /resume
-
-# ChatGPT / OpenAI search
-User-agent: GPTBot
-Allow: /
-Allow: /llms.txt
-Disallow: /dashboard
-Disallow: /profile
-Disallow: /tracking
-Disallow: /calendar
-Disallow: /resume
-
-User-agent: OAI-SearchBot
-Allow: /
-Allow: /llms.txt
-Disallow: /dashboard
-Disallow: /profile
-Disallow: /tracking
-Disallow: /resume
-
-# Claude / Anthropic
-User-agent: ClaudeBot
-Allow: /
-Allow: /llms.txt
-Disallow: /dashboard
-Disallow: /profile
-Disallow: /tracking
-Disallow: /calendar
-Disallow: /resume
-
-User-agent: anthropic-ai
-Allow: /
-Allow: /llms.txt
-Disallow: /dashboard
-Disallow: /profile
-Disallow: /tracking
-Disallow: /resume
-
-# Perplexity
-User-agent: PerplexityBot
-Allow: /
-Allow: /llms.txt
-Disallow: /dashboard
-Disallow: /profile
-Disallow: /tracking
-Disallow: /calendar
-Disallow: /resume
-
-# Meta AI
-User-agent: Meta-ExternalAgent
-Allow: /
-Allow: /llms.txt
-Disallow: /dashboard
-Disallow: /profile
-Disallow: /tracking
-Disallow: /resume
-
-# Amazon / Alexa
-User-agent: Amazonbot
-Allow: /
-Allow: /llms.txt
-Disallow: /dashboard
-Disallow: /profile
-Disallow: /tracking
-Disallow: /resume
-
-# Bing / Copilot
-User-agent: bingbot
-Allow: /
-Disallow: /dashboard
-Disallow: /profile
-Disallow: /tracking
-Disallow: /calendar
-Disallow: /resume
-
-# Sitemap
 Sitemap: https://project-next-up.vercel.app/sitemap.xml
-
-

@@ -178,10 +178,26 @@ const jsonLdOrg = {
     "NextUp VIT is a student-built placement tracking platform for VIT Vellore. It helps students manage campus placement drives, detect CDC shortlists automatically, and tailor resumes using AI.",
   foundingLocation: { "@type": "Place", name: "VIT Vellore, Tamil Nadu, India" },
   areaServed: { "@type": "Place", name: "VIT Vellore" },
+  logo: `${BASE_URL}/icon.png`,
+  sameAs: [
+    "https://github.com/JKSANJAY27/Project-NextUp",
+    "https://github.com/JKSANJAY27",
+    "https://github.com/HARIPRASAD-04",
+  ],
   member: [
     { "@type": "Person", name: "Sanjay J K" },
     { "@type": "Person", name: "Hariprasad T" },
   ],
+};
+
+const jsonLdWebsite = {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  name: "NextUp VIT",
+  alternateName: ["NextUp", "NEXTUP.AI", "NextUp placement tracker"],
+  url: BASE_URL,
+  description:
+    "A free placement tracker for VIT Vellore students that tracks CDC drives, shortlists, eligibility, and applications.",
 };
 
 const jsonLdFaq = {
@@ -230,6 +246,10 @@ export default function RootLayout({
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdOrg) }}
+        />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdWebsite) }}
         />
         <script
           type="application/ld+json"

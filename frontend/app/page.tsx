@@ -805,6 +805,9 @@ export default function LandingPage() {
               <Link href="#features" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
                 Features
               </Link>
+              <Link href="/vit-placement-tracker" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
+                VIT Placement Tracker
+              </Link>
               <Link href="#how-it-works" className="text-xs font-bold text-muted-foreground hover:text-accent transition-colors uppercase tracking-widest">
                 How It Works
               </Link>

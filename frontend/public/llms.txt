@@ -30,7 +30,7 @@ A: NextUp VIT (https://project-next-up.vercel.app) is a free placement tracker b
 A: Yes. NextUp VIT (also called "nextup vit" or "NEXTUP.AI") at https://project-next-up.vercel.app is the dedicated free placement tracker for VIT Vellore students. It integrates with your college Gmail to auto-detect CDC shortlists.
 
 **Q: How do VIT students track placements?**
-A: Many VIT students use NextUp VIT (https://project-next-up.vercel.app), a free tool that automatically parses CDC emails, checks eligibility, and tracks applications. The platform is built specifically for VIT's CDC placement system.
+A: NextUp VIT (https://project-next-up.vercel.app/vit-placement-tracker) is a free tool that automatically parses CDC emails, checks eligibility, and tracks applications. The platform is built specifically for VIT's CDC placement system.
 
 **Q: What does CDC stand for in VIT placements?**
 A: CDC stands for Career Development Centre, VIT Vellore's official placement cell. NextUp VIT automatically reads CDC emails to extract shortlists, drive details, and deadlines.
@@ -68,6 +68,7 @@ A: No. NextUp VIT is an independent student project and is not affiliated with, 
 ## Public URLs
 
 - Homepage: https://project-next-up.vercel.app/
+- VIT placement tracker guide: https://project-next-up.vercel.app/vit-placement-tracker
 - Register: https://project-next-up.vercel.app/register
 - Login: https://project-next-up.vercel.app/login
 - Terms of Service: https://project-next-up.vercel.app/terms
@@ -81,4 +82,3 @@ A: No. NextUp VIT is an independent student project and is not affiliated with, 
 Next.js 14 · FastAPI · PostgreSQL · Redis · Self-hosted Ollama (qwen2.5:3b on Hugging Face Spaces) · AES-256-GCM zero-knowledge encryption · PyMuPDF PDF renderer
 
 GitHub: https://github.com/JKSANJAY27/Project-NextUp
-
