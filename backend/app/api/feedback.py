@@ -1,55 +1,142 @@
-"""Authenticated issue reports, delivered to the product mailbox via SMTP."""
+"""Authenticated issue reports, delivered through Resend or SMTP."""
+import json
 import logging
-import mimetypes
 import smtplib
 from email.message import EmailMessage
-from typing import List, Optional
+from urllib import request as urllib_request
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.auth import get_current_user
 from app.core.config import settings
 from app.models.models import User
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
-MAX_FILES = 3
-MAX_FILE_SIZE = 5 * 1024 * 1024
 
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def submit_feedback(
-    message: str = Form(..., min_length=8, max_length=5000),
-    page_url: str = Form("", max_length=2000),
-    screenshots: Optional[List[UploadFile]] = File(None),
+    request: Request,
     user: User = Depends(get_current_user),
 ):
-    if not settings.FEEDBACK_SMTP_HOST or not settings.FEEDBACK_SMTP_USERNAME or not settings.FEEDBACK_SMTP_PASSWORD:
-        logging.error("Feedback SMTP is not configured")
-        raise HTTPException(status_code=503, detail="Issue reporting is temporarily unavailable.")
-    attachments = screenshots or []
-    if len(attachments) > MAX_FILES:
-        raise HTTPException(status_code=400, detail=f"Attach at most {MAX_FILES} screenshots.")
+    # Deliberately JSON-only: issue reports are text-only. Removing file
+    # uploads eliminates multipart boundary/list coercion errors and makes
+    # the feedback path dependable on browsers and mobile networks.
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not read the issue report.")
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="The issue report format is invalid.")
+
+    message = str(payload.get("message") or "").strip()
+    page_url = str(payload.get("page_url") or "").strip()
+    if not 8 <= len(message) <= 5000:
+        raise HTTPException(status_code=400, detail="Describe the issue using 8 to 5,000 characters.")
+    if len(page_url) > 2000:
+        raise HTTPException(status_code=400, detail="The page URL is too long.")
+
+    smtp_configured = bool(
+        settings.FEEDBACK_SMTP_HOST
+        and settings.FEEDBACK_SMTP_USERNAME
+        and settings.FEEDBACK_SMTP_PASSWORD
+    )
+
+    display_name = (user.profile.full_name if user.profile else None) or "Student"
+    report_text = (
+        "New issue report\n\n"
+        f"From: {display_name} <{user.email}>\n"
+        f"Page: {page_url or 'not provided'}\n\n"
+        f"{message}"
+    )
+
+    if not smtp_configured and not getattr(settings, "RESEND_API_KEY", ""):
+        # SMTP not yet configured - persist the report to server logs so it's
+        # never silently dropped. Render logs are retained and searchable.
+        logging.warning(
+            "[FEEDBACK] SMTP not configured - logging report to server logs.\n"
+            f"From: {display_name} <{user.email}>\n"
+            f"Page: {page_url or 'not provided'}\n"
+            f"Message:\n{message}"
+        )
 
     email = EmailMessage()
     email["Subject"] = f"[NextUp issue] {user.email}"
     email["From"] = settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME
     email["To"] = settings.FEEDBACK_RECIPIENT_EMAIL
-    email.set_content(f"New issue report\n\nFrom: {user.full_name or 'Student'} <{user.email}>\nPage: {page_url or 'not provided'}\n\n{message}")
-    for upload in attachments:
-        if not (upload.content_type or "").startswith("image/"):
-            raise HTTPException(status_code=400, detail="Only image screenshots can be attached.")
-        data = await upload.read()
-        if len(data) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=400, detail="Each screenshot must be 5 MB or smaller.")
-        mime_type, _ = mimetypes.guess_type(upload.filename or "screenshot.png")
-        maintype, subtype = (mime_type or "image/png").split("/", 1)
-        email.add_attachment(data, maintype=maintype, subtype=subtype, filename=upload.filename or "screenshot.png")
-    try:
-        with smtplib.SMTP(settings.FEEDBACK_SMTP_HOST, settings.FEEDBACK_SMTP_PORT, timeout=20) as smtp:
-            smtp.starttls()
-            smtp.login(settings.FEEDBACK_SMTP_USERNAME, settings.FEEDBACK_SMTP_PASSWORD)
-            smtp.send_message(email)
-    except Exception:
-        logging.exception("Failed to deliver feedback email")
-        raise HTTPException(status_code=503, detail="Could not deliver the report. Please try again.")
+    email.set_content(report_text)
+    recipients = [addr.strip() for addr in settings.FEEDBACK_RECIPIENT_EMAIL.split(",") if addr.strip()]
+
+    delivered = False
+
+    # Primary: Resend HTTP API.
+    resend_api_key = getattr(settings, "RESEND_API_KEY", "") or ""
+    if resend_api_key:
+        try:
+            payload = json.dumps({
+                "from": f"NextUp Issue Reports <{settings.FEEDBACK_FROM_EMAIL or 'onboarding@resend.dev'}>",
+                "to": recipients,
+                "subject": email["Subject"],
+                "text": report_text,
+            }).encode()
+            req = urllib_request.Request(
+                "https://api.resend.com/emails",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib_request.urlopen(req, timeout=15) as resp:
+                if resp.status in (200, 201):
+                    delivered = True
+                    logging.info("[FEEDBACK] Delivered via Resend to %s", recipients)
+        except Exception as exc:
+            logging.warning("[FEEDBACK] Resend delivery failed: %s", exc)
+
+    # Secondary: SMTP (works locally; usually blocked on Render).
+    smtp_configured = bool(
+        settings.FEEDBACK_SMTP_HOST
+        and settings.FEEDBACK_SMTP_USERNAME
+        and settings.FEEDBACK_SMTP_PASSWORD
+    )
+    if not delivered and smtp_configured:
+        from_addr = settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME
+        for port, use_ssl in [(465, True), (settings.FEEDBACK_SMTP_PORT, False)]:
+            try:
+                if use_ssl:
+                    ctx = smtplib.SMTP_SSL(settings.FEEDBACK_SMTP_HOST, port, timeout=15)
+                else:
+                    ctx = smtplib.SMTP(settings.FEEDBACK_SMTP_HOST, port, timeout=15)
+                    ctx.ehlo()
+                    ctx.starttls()
+                    ctx.ehlo()
+                with ctx as smtp:
+                    smtp.login(settings.FEEDBACK_SMTP_USERNAME, settings.FEEDBACK_SMTP_PASSWORD)
+                    smtp.sendmail(from_addr, recipients, email.as_string())
+                delivered = True
+                logging.info("[FEEDBACK] Delivered via SMTP port %s", port)
+                break
+            except Exception as exc:
+                logging.warning("[FEEDBACK] SMTP port %s failed: %s", port, exc)
+
+    # Fallback: preserve in Render logs.
+    if not delivered:
+        logging.warning(
+            "[FEEDBACK-REPORT] All delivery methods failed - report preserved here.\n"
+            "From: %s <%s>\nPage: %s\nMessage:\n%s",
+            display_name, user.email, page_url or "not provided", message,
+        )
+
+    if not delivered:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Your report could not be delivered right now. Please try again "
+                "shortly; the team has a copy in the server logs."
+            ),
+        )
+
     return {"status": "sent"}

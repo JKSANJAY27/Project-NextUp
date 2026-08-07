@@ -3,6 +3,8 @@ from app.services.email_parser import (
     extract_min_cgpa,
     ground_company_in_source,
     ground_role_facts_in_source,
+    extract_timeline_events,
+    merge_source_timeline_events,
 )
 
 
@@ -120,4 +122,27 @@ def test_subject_company_handles_internship_heading():
     assert grounded["extracted_data"]["company"] == {
         "value": "PLAY SIMPLE GAMES",
         "confidence": 0.99,
+    }
+
+
+def test_labelled_ppt_and_test_dates_are_added_to_timeline():
+    body = """
+    Date of Visit: Virtual
+    PPT: 10.08.2026
+    Test: 10.08.2026
+    Interview Date: will be informed later
+    Last date for Registration: 05th Aug 2026 (5.00 pm)
+    """
+    timeline = extract_timeline_events(body)
+    by_stage = {event["stage"]: event for event in timeline}
+
+    # Extractor normalizes source-written IST midnight to UTC; the frontend
+    # renders these values back as 10 Aug 2026 in Asia/Kolkata.
+    assert by_stage["PRE_PLACEMENT_TALK"]["date_iso"].startswith("2026-08-09T18:30")
+    assert by_stage["ONLINE_ASSESSMENT"]["date_iso"].startswith("2026-08-09T18:30")
+
+    parsed = {"extracted_data": {"events": []}}
+    merged = merge_source_timeline_events(parsed, body)
+    assert {event["stage"] for event in merged["extracted_data"]["events"]} == {
+        "PRE_PLACEMENT_TALK", "ONLINE_ASSESSMENT", "REGISTRATION"
     }

@@ -2118,7 +2118,7 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
 _STAGE_KEYWORDS: List[tuple] = [
     # (regex pattern, canonical stage, sequence)
     (r"\b(?:last\s+date\s+(?:for\s+)?registration|registration\s+deadline|last\s+date\s+to\s+apply|apply\s+(?:on|before))\b", "REGISTRATION", 1),
-    (r"\b(?:online\s+test|online\s+assessment|coding\s+test|written\s+test|oa|assessment)\b", "ONLINE_ASSESSMENT", 2),
+    (r"\b(?:online\s+test|online\s+assessment|coding\s+test|written\s+test|oa|assessment|test)\b", "ONLINE_ASSESSMENT", 2),
     (r"\b(?:pre[-\s]?placement\s+talk|ppt|pre[-\s]?placement|company\s+talk|company\s+presentation)\b", "PRE_PLACEMENT_TALK", 3),
     (r"\b(?:technical\s+interview|tech\s+interview|coding\s+interview|technical\s+round)\b", "TECHNICAL_INTERVIEW", 4),
     (r"\b(?:hr\s+interview|hr\s+round|managerial\s+interview|managerial\s+round|final\s+interview)\b", "HR_INTERVIEW", 5),
@@ -2133,8 +2133,8 @@ _DATE_PATTERN = (
     r"\d{1,2}\s*(?:st|nd|rd|th)?\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s*(?:\d{2,4})?"
     r"|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:\s*,?\s*\d{4})?"
     # ISO-like: 2026-07-08, 08-07-2026
-    r"|\d{4}[-/]\d{2}[-/]\d{2}"
-    r"|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"
+    r"|\d{4}[-/.]\d{2}[-/.]\d{2}"
+    r"|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}"
     r")"
     # Optional time: allows separators like -, @, at, etc., and parses times with or without minutes/parentheses
     r"(?:\s*(?:-|@|at|from|,)?\s*[\(]?\s*\d{1,2}[:.\s]\d{2}\s*(?:am|pm)?[\)]?|\s*(?:-|@|at|from|,)?\s*\d{1,2}\s*(?:am|pm))?"
@@ -2186,7 +2186,15 @@ def extract_timeline_events(email_body: str, subject: str = "", email_timestamp=
             search_window = " ".join(lines[i:i+3])
             date_match = re.search(_DATE_PATTERN, search_window, re.IGNORECASE)
             date_iso = None
-            if date_match:
+            # A following registration deadline must never become an
+            # interview date when the source explicitly says the interview
+            # will be informed later.
+            no_date_announced = bool(re.search(
+                r"will\s+be\s+(?:informed|announced)\s+later|to\s+be\s+announced",
+                line,
+                re.IGNORECASE,
+            ))
+            if date_match and not no_date_announced:
                 raw_date = date_match.group(0).strip()
                 parsed_dt = dateparser.parse(raw_date, settings=dp_settings)
                 if parsed_dt:
@@ -2233,6 +2241,46 @@ def extract_timeline_events(email_body: str, subject: str = "", email_timestamp=
     # Sort by sequence, then date
     events.sort(key=lambda e: (e["sequence"], e["date_iso"] or ""))
     return events
+
+
+def merge_source_timeline_events(parsed: Dict[str, Any], email_body: str,
+                                 subject: str = "", email_timestamp=None) -> Dict[str, Any]:
+    """Supplement AI milestones with explicitly labelled source dates.
+
+    AI parsing occasionally omits a timeline item even though a CDC email
+    plainly says ``PPT: 10.08.2026`` or ``Test: 10.08.2026``. The regex
+    extractor is deliberately limited to a recognised stage and a nearby
+    written date; it therefore provides safe, source-grounded additions
+    without inventing a conventional placement timeline.
+    """
+    ext = parsed.get("extracted_data") if isinstance(parsed, dict) else None
+    if not isinstance(ext, dict):
+        return parsed
+
+    source_events = [event for event in extract_timeline_events(
+        email_body, subject, email_timestamp=email_timestamp
+    ) if event.get("date_iso")]
+    if not source_events:
+        return parsed
+
+    existing_events = ext.get("events") if isinstance(ext.get("events"), list) else []
+    merged = [event for event in existing_events if isinstance(event, dict)]
+    by_key = {
+        (event.get("stage"), event.get("round_number")): index
+        for index, event in enumerate(merged)
+    }
+    for event in source_events:
+        key = (event.get("stage"), event.get("round_number"))
+        if key in by_key:
+            # A deterministic, source-labelled date takes precedence over a
+            # missing or model-supplied date for the same milestone.
+            merged[by_key[key]] = {**merged[by_key[key]], **event, "confidence": 0.98}
+        else:
+            merged.append({**event, "confidence": 0.98})
+
+    merged.sort(key=lambda event: (event.get("sequence") or 99, event.get("date_iso") or ""))
+    ext["events"] = merged
+    return parsed
 
 
 def build_regex_fallback_response(email_body: str, subject: str = "", force_announcement: bool = False, email_timestamp=None) -> Dict[str, Any]:
@@ -2524,6 +2572,12 @@ def parse_placement_email(
     parsed = ground_eligibility_in_source(parsed, email_body)
     # Ground registration deadline_iso using REGISTRATION milestone or fallback regex.
     parsed = ground_deadline_in_source(parsed, email_body, subject)
+    # Deterministically retain explicit PPT/Test/etc. dates when the model
+    # omits them from events[]. This runs after the AI response is grounded,
+    # so only source-written milestones are added or corrected.
+    parsed = merge_source_timeline_events(
+        parsed, email_body, subject, email_timestamp=email_timestamp
+    )
     return parsed
 
 

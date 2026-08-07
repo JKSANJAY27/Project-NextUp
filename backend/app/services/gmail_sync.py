@@ -178,6 +178,26 @@ def company_grounded_in_email(company_name: str, email_text_lower: str) -> bool:
     return any(_key_in_text(t, email_text_lower) for t in tokens)
 
 
+def company_grounded_in_event(company_name: str, subject: str, body: str,
+                              attachments: Optional[list] = None) -> bool:
+    """Require source evidence before an update can modify a drive.
+
+    The parser's extracted company name is a useful routing hint, not proof.
+    This final gate is deliberately evaluated next to event creation as well
+    as during fuzzy matching: a wrongly parsed name must not attach an OA or
+    shortlist email to an unrelated drive through either the normal or the
+    pending-event reconciliation path. Attachment filenames are included
+    because some CDC updates name the company only in the attached sheet.
+    """
+    attachment_names = " ".join(
+        str(a.get("filename") or a.get("file_name") or "")
+        for a in (attachments or [])
+        if isinstance(a, dict)
+    )
+    source_text = f"{subject or ''}\n{body or ''}\n{attachment_names}".lower()
+    return company_grounded_in_email(company_name, source_text)
+
+
 def is_company_name_match(name1: str, name2: str) -> bool:
     if not name1 or not name2:
         return False
@@ -1223,6 +1243,23 @@ def reconcile_pending_events_for_company(db: Session, company: Company):
         attachments = payload.get("attachments", [])
         
         email_timestamp = datetime.fromisoformat(email_timestamp_str.replace("Z", "+00:00")) if email_timestamp_str else datetime.utcnow()
+
+        # The pending-event path used to trust the parser's company_name after
+        # a fuzzy name match. If the model mislabeled a Wakefit mail as Play
+        # Simple Games, reconciliation then created a false shortlist event
+        # and advanced applications. Source text is the authority.
+        if not company_grounded_in_event(company.name, subject, body, attachments):
+            pe.status = "REQUIRES_REVIEW"
+            db.add(pe)
+            log_execution_stage(
+                db, job.id, "COMPANY_MATCHED", "SKIPPED",
+                f"Pending update was not attached to {company.name}: company name is absent from source email."
+            )
+            logger.warning(
+                f"Pending event {pe.id} blocked from {company.name}: "
+                "company name is not grounded in subject, body, or attachment filename."
+            )
+            continue
         
         event = db.query(CompanyEvent).filter(
             CompanyEvent.company_id == company.id,
@@ -2472,6 +2509,35 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
                     )
 
             # Create Company Event for this role/workspace
+            # A parsed company name is never enough evidence for an update.
+            # Keep this check immediately beside event creation so future
+            # routing changes cannot bypass the cross-company safety gate.
+            if not is_announcement and not company_grounded_in_event(
+                company.name, subject, body, attachments
+            ):
+                existing_pending = db.query(PendingCompanyEvent).filter(
+                    PendingCompanyEvent.raw_ingestion_job_id == job.id,
+                    PendingCompanyEvent.company_name == company_name,
+                ).first()
+                if not existing_pending:
+                    db.add(PendingCompanyEvent(
+                        raw_ingestion_job_id=job.id,
+                        company_name=company_name,
+                        role_name=role,
+                        event_type=event_type,
+                        status="REQUIRES_REVIEW",
+                        parsed_payload=validated_info,
+                    ))
+                log_execution_stage(
+                    db, job.id, "EVENT_CREATED", "SKIPPED",
+                    f"Blocked {event_type} event for {company.name}: no company evidence in source email."
+                )
+                logger.warning(
+                    f"Job {job.id}: blocked ungrounded {event_type} update from "
+                    f"attaching to {company.name}. Subject: {subject!r}"
+                )
+                continue
+
             event = db.query(CompanyEvent).filter(
                 CompanyEvent.company_id == company.id,
                 CompanyEvent.event_type == event_type,

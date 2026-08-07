@@ -95,6 +95,11 @@ def detect_db_changes(session, flush_context):
             elif classname in ("CompanyEvent", "PendingCompanyEvent"):
                 if hasattr(obj, "company_id") and obj.company_id:
                     companies_to_bump.add(obj.company_id)
+                # Company cards and dashboard summaries include event-derived
+                # fields (deadlines, latest status). Invalidate the shared
+                # listing as well, otherwise hundreds of users can receive a
+                # stale list until its TTL expires.
+                bump_companies_list = True
                     
             # Announcements
             elif classname == "Announcement":

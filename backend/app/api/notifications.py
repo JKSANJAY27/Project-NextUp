@@ -10,6 +10,7 @@ from app.api.auth import get_current_user
 from app.models.models import User, Notification, CompanyEvent, Company, IngestionAuditLog, Application, OpportunityState
 from app.schemas.schemas import NotificationOut, NotificationDetail, NotificationBundle
 from app.services.calendar_sync import is_rejected_status
+from app.core.redis import get_cache, set_cache, get_user_version
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -22,6 +23,16 @@ def get_notifications(
     db: Session = Depends(get_db)
 ):
     """Fetch all notifications for the authenticated user, bundled by company/workspace."""
+    user_version = get_user_version(current_user.id)
+    cursor_key = cursor.isoformat() if cursor else "first"
+    cache_key = (
+        f"nextup:cache:user:{current_user.id}:notifications:v{user_version}:"
+        f"scope:{scope}:cursor:{cursor_key}:limit:{limit}"
+    )
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
+
     # Find companies where application is rejected or opportunity state is archived
     apps = db.query(Application).filter(Application.user_id == current_user.id).all()
     opp_states = db.query(OpportunityState).filter(OpportunityState.user_id == current_user.id).all()
@@ -125,6 +136,7 @@ def get_notifications(
         reverse=True
     )
     
+    set_cache(cache_key, sorted_bundles, expire_seconds=20)
     return sorted_bundles
 
 @router.patch("/{notification_id}/read", response_model=NotificationOut)

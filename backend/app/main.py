@@ -353,11 +353,8 @@ def admin_reset_and_reparse(request: Request, since: str = "2026-06-29"):
 def admin_cache_stats():
     """Cache health: whether Redis is connected (caching absorbs DB egress)
     and the hit/miss counters since process start."""
-    from app.core.redis import metrics, redis_client
-    return {
-        "redis_connected": redis_client is not None,
-        "metrics": dict(metrics),
-    }
+    from app.core.redis import cache_health
+    return cache_health()
 
 
 @app.get("/api/admin/ai-health")

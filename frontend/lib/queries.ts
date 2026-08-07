@@ -28,7 +28,9 @@ export function useUserProfile(enabled = true) {
   });
 }
 
-// 1.5 Unified Dashboard Hook (staleTime: 5 min, always refetch on mount)
+// 1.5 Unified Dashboard Hook. Reuse the fresh in-memory result on navigation;
+// mutations explicitly invalidate this key, and the server cache protects
+// cold loads across users.
 export function useDashboard(enabled = true) {
   return useQuery({
     queryKey: CACHE_KEYS.dashboard,
@@ -37,7 +39,8 @@ export function useDashboard(enabled = true) {
       return res.data;
     },
     staleTime: 5 * 60 * 1000,
-    refetchOnMount: "always",
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
     enabled,
   });
 }
