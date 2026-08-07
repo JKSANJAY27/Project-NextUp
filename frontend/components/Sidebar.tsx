@@ -9,7 +9,6 @@ import {
   Activity, 
   User, 
   LogOut, 
-  ShieldCheck,
   Sun,
   Moon,
   Menu,
