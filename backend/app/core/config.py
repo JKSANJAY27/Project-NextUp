@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     NEO_ID_REGEX: str = r"^[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d$"
     CDC_SENDER_EMAIL: str = "cdc@vit.ac.in"
     # Issue-report mailer. Configure these in the backend environment; never expose them to the frontend.
-    FEEDBACK_RECIPIENT_EMAIL: str = "j.k.sanjay2006@gmail.com"
+    FEEDBACK_RECIPIENT_EMAIL: str = "j.k.sanjay2006@gmail.com, haritottatry@gmail.com"
     FEEDBACK_FROM_EMAIL: str = ""
     FEEDBACK_SMTP_HOST: str = ""
     FEEDBACK_SMTP_PORT: int = 587
