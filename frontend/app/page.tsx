@@ -386,7 +386,7 @@ export default function LandingPage() {
       {/* Hero Section — pixel art scene with left-aligned text overlay */}
       <section
         className="relative w-full overflow-hidden border-b-2 border-border"
-        style={{ minHeight: "calc(100svh - 80px - 60px)" }}
+        style={{ height: "calc(100svh - 80px - 60px)", minHeight: "500px" }}
         aria-labelledby="hero-heading"
       >
         {/* Animated pixel-art background scene */}
@@ -394,8 +394,8 @@ export default function LandingPage() {
 
         {/* Text overlay — left-aligned, z above scene */}
         <div
-          className="relative z-10 flex flex-col justify-center px-8 md:px-14 lg:px-20 py-16"
-          style={{ minHeight: "calc(100svh - 80px - 60px)", maxWidth: "620px" }}
+          className="relative z-10 flex flex-col justify-center px-8 md:px-14 lg:px-20 py-12"
+          style={{ height: "calc(100svh - 80px - 60px)", minHeight: "500px", maxWidth: "620px" }}
         >
           {/* Badge */}
           <div className="inline-flex items-center gap-2 border-2 border-white/30 bg-black/40 px-4 py-2 text-xs font-extrabold tracking-widest text-accent uppercase mb-6 w-fit backdrop-blur-sm">
