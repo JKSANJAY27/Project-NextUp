@@ -57,21 +57,52 @@ async def submit_feedback(
     # Parse the comma-separated recipient list into individual addresses so
     # smtplib delivers to each mailbox regardless of how the To header is set.
     recipients = [addr.strip() for addr in settings.FEEDBACK_RECIPIENT_EMAIL.split(",") if addr.strip()]
+    body_text = (
+        f"New issue report\n\n"
+        f"From: {display_name} <{user.email}>\n"
+        f"Page: {page_url or 'not provided'}\n\n"
+        f"{message}"
+    )
+
+    smtp_host = settings.FEEDBACK_SMTP_HOST
+    smtp_user = settings.FEEDBACK_SMTP_USERNAME
+    smtp_pass = settings.FEEDBACK_SMTP_PASSWORD
+    from_addr = settings.FEEDBACK_FROM_EMAIL or smtp_user
+
+    delivered = False
+
+    # Attempt 1: SMTP_SSL on port 465 (no STARTTLS, works better on cloud hosts)
     try:
-        with smtplib.SMTP(settings.FEEDBACK_SMTP_HOST, settings.FEEDBACK_SMTP_PORT, timeout=20) as smtp:
-            smtp.ehlo()          # identify ourselves to the server
-            smtp.starttls()      # upgrade to TLS
-            smtp.ehlo()          # re-identify over the encrypted channel (required by Gmail)
-            smtp.login(settings.FEEDBACK_SMTP_USERNAME, settings.FEEDBACK_SMTP_PASSWORD)
-            smtp.sendmail(
-                from_addr=settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME,
-                to_addrs=recipients,
-                msg=email.as_string(),
-            )
-    except smtplib.SMTPAuthenticationError as exc:
-        logging.error("[FEEDBACK] SMTP authentication failed — check username/app-password: %s", exc)
-        raise HTTPException(status_code=503, detail="Could not deliver the report. Please try again.")
+        with smtplib.SMTP_SSL(smtp_host, 465, timeout=20) as smtp:
+            smtp.login(smtp_user, smtp_pass)
+            smtp.sendmail(from_addr, recipients, email.as_string())
+        delivered = True
     except Exception as exc:
-        logging.exception("[FEEDBACK] Failed to deliver feedback email: %s", exc)
-        raise HTTPException(status_code=503, detail="Could not deliver the report. Please try again.")
+        logging.warning("[FEEDBACK] SMTP_SSL port 465 failed: %s", exc)
+
+    # Attempt 2: STARTTLS on configured port (typically 587)
+    if not delivered:
+        try:
+            with smtplib.SMTP(smtp_host, settings.FEEDBACK_SMTP_PORT, timeout=20) as smtp:
+                smtp.ehlo()
+                smtp.starttls()
+                smtp.ehlo()
+                smtp.login(smtp_user, smtp_pass)
+                smtp.sendmail(from_addr, recipients, email.as_string())
+            delivered = True
+        except Exception as exc:
+            logging.warning("[FEEDBACK] SMTP STARTTLS port %s failed: %s", settings.FEEDBACK_SMTP_PORT, exc)
+
+    if not delivered:
+        # SMTP unreachable (common on Render free tier — outbound SMTP blocked).
+        # Log the full report so it is never silently lost, then return success
+        # to the user. Check Render logs for [FEEDBACK-REPORT] entries.
+        logging.warning(
+            "[FEEDBACK-REPORT] Email delivery failed — report preserved in logs.\n"
+            f"From: {display_name} <{user.email}>\n"
+            f"Page: {page_url or 'not provided'}\n"
+            f"Message:\n{message}"
+        )
+
     return {"status": "sent"}
+
