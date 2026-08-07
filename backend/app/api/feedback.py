@@ -1,7 +1,10 @@
-"""Authenticated issue reports, delivered to the product mailbox via SMTP."""
+"""Authenticated issue reports, delivered through Resend or SMTP."""
+import json
 import logging
 import smtplib
 from email.message import EmailMessage
+from urllib import request as urllib_request
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.auth import get_current_user
@@ -9,6 +12,8 @@ from app.core.config import settings
 from app.models.models import User
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
+
+
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def submit_feedback(
     request: Request,
@@ -24,6 +29,7 @@ async def submit_feedback(
 
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="The issue report format is invalid.")
+
     message = str(payload.get("message") or "").strip()
     page_url = str(payload.get("page_url") or "").strip()
     if not 8 <= len(message) <= 5000:
@@ -38,46 +44,43 @@ async def submit_feedback(
     )
 
     display_name = (user.profile.full_name if user.profile else None) or "Student"
-
-    if not smtp_configured:
-        # SMTP not yet configured — persist the report to server logs so it's
-        # never silently dropped. Render logs are retained and searchable.
-        logging.warning(
-            "[FEEDBACK] SMTP not configured — logging report to server logs.\n"
-            f"From: {display_name} <{user.email}>\n"
-            f"Page: {page_url or 'not provided'}\n"
-            f"Message:\n{message}"
-        )
-        return {"status": "sent"}
-    email = EmailMessage()
-    email["Subject"] = f"[NextUp issue] {user.email}"
-    email["From"] = settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME
-    email["To"] = settings.FEEDBACK_RECIPIENT_EMAIL
-    email.set_content(f"New issue report\n\nFrom: {display_name} <{user.email}>\nPage: {page_url or 'not provided'}\n\n{message}")
-    recipients = [addr.strip() for addr in settings.FEEDBACK_RECIPIENT_EMAIL.split(",") if addr.strip()]
-    email_subject = f"[NextUp issue] {user.email}"
-    email_body = (
-        f"New issue report\n\n"
+    report_text = (
+        "New issue report\n\n"
         f"From: {display_name} <{user.email}>\n"
         f"Page: {page_url or 'not provided'}\n\n"
         f"{message}"
     )
 
+    if not smtp_configured and not getattr(settings, "RESEND_API_KEY", ""):
+        # SMTP not yet configured - persist the report to server logs so it's
+        # never silently dropped. Render logs are retained and searchable.
+        logging.warning(
+            "[FEEDBACK] SMTP not configured - logging report to server logs.\n"
+            f"From: {display_name} <{user.email}>\n"
+            f"Page: {page_url or 'not provided'}\n"
+            f"Message:\n{message}"
+        )
+
+    email = EmailMessage()
+    email["Subject"] = f"[NextUp issue] {user.email}"
+    email["From"] = settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME
+    email["To"] = settings.FEEDBACK_RECIPIENT_EMAIL
+    email.set_content(report_text)
+    recipients = [addr.strip() for addr in settings.FEEDBACK_RECIPIENT_EMAIL.split(",") if addr.strip()]
+
     delivered = False
 
-    # ── Primary: Resend HTTP API (works on Render — pure HTTPS, no SMTP ports) ──
+    # Primary: Resend HTTP API.
     resend_api_key = getattr(settings, "RESEND_API_KEY", "") or ""
     if resend_api_key:
         try:
-            import json as _json
-            import urllib.request as _urllib
-            payload = _json.dumps({
+            payload = json.dumps({
                 "from": f"NextUp Issue Reports <{settings.FEEDBACK_FROM_EMAIL or 'onboarding@resend.dev'}>",
                 "to": recipients,
-                "subject": email_subject,
-                "text": email_body,
+                "subject": email["Subject"],
+                "text": report_text,
             }).encode()
-            req = _urllib.Request(
+            req = urllib_request.Request(
                 "https://api.resend.com/emails",
                 data=payload,
                 headers={
@@ -86,14 +89,14 @@ async def submit_feedback(
                 },
                 method="POST",
             )
-            with _urllib.urlopen(req, timeout=15) as resp:
+            with urllib_request.urlopen(req, timeout=15) as resp:
                 if resp.status in (200, 201):
                     delivered = True
                     logging.info("[FEEDBACK] Delivered via Resend to %s", recipients)
         except Exception as exc:
             logging.warning("[FEEDBACK] Resend delivery failed: %s", exc)
 
-    # ── Secondary: SMTP (works locally; usually blocked on Render) ──
+    # Secondary: SMTP (works locally; usually blocked on Render).
     smtp_configured = bool(
         settings.FEEDBACK_SMTP_HOST
         and settings.FEEDBACK_SMTP_USERNAME
@@ -107,7 +110,9 @@ async def submit_feedback(
                     ctx = smtplib.SMTP_SSL(settings.FEEDBACK_SMTP_HOST, port, timeout=15)
                 else:
                     ctx = smtplib.SMTP(settings.FEEDBACK_SMTP_HOST, port, timeout=15)
-                    ctx.ehlo(); ctx.starttls(); ctx.ehlo()
+                    ctx.ehlo()
+                    ctx.starttls()
+                    ctx.ehlo()
                 with ctx as smtp:
                     smtp.login(settings.FEEDBACK_SMTP_USERNAME, settings.FEEDBACK_SMTP_PASSWORD)
                     smtp.sendmail(from_addr, recipients, email.as_string())
@@ -117,12 +122,21 @@ async def submit_feedback(
             except Exception as exc:
                 logging.warning("[FEEDBACK] SMTP port %s failed: %s", port, exc)
 
-    # ── Fallback: preserve in Render logs (search for [FEEDBACK-REPORT]) ──
+    # Fallback: preserve in Render logs.
     if not delivered:
         logging.warning(
-            "[FEEDBACK-REPORT] All delivery methods failed — report preserved here.\n"
+            "[FEEDBACK-REPORT] All delivery methods failed - report preserved here.\n"
             "From: %s <%s>\nPage: %s\nMessage:\n%s",
             display_name, user.email, page_url or "not provided", message,
+        )
+
+    if not delivered:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Your report could not be delivered right now. Please try again "
+                "shortly; the team has a copy in the server logs."
+            ),
         )
 
     return {"status": "sent"}
