@@ -88,7 +88,6 @@ export default function PrivacyPage() {
                 <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
                   <li>VIT Registration Number (Neo ID)</li>
                   <li>CGPA, 10th marks, 12th marks</li>
-                  <li>Gmail OAuth access token (if Gmail is connected)</li>
                   <li>Application notes and status updates</li>
                 </ul>
               </div>
@@ -108,14 +107,14 @@ export default function PrivacyPage() {
               3. How Encryption Works
             </h2>
             <p className="text-muted-foreground">
-              When you log in, your browser derives a 256-bit AES encryption key from your password
-              using PBKDF2-HMAC-SHA256 (100,000 iterations). This key exists only in your
-              browser&apos;s memory for the duration of your session — it is never sent to our
-              servers, never stored in localStorage or cookies, and is destroyed when you log out.
+              When you log in, your browser derives an encryption key from your password. Sensitive
+              profile fields are encrypted before storage, while a separate one-way matching token
+              is used where the service needs to identify a shortlist match without keeping your
+              Neo ID as plain text.
             </p>
             <p className="text-muted-foreground">
-              Sensitive data is encrypted with this key before upload and decrypted locally after
-              download. Our servers store only encrypted ciphertext and cannot read your raw data.
+              Sensitive data is encrypted before upload and decrypted when needed by the protected
+              application flow. Our database does not keep your Neo ID as a readable value.
             </p>
           </div>
 
@@ -141,10 +140,9 @@ export default function PrivacyPage() {
               5. Gmail Access
             </h2>
             <p className="text-muted-foreground">
-              If you connect Gmail, we request limited read access to your inbox. We access only
-              emails from CDC/VIT placement senders to detect shortlists. We do not read personal
-              emails, store email bodies, or share any email content. Your Gmail OAuth token is
-              encrypted with your AES key before being saved.
+              NEXTUP.AI does not ask for access to your Gmail account and does not sync or scan your
+              personal inbox. Placement updates are collected from a developer-managed college inbox,
+              processed once, and then served from the shared opportunity database to all users.
             </p>
           </div>
 
@@ -165,10 +163,6 @@ export default function PrivacyPage() {
                   Supabase&apos;s Privacy Policy
                 </a>
                 .
-              </li>
-              <li>
-                <strong className="text-foreground">Google OAuth</strong> — used for Gmail
-                connection. Subject to Google&apos;s privacy policies.
               </li>
             </ul>
             <p className="text-muted-foreground">

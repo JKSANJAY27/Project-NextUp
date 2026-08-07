@@ -1,8 +1,10 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload, defer
 from typing import List, Any, Dict, Optional
 from uuid import UUID
+import uuid
 from datetime import datetime
 from app.core.database import get_db
 from app.api.auth import get_current_user
@@ -32,7 +34,9 @@ from app.services.opportunity_lifecycle import (
 )
 from app.core.redis import get_cache, set_cache, get_user_version, bump_user_version
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/applications", tags=["applications"])
+
 
 
 def _load_application_with_score(db: Session, app: Application) -> Application:

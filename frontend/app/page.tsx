@@ -22,6 +22,12 @@ import {
   Zap,
   GitMerge,
   Search,
+  Database,
+  BrainCircuit,
+  FileText,
+  Users,
+  BellRing,
+  AlertTriangle,
   Sun,
   Moon,
 } from "lucide-react";
@@ -37,7 +43,7 @@ const HeroScene = dynamic(() => import("@/components/hero/HeroScene"), { ssr: fa
 const faqs = [
   {
     q: "What exactly does NEXTUP.AI do?",
-    a: "NEXTUP.AI is a smart placement tracker for VIT Vellore students. It automatically reads your CDC emails, detects when you're shortlisted for a company, checks if you're eligible for upcoming drives, and keeps all your applications organised in one place — so you never miss an opportunity.",
+    a: "NEXTUP.AI is a smart placement tracker for VIT Vellore students. It processes shared CDC updates from a developer-managed inbox, detects shortlist matches, checks eligibility for upcoming drives, and keeps applications organised in one place — so you never miss an opportunity.",
   },
   {
     q: "Is NEXTUP.AI free to use?",
@@ -45,11 +51,11 @@ const faqs = [
   },
   {
     q: "How does the automatic shortlist detection work?",
-    a: "You connect your college Gmail account once. NEXTUP.AI then monitors incoming CDC emails in the background. When a shortlist Excel sheet arrives, the platform checks whether your registration number appears — and notifies you instantly, without you having to open the email or manually scan the spreadsheet.",
+    a: "We monitor shared placement updates from a developer-managed college inbox. When a shortlist sheet arrives, the platform processes it once and checks for matches using protected profile data. We never connect to, read, or synchronise your personal Gmail inbox.",
   },
   {
     q: "Is my personal data safe?",
-    a: "Your most sensitive data — registration number, CGPA, marks — is encrypted right in your browser before anything is sent to our servers. We physically cannot read it. Even if someone accessed our database, they would only see random encrypted blobs. You hold the only key.",
+    a: "Your Neo ID, CGPA, and marks are protected before storage. Your Neo ID is not stored as plain text: we keep an encrypted value plus a one-way matching token so the system can check shortlist sheets without exposing the original ID in normal database records.",
   },
   {
     q: "What happens if I change my password?",
@@ -566,61 +572,58 @@ export default function LandingPage() {
         </div>
       </div>
 
-      {/* How It Works */}
+      {/* How It Works / System Architecture */}
       <section
         id="how-it-works"
         className="py-20 px-8 max-w-[95vw] mx-auto w-full border-b-2 border-border"
         aria-labelledby="how-it-works-heading"
       >
-        <div className="text-center mb-16 space-y-3">
-          <p className="text-xs font-extrabold tracking-widest text-accent uppercase">Simple Setup</p>
+        <div className="text-center mb-12 space-y-3">
+          <p className="text-xs font-extrabold tracking-widest text-accent uppercase">A transparent look inside</p>
           <h2 id="how-it-works-heading" className="text-3xl md:text-4xl font-extrabold tracking-tighter uppercase">
-            Up &amp; Running in 3 Steps
+            How NEXTUP.AI Works
           </h2>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-0 border-2 border-border">
-          {[
-            {
-              step: "01",
-              title: "Create Your Account",
-              description:
-                "Register with your college email. Your profile is set up in minutes — no complex configuration required.",
-            },
-            {
-              step: "02",
-              title: "Set Up Your Profile",
-              description:
-                "Enter your CGPA, branch, and registration number. This lets NEXTUP.AI check your eligibility for each drive automatically.",
-            },
-            {
-              step: "03",
-              title: "Connect Gmail & Relax",
-              description:
-                "Connect your college Gmail once. From that point, NEXTUP.AI monitors for shortlists and new drives around the clock.",
-            },
-          ].map((item, i) => (
-            <div
-              key={i}
-              className={`p-10 space-y-4 hover:bg-muted/10 transition-colors ${
-                i < 2 ? "border-b-2 md:border-b-0 md:border-r-2 border-border" : ""
-              }`}
-            >
-              <div className="text-6xl font-extrabold tracking-tighter text-accent/20">{item.step}</div>
-              <h3 className="text-xl font-bold uppercase tracking-tighter">{item.title}</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">{item.description}</p>
-            </div>
-          ))}
+        <p className="text-sm text-muted-foreground max-w-2xl mx-auto text-center leading-relaxed mb-8">
+          The flow below keeps the placement feed shared, while your profile and recommendations remain personal to you.
+        </p>
+        <div className="border-2 border-border bg-card overflow-hidden">
+          <div className="px-5 py-3 border-b-2 border-border bg-muted/20 flex items-center justify-between gap-4 font-mono text-[10px] font-bold tracking-widest uppercase">
+            <span className="text-accent">System flow</span>
+            <span className="text-muted-foreground">Shared updates to personal view</span>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-5">
+            {[
+              { icon: Mail, title: "CDC Email Feed", text: "A developer-managed college inbox receives placement announcements, shortlist sheets, and updates." },
+              { icon: FileText, title: "Parse & Verify", text: "The system extracts useful details such as company, role, deadline, criteria, and shortlist entries." },
+              { icon: Database, title: "Shared Database", text: "Verified opportunity data is saved once and becomes the common source of truth for every user." },
+              { icon: Users, title: "Protected Matching", text: "Your profile is compared with eligibility rules and shortlist data without storing your Neo ID as plain text." },
+              { icon: BellRing, title: "Your Dashboard", text: "You see relevant drives, status changes, reminders, and applications in one personal workspace." },
+            ].map((step, index) => {
+              const Icon = step.icon;
+              return (
+                <div key={step.title} className={`relative min-h-[230px] p-6 space-y-4 hover:bg-muted/20 transition-colors ${index < 4 ? "border-b-2 lg:border-b-0 lg:border-r-2 border-border" : ""}`}>
+                  <span className="font-mono text-[10px] font-bold text-accent">0{index + 1}</span>
+                  <div className="w-10 h-10 flex items-center justify-center border-2 border-border text-accent"><Icon size={19} /></div>
+                  <div><h3 className="text-sm font-extrabold uppercase tracking-tight">{step.title}</h3><p className="mt-2 text-xs text-muted-foreground leading-relaxed">{step.text}</p></div>
+                  {index < 4 && <ArrowRight aria-hidden size={16} className="hidden lg:block absolute -right-[10px] top-1/2 z-10 bg-card text-accent" />}
+                </div>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="text-center mt-12">
-          <Link
-            href={token ? "/dashboard" : "/register"}
-            className="inline-flex items-center justify-center gap-3 h-14 px-10 border-2 border-border bg-foreground text-background text-sm font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all"
-          >
-            {token ? "Back to Dashboard" : "Start Tracking for Free"}
-            <ArrowRight size={16} />
-          </Link>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-6">
+          <article className="border-2 border-border p-6 space-y-3"><div className="flex items-center gap-2 text-accent"><Shield size={17} /><h3 className="text-xs font-extrabold uppercase tracking-widest">Your PII stays protected</h3></div><p className="text-sm text-muted-foreground leading-relaxed">Sensitive profile data is encrypted before storage. Neo IDs are never kept as readable text; a separate one-way matching token lets us identify a shortlist match while reducing exposure of the original value.</p></article>
+          <article className="border-2 border-border p-6 space-y-3"><div className="flex items-center gap-2 text-accent"><Mail size={17} /><h3 className="text-xs font-extrabold uppercase tracking-widest">No personal Gmail connection</h3></div><p className="text-sm text-muted-foreground leading-relaxed">We do not ask to connect, scan, or synchronise your Gmail. Placement content is pulled from the developer-managed inbox, processed once, and served from the shared database.</p></article>
+          <article className="border-2 border-border p-6 space-y-3"><div className="flex items-center gap-2 text-accent"><BrainCircuit size={17} /><h3 className="text-xs font-extrabold uppercase tracking-widest">AI is an assistant, not an authority</h3></div><p className="text-sm text-muted-foreground leading-relaxed">AI helps interpret unstructured emails and supports resume tailoring. It can misread a deadline, criteria, attachment, or unusual email format, so always confirm important details with the official CDC source.</p></article>
+        </div>
+
+        <div className="mt-6 border-2 border-accent bg-accent/10 p-5 flex flex-col md:flex-row md:items-center gap-4">
+          <AlertTriangle size={21} className="text-accent shrink-0" />
+          <p className="text-sm leading-relaxed flex-1"><strong>See something wrong?</strong> Report an incorrect parse, missing drive, or mismatched status from the in-app feedback option. The team reviews reports and continually improves the parsing rules and safeguards.</p>
+          <Link href={token ? "/dashboard" : "/register"} className="inline-flex items-center justify-center gap-2 border-2 border-border bg-foreground text-background px-4 h-10 text-xs font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-colors shrink-0">{token ? "Open dashboard" : "Get started"}<ArrowRight size={14} /></Link>
         </div>
       </section>
 
