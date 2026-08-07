@@ -219,6 +219,10 @@ export default function LoginPage() {
             onError={(msg) => setError(msg)}
           />
 
+          <p className="border-l-2 border-accent bg-muted/30 px-3 py-2 text-[10px] font-medium leading-relaxed text-muted-foreground">
+            Use the same sign-in method you chose when registering. Google accounts must continue with Google; email-and-password accounts must continue with email and password.
+          </p>
+
           <div className="text-center pt-1">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
               Don&apos;t have an account?{" "}

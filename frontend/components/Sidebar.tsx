@@ -84,11 +84,11 @@ export default function Sidebar() {
 
       {/* Sidebar Container */}
       <aside className={`
-        fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r-2 border-border bg-background transition-transform md:translate-x-0
+        fixed inset-y-0 left-0 z-40 flex w-64 flex-col overflow-y-auto border-r-2 border-border bg-background transition-transform md:translate-x-0
         ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
       `}>
         {/* Brand header */}
-        <div className="flex h-24 items-center justify-between border-b-2 border-border px-8">
+        <div className="flex h-20 shrink-0 items-center justify-between border-b-2 border-border px-6">
           <Link href="/dashboard" className="flex items-center">
             <Logo size="lg" />
           </Link>
@@ -101,7 +101,7 @@ export default function Sidebar() {
         </div>
 
         {/* Security badge */}
-        <div className="flex flex-col gap-2 border-b-2 border-border bg-muted/30 p-6">
+        <div className="flex shrink-0 flex-col gap-2 border-b-2 border-border bg-muted/30 p-4">
           <Tooltip content="Your registration number, CGPA, and marks are encrypted in your browser. The server only stores scrambled data — we cannot read it." position="right">
             <div className="flex items-center gap-2 text-xs font-bold tracking-wider text-accent uppercase cursor-help">
               <ShieldCheck size={16} className="text-accent" />
@@ -114,7 +114,7 @@ export default function Sidebar() {
         </div>
 
         {/* Nav links */}
-        <nav className="flex-1 space-y-1 py-8">
+        <nav className="flex-1 space-y-1 py-4">
           {menuItems.map((item) => {
             const itemUrl = new URL(item.href, "http://localhost");
             const itemPath = itemUrl.pathname;
@@ -156,7 +156,7 @@ export default function Sidebar() {
                 href={item.href}
                 onClick={() => setMobileOpen(false)}
                 className={`
-                  flex items-center gap-4 px-8 py-4 text-sm font-bold tracking-tighter transition-all uppercase
+                  flex items-center gap-4 px-6 py-3 text-sm font-bold tracking-tighter transition-all uppercase
                   ${isActive 
                     ? "bg-accent text-black border-y-2 border-black" 
                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -171,7 +171,7 @@ export default function Sidebar() {
         </nav>
 
         {/* Footer actions */}
-        <div className="border-t-2 border-border p-6 space-y-4">
+        <div className="shrink-0 border-t-2 border-border p-4 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-muted-foreground tracking-wider uppercase">THEME</span>
             <button 
@@ -184,7 +184,7 @@ export default function Sidebar() {
           </div>
 
           {user && (
-            <div className="flex items-center gap-3 border-t border-border pt-4">
+            <div className="flex items-center gap-3 border-t border-border pt-2">
               <div className="flex h-10 w-10 items-center justify-center bg-muted border-2 border-border text-sm font-bold uppercase">
                 {user.full_name ? user.full_name[0] : user.email[0]}
               </div>
@@ -199,14 +199,15 @@ export default function Sidebar() {
             </div>
           )}
 
+          <FeedbackDialog />
+
           <button
             onClick={handleLogout}
-            className="flex w-full items-center justify-center gap-3 border-2 border-border py-3 text-xs font-bold tracking-wider hover:bg-red-600 hover:text-white hover:border-red-600 transition-all uppercase"
+            className="flex w-full items-center justify-center gap-3 border-2 border-border py-2.5 text-xs font-bold tracking-wider hover:bg-red-600 hover:text-white hover:border-red-600 transition-all uppercase"
           >
             <LogOut size={14} />
             <span>LOGOUT</span>
           </button>
-          <FeedbackDialog />
         </div>
       </aside>
 

@@ -367,6 +367,10 @@ export default function RegisterPage() {
             onError={(msg) => setError(msg)}
           />
 
+          <p className="border-l-2 border-accent bg-muted/30 px-3 py-2 text-[10px] font-medium leading-relaxed text-muted-foreground">
+            Choose your sign-up method carefully. You must use this same method for future sign-ins: Google for Google sign-up, or email and password for email sign-up.
+          </p>
+
           <div className="text-center pt-1">
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
               Already have an account?{" "}

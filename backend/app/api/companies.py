@@ -1,5 +1,6 @@
 import logging
 import hashlib
+import re
 from fastapi import APIRouter, Depends, Header, HTTPException, status, File, UploadFile, Form, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -9,11 +10,12 @@ from datetime import datetime
 
 from app.core.database import get_db
 from app.api.auth import get_current_user
-from app.models.models import User, StudentProfile, Company, Application, CompanyEvent, Notification, IngestionAuditLog, OpportunityState
+from app.models.models import User, StudentProfile, Company, Application, CompanyEvent, CompanyChangeLog, Notification, IngestionAuditLog, OpportunityState
 from app.schemas.schemas import CompanyCreate, CompanyOut, CompanyWithEligibilityOut, ManualDriveCreate, ManualUpdateCreate
 from collections import defaultdict
 from app.services.eligibility import check_eligibility
 from app.services.email_parser import parse_placement_email
+from app.services.email_parser import extract_company_from_subject, is_generic_company_name
 from app.services.pdf_extractor import parse_job_description
 from app.services.excel_parser import extract_neo_ids_from_excel
 from app.services.match_scorer import calculate_match_score
@@ -26,6 +28,49 @@ from app.core.redis import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/companies", tags=["companies"])
+
+
+def _is_placeholder_company_name(name: str) -> bool:
+    """Names such as AI/ML/CS/IT are mail categories, never companies."""
+    compact = (name or "").strip()
+    return (
+        not compact
+        or is_generic_company_name(compact)
+        or bool(re.fullmatch(r"(?:AI|ML|CS|IT)(?:[\s/,&-]+(?:AI|ML|CS|IT))+", compact, re.I))
+    )
+
+
+def _repair_placeholder_company_names(db: Session) -> int:
+    """Repair historic malformed drives from their preserved email subjects.
+
+    Parsing changes only cover new emails.  Existing workspaces retain their
+    CompanyEvent source trail, so repair only known placeholder names and only
+    when a concrete brand can be recovered from that authoritative subject.
+    """
+    repaired = 0
+    candidates = db.query(Company).filter(Company.is_manual == False).all()
+    for company in candidates:
+        if not _is_placeholder_company_name(company.name):
+            continue
+        events = (
+            db.query(CompanyEvent)
+            .filter(CompanyEvent.company_id == company.id, CompanyEvent.subject.isnot(None))
+            .order_by(CompanyEvent.timestamp.asc())
+            .all()
+        )
+        for event in events:
+            recovered = extract_company_from_subject(event.subject or "")
+            if recovered != "Unknown Company" and not _is_placeholder_company_name(recovered):
+                old_name = company.name
+                company.name = recovered
+                db.add(CompanyChangeLog(company_id=company.id, field_name="name", old_value=old_name, new_value=recovered))
+                repaired += 1
+                logger.info("Repaired historic placeholder company name %r -> %r", old_name, recovered)
+                break
+    if repaired:
+        db.commit()
+        bump_companies_list_version()
+    return repaired
 
 @router.post("", response_model=CompanyOut)
 def create_company(
@@ -441,6 +486,9 @@ def list_companies(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Self-heal pre-fix data before cache lookup so old category-name drives
+    # immediately receive the corrected name on the next dashboard refresh.
+    _repair_placeholder_company_names(db)
     list_version = get_companies_list_version()
     cache_key = f"nextup:cache:companies:list:v{list_version}:s{skip}:l{limit}"
     cached_list = get_cache(cache_key)

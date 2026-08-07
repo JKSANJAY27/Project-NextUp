@@ -92,6 +92,18 @@ def is_generic_company_name(name: str) -> bool:
     # e.g. "Congratulations!!" → "congratulations" must be caught
     cleaned = re.sub(r'[*#_\-–—!?\s\t\n\r]+', ' ', name).strip().lower()
 
+    # Department mailing-list labels are not companies.  Keep this structural
+    # check separate from the exact-name list so punctuation variants such as
+    # "AI / ML / CS / IT" and "CS-IT" cannot slip through as new brands.
+    department_tokens = [
+        token for token in re.split(r'[\s/,&\-]+', cleaned.upper()) if token
+    ]
+    if (
+        len(department_tokens) >= 2
+        and set(department_tokens).issubset({"AI", "ML", "CS", "IT"})
+    ):
+        return True
+
     # Heuristics to reject long sentences/subject-lines
     if len(cleaned) > 40:
         return True
@@ -785,6 +797,15 @@ def _authoritative_company_from_subject(subject: str) -> str:
     value = subject.replace("\u200b", "").replace("\xa0", " ").replace("_", " ")
     value = value.replace("–", "-").replace("—", "-").replace("â€“", "-").replace("â€”", "-")
     value = re.sub(r"^\s*(?:(?:re|fw|fwd|update|updated|reminder|urgent)\s*:\s*)+", "", value, flags=re.I).strip()
+    # Some CDC emails prefix the actual subject with recipient departments,
+    # e.g. "AI/ML/CS/IT - EY Global Delivery Services - Campus Hiring".
+    # Remove only a complete department-label prefix, never a company name.
+    value = re.sub(
+        r"^\s*(?:(?:AI|ML|CS|IT)(?:\s*/\s*(?:AI|ML|CS|IT)){1,})\s*(?:[-|:]\s*)+",
+        "",
+        value,
+        flags=re.I,
+    ).strip()
     # A company is normally the first segment: "EY - Campus Hiring".
     value = re.split(r"\s+[-|]\s+|:(?!\d)", value, maxsplit=1)[0].strip()
     value = re.sub(r"\b(?:campus\s+hiring|campus\s+recruitment|placement|drive|recruitment|hiring|registration|shortlist|interview|assessment|online\s+test|pre[-\s]?placement|ppt|webinar|announcement)\b.*$", "", value, flags=re.I).strip()
