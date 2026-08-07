@@ -38,7 +38,8 @@ async def submit_feedback(
     email["Subject"] = f"[NextUp issue] {user.email}"
     email["From"] = settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME
     email["To"] = settings.FEEDBACK_RECIPIENT_EMAIL
-    email.set_content(f"New issue report\n\nFrom: {user.full_name or 'Student'} <{user.email}>\nPage: {page_url or 'not provided'}\n\n{message}")
+    display_name = (user.profile.full_name if user.profile else None) or "Student"
+    email.set_content(f"New issue report\n\nFrom: {display_name} <{user.email}>\nPage: {page_url or 'not provided'}\n\n{message}")
     try:
         with smtplib.SMTP(settings.FEEDBACK_SMTP_HOST, settings.FEEDBACK_SMTP_PORT, timeout=20) as smtp:
             smtp.starttls()
