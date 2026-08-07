@@ -321,7 +321,7 @@ export default function LandingPage() {
         <Link href="/" aria-label="NEXTUP.AI home" className="flex items-center">
           <Logo size="md" />
         </Link>
-        <nav className="flex items-center gap-6" aria-label="Primary navigation">
+        <nav className="flex items-center gap-3 md:gap-6" aria-label="Primary navigation">
           <Link
             href="#features"
             className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors hidden md:block"
@@ -348,23 +348,23 @@ export default function LandingPage() {
           </Link>
           <Link
             href="/login"
-            className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors"
+            className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors hidden md:block"
           >
             Sign In
           </Link>
-          {/* Theme Toggle */}
+          {/* Theme Toggle — visible on mobile and desktop */}
           <button
             onClick={toggleTheme}
             aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            className="flex items-center justify-center w-10 h-10 border-2 border-border hover:border-accent hover:text-accent transition-all active:scale-95"
+            className="flex items-center justify-center w-10 h-10 border-2 border-border hover:border-accent hover:text-accent transition-all active:scale-95 shrink-0"
           >
             {isDark ? <Sun size={16} /> : <Moon size={16} />}
           </button>
           <Link
             href={token ? "/dashboard" : "/register"}
-            className="flex items-center justify-center border-2 border-border bg-foreground text-background px-6 h-10 text-xs font-bold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95"
+            className="flex items-center justify-center border-2 border-border bg-foreground text-background px-4 md:px-6 h-10 text-xs font-bold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 shrink-0"
           >
-            {token ? "Dashboard" : "Get Started Free"}
+            {token ? "Dashboard" : "Get Started"}
           </Link>
         </nav>
       </header>

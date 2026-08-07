@@ -42,7 +42,7 @@ export default function HeroScene() {
         playsInline
         onLoadedData={() => setIsVideoLoaded(true)}
         onError={() => setVideoError(true)}
-        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-1000 ${
+        className={`absolute inset-0 w-full h-full object-cover object-[75%_center] md:object-center transition-opacity duration-1000 ${
           isVideoLoaded ? "opacity-75" : "opacity-0"
         }`}
       >
@@ -56,9 +56,15 @@ export default function HeroScene() {
 
       {/* Dark Readability Scrim Overlay — Ensures maximum text legibility for the hero content */}
       <div 
-        className="absolute inset-0 pointer-events-none z-10"
+        className="absolute inset-0 pointer-events-none z-10 hidden md:block"
         style={{
           background: "linear-gradient(to right, rgba(9,9,14,0.96) 0%, rgba(9,9,14,0.85) 45%, rgba(9,9,14,0.45) 75%, rgba(9,9,14,0.55) 100%), linear-gradient(to top, rgba(9,9,14,1) 0%, rgba(9,9,14,0.98) 6%, rgba(9,9,14,0.85) 14%, transparent 36%)"
+        }}
+      />
+      <div 
+        className="absolute inset-0 pointer-events-none z-10 md:hidden"
+        style={{
+          background: "linear-gradient(to bottom, rgba(9,9,14,0.85) 0%, rgba(9,9,14,0.5) 50%, rgba(9,9,14,0.85) 100%)"
         }}
       />
 
