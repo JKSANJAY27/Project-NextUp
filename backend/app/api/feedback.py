@@ -54,55 +54,75 @@ async def submit_feedback(
     email["From"] = settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME
     email["To"] = settings.FEEDBACK_RECIPIENT_EMAIL
     email.set_content(f"New issue report\n\nFrom: {display_name} <{user.email}>\nPage: {page_url or 'not provided'}\n\n{message}")
-    # Parse the comma-separated recipient list into individual addresses so
-    # smtplib delivers to each mailbox regardless of how the To header is set.
     recipients = [addr.strip() for addr in settings.FEEDBACK_RECIPIENT_EMAIL.split(",") if addr.strip()]
-    body_text = (
+    email_subject = f"[NextUp issue] {user.email}"
+    email_body = (
         f"New issue report\n\n"
         f"From: {display_name} <{user.email}>\n"
         f"Page: {page_url or 'not provided'}\n\n"
         f"{message}"
     )
 
-    smtp_host = settings.FEEDBACK_SMTP_HOST
-    smtp_user = settings.FEEDBACK_SMTP_USERNAME
-    smtp_pass = settings.FEEDBACK_SMTP_PASSWORD
-    from_addr = settings.FEEDBACK_FROM_EMAIL or smtp_user
-
     delivered = False
 
-    # Attempt 1: SMTP_SSL on port 465 (no STARTTLS, works better on cloud hosts)
-    try:
-        with smtplib.SMTP_SSL(smtp_host, 465, timeout=20) as smtp:
-            smtp.login(smtp_user, smtp_pass)
-            smtp.sendmail(from_addr, recipients, email.as_string())
-        delivered = True
-    except Exception as exc:
-        logging.warning("[FEEDBACK] SMTP_SSL port 465 failed: %s", exc)
-
-    # Attempt 2: STARTTLS on configured port (typically 587)
-    if not delivered:
+    # ── Primary: Resend HTTP API (works on Render — pure HTTPS, no SMTP ports) ──
+    resend_api_key = getattr(settings, "RESEND_API_KEY", "") or ""
+    if resend_api_key:
         try:
-            with smtplib.SMTP(smtp_host, settings.FEEDBACK_SMTP_PORT, timeout=20) as smtp:
-                smtp.ehlo()
-                smtp.starttls()
-                smtp.ehlo()
-                smtp.login(smtp_user, smtp_pass)
-                smtp.sendmail(from_addr, recipients, email.as_string())
-            delivered = True
+            import json as _json
+            import urllib.request as _urllib
+            payload = _json.dumps({
+                "from": f"NextUp Issue Reports <{settings.FEEDBACK_FROM_EMAIL or 'onboarding@resend.dev'}>",
+                "to": recipients,
+                "subject": email_subject,
+                "text": email_body,
+            }).encode()
+            req = _urllib.Request(
+                "https://api.resend.com/emails",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with _urllib.urlopen(req, timeout=15) as resp:
+                if resp.status in (200, 201):
+                    delivered = True
+                    logging.info("[FEEDBACK] Delivered via Resend to %s", recipients)
         except Exception as exc:
-            logging.warning("[FEEDBACK] SMTP STARTTLS port %s failed: %s", settings.FEEDBACK_SMTP_PORT, exc)
+            logging.warning("[FEEDBACK] Resend delivery failed: %s", exc)
 
+    # ── Secondary: SMTP (works locally; usually blocked on Render) ──
+    smtp_configured = bool(
+        settings.FEEDBACK_SMTP_HOST
+        and settings.FEEDBACK_SMTP_USERNAME
+        and settings.FEEDBACK_SMTP_PASSWORD
+    )
+    if not delivered and smtp_configured:
+        from_addr = settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME
+        for port, use_ssl in [(465, True), (settings.FEEDBACK_SMTP_PORT, False)]:
+            try:
+                if use_ssl:
+                    ctx = smtplib.SMTP_SSL(settings.FEEDBACK_SMTP_HOST, port, timeout=15)
+                else:
+                    ctx = smtplib.SMTP(settings.FEEDBACK_SMTP_HOST, port, timeout=15)
+                    ctx.ehlo(); ctx.starttls(); ctx.ehlo()
+                with ctx as smtp:
+                    smtp.login(settings.FEEDBACK_SMTP_USERNAME, settings.FEEDBACK_SMTP_PASSWORD)
+                    smtp.sendmail(from_addr, recipients, email.as_string())
+                delivered = True
+                logging.info("[FEEDBACK] Delivered via SMTP port %s", port)
+                break
+            except Exception as exc:
+                logging.warning("[FEEDBACK] SMTP port %s failed: %s", port, exc)
+
+    # ── Fallback: preserve in Render logs (search for [FEEDBACK-REPORT]) ──
     if not delivered:
-        # SMTP unreachable (common on Render free tier — outbound SMTP blocked).
-        # Log the full report so it is never silently lost, then return success
-        # to the user. Check Render logs for [FEEDBACK-REPORT] entries.
         logging.warning(
-            "[FEEDBACK-REPORT] Email delivery failed — report preserved in logs.\n"
-            f"From: {display_name} <{user.email}>\n"
-            f"Page: {page_url or 'not provided'}\n"
-            f"Message:\n{message}"
+            "[FEEDBACK-REPORT] All delivery methods failed — report preserved here.\n"
+            "From: %s <%s>\nPage: %s\nMessage:\n%s",
+            display_name, user.email, page_url or "not provided", message,
         )
 
     return {"status": "sent"}
-

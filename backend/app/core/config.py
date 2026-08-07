@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     FEEDBACK_SMTP_PORT: int = 587
     FEEDBACK_SMTP_USERNAME: str = ""
     FEEDBACK_SMTP_PASSWORD: str = ""
+    RESEND_API_KEY: str = ""
     PLACEMENT_CATEGORIES: List[str] = ["Dream", "Super Dream", "Mass Recruiter", "Internship", "Regular"]
 
     # AI Integration
