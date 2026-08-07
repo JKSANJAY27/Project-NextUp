@@ -58,7 +58,7 @@ export default function HeroScene() {
       <div 
         className="absolute inset-0 pointer-events-none z-10"
         style={{
-          background: "linear-gradient(to right, rgba(9,9,14,0.96) 0%, rgba(9,9,14,0.85) 45%, rgba(9,9,14,0.45) 75%, rgba(9,9,14,0.55) 100%), linear-gradient(to top, rgba(9,9,14,0.92) 0%, transparent 40%)"
+          background: "linear-gradient(to right, rgba(9,9,14,0.96) 0%, rgba(9,9,14,0.85) 45%, rgba(9,9,14,0.45) 75%, rgba(9,9,14,0.55) 100%), linear-gradient(to top, rgba(9,9,14,1) 0%, rgba(9,9,14,0.98) 6%, rgba(9,9,14,0.85) 14%, transparent 36%)"
         }}
       />
 
