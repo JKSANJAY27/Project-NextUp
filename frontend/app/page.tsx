@@ -317,11 +317,11 @@ export default function LandingPage() {
     <main className="min-h-screen bg-background text-foreground flex flex-col font-sans">
 
       {/* Navigation */}
-      <header className="flex h-16 md:h-20 items-center justify-between border-b-2 border-border px-4 sm:px-8 md:px-16 w-full bg-background z-50 sticky top-0">
-        <Link href="/" aria-label="NEXTUP.AI home" className="flex items-center shrink-0">
+      <header className="flex h-20 items-center justify-between border-b-2 border-border px-8 md:px-16 w-full bg-background z-50 sticky top-0">
+        <Link href="/" aria-label="NEXTUP.AI home" className="flex items-center">
           <Logo size="md" />
         </Link>
-        <nav className="flex items-center gap-2 sm:gap-3 md:gap-6" aria-label="Primary navigation">
+        <nav className="flex items-center gap-6" aria-label="Primary navigation">
           <Link
             href="#features"
             className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors hidden md:block"
@@ -348,7 +348,7 @@ export default function LandingPage() {
           </Link>
           <Link
             href="/login"
-            className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors hidden sm:block"
+            className="text-xs font-bold tracking-widest uppercase hover:text-accent transition-colors"
           >
             Sign In
           </Link>
@@ -356,15 +356,15 @@ export default function LandingPage() {
           <button
             onClick={toggleTheme}
             aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            className="flex items-center justify-center w-9 h-9 md:w-10 md:h-10 border-2 border-border hover:border-accent hover:text-accent transition-all active:scale-95 shrink-0"
+            className="flex items-center justify-center w-10 h-10 border-2 border-border hover:border-accent hover:text-accent transition-all active:scale-95"
           >
             {isDark ? <Sun size={16} /> : <Moon size={16} />}
           </button>
           <Link
             href={token ? "/dashboard" : "/register"}
-            className="flex items-center justify-center border-2 border-border bg-foreground text-background px-3 sm:px-6 h-9 md:h-10 text-[10px] sm:text-xs font-bold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 shrink-0 whitespace-nowrap"
+            className="flex items-center justify-center border-2 border-border bg-foreground text-background px-6 h-10 text-xs font-bold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95"
           >
-            {token ? "Dashboard" : <><span className="hidden sm:inline">Get Started Free</span><span className="sm:hidden">Sign Up</span></>}
+            {token ? "Dashboard" : "Get Started Free"}
           </Link>
         </nav>
       </header>
@@ -392,7 +392,7 @@ export default function LandingPage() {
       {/* Hero Section — pixel art scene with left-aligned text overlay */}
       <section
         className="relative w-full overflow-hidden border-b-2 border-border"
-        style={{ height: "calc(100svh - 64px)", minHeight: "500px" }}
+        style={{ height: "calc(100svh - 80px)", minHeight: "500px" }}
         aria-labelledby="hero-heading"
       >
         {/* Animated pixel-art background scene */}
@@ -400,8 +400,8 @@ export default function LandingPage() {
 
         {/* Text overlay — left-aligned, z above scene */}
         <div
-          className="relative z-10 flex flex-col justify-center px-6 sm:px-8 md:px-14 lg:px-20 py-8 md:py-12"
-          style={{ height: "calc(100svh - 64px)", minHeight: "500px", maxWidth: "620px" }}
+          className="relative z-10 flex flex-col justify-center px-8 md:px-14 lg:px-20 py-12"
+          style={{ height: "calc(100svh - 80px)", minHeight: "500px", maxWidth: "620px" }}
         >
           {/* Badge */}
           <div className="inline-flex items-center gap-2 border-2 border-white/30 bg-black/40 px-4 py-2 text-xs font-extrabold tracking-widest text-accent uppercase mb-6 w-fit backdrop-blur-sm">
