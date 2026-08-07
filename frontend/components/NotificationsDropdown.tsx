@@ -173,7 +173,7 @@ export default function NotificationsDropdown() {
 
       {/* Dropdown Card */}
       {isOpen && (
-        <div className="absolute right-0 mt-3 w-80 sm:w-96 border-2 border-border bg-card shadow-2xl z-50 rounded-none animate-in fade-in slide-in-from-top-2 duration-200 max-h-[80vh] flex flex-col">
+        <div className="absolute right-0 mt-3 w-80 sm:w-96 border-2 border-border bg-card shadow-2xl z-30 rounded-none animate-in fade-in slide-in-from-top-2 duration-200 max-h-[80vh] flex flex-col">
           {/* Tabs Header */}
           <div className="flex border-b border-border shrink-0 bg-muted/50">
             <button
