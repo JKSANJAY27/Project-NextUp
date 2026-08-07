@@ -22,7 +22,12 @@ def compile_jsonb_sqlite(type_, compiler, **kw):
     return "TEXT"
 
 from app.models.models import Base, Company, CompanyEvent, RawIngestionJob, PendingCompanyEvent, IngestionExecutionLog
-from app.services.gmail_sync import log_execution_stage, extract_event_metadata, clean_company_name_key
+from app.services.gmail_sync import (
+    log_execution_stage,
+    extract_event_metadata,
+    clean_company_name_key,
+    company_grounded_in_event,
+)
 from app.services.validator import normalize_role_name
 
 # Setup in-memory SQLite database for testing
@@ -39,6 +44,25 @@ def fixture_db_session():
     finally:
         session.close()
         Base.metadata.drop_all(bind=engine)
+
+def test_update_email_requires_company_evidence_in_its_source():
+    wakefit_subject = "Congratulations!! Wakefit dream core internship selection list 2027 batch -SET3"
+    wakefit_body = "Selected students must fill the form before 4:00 pm."
+
+    assert not company_grounded_in_event(
+        "Play Simple Games", wakefit_subject, wakefit_body
+    )
+    assert company_grounded_in_event(
+        "Play Simple Games",
+        "Play Simple Games - OA schedule",
+        "The online assessment for Play Simple Games is tomorrow.",
+    )
+    # Some CDC mails name the drive only in the attached sheet; that remains
+    # valid evidence without weakening the subject/body guard.
+    assert company_grounded_in_event(
+        "Play Simple Games", "Shortlist attached", "", 
+        [{"filename": "Play Simple Games shortlist.xlsx"}],
+    )
 
 def test_company_jd_analysis_properties(db_session):
     # Test that the properties jd_required_skills, jd_preferred_skills, etc.

@@ -14,7 +14,12 @@ class Settings(BaseSettings):
     
     # Database (local dev defaults to SQLite)
     DATABASE_URL: str = "sqlite:///./nextup.db"
-    REDIS_URL: str = "redis://localhost:6379"
+    # Empty by default: production must explicitly provide the managed Redis
+    # endpoint (for Upstash, use its rediss:// URL). Falling back to localhost
+    # in a cloud container silently disabled caching and added failed connects.
+    REDIS_URL: str = ""
+    REDIS_MAX_CONNECTIONS: int = 50
+    REDIS_SOCKET_TIMEOUT_SECONDS: float = 0.75
     
     # Google Credentials
     GOOGLE_CLIENT_ID: str = ""

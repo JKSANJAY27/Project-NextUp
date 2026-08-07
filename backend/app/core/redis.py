@@ -2,6 +2,7 @@ import logging
 import time
 import gzip
 import threading
+import random
 from typing import Any, Optional
 from uuid import UUID
 from app.core.config import settings
@@ -33,6 +34,20 @@ class NoOpRedis:
     def incr(self, key: str):
         return 1
 
+
+def _mark_unavailable(error: Exception) -> None:
+    """Open the cache circuit after an I/O error.
+
+    Requests must fall through to PostgreSQL immediately while Redis is down;
+    they must not each wait for a network timeout. _ensure_client retries this
+    circuit after the configured cooldown.
+    """
+    global redis_client, _last_reconnect_attempt
+    with _reconnect_lock:
+        redis_client = NoOpRedis()
+        _last_reconnect_attempt = time.monotonic()
+    logger.warning("Redis cache unavailable; bypassing cache until the next health retry (%s).", type(error).__name__)
+
 def _connect():
     """Try to connect to Redis. On failure, return NoOp client (app still works)."""
     if not settings.REDIS_URL:
@@ -43,20 +58,19 @@ def _connect():
         import redis
         client = redis.Redis.from_url(
             settings.REDIS_URL,
-            socket_timeout=5.0,
-            socket_connect_timeout=5.0,
-            max_connections=20,
-            decode_responses=False
+            socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SECONDS,
+            socket_connect_timeout=settings.REDIS_SOCKET_TIMEOUT_SECONDS,
+            socket_keepalive=True,
+            health_check_interval=30,
+            max_connections=settings.REDIS_MAX_CONNECTIONS,
+            decode_responses=False,
+            retry_on_timeout=False,
         )
         client.ping()
         logger.info("Successfully connected to Redis cache.")
         return client
     except Exception as e:
-        logger.warning(
-            f"Redis connection failed ({type(e).__name__}: {e}). "
-            f"Caching disabled; app continues without cache. "
-            f"Will retry every 30 seconds."
-        )
+        logger.warning("Redis connection failed (%s). Caching is bypassed and will retry every 30 seconds.", type(e).__name__)
         return NoOpRedis()
 
 try:
@@ -133,7 +147,7 @@ def get_cache(cache_key: str) -> Optional[Any]:
         _incr_metric("hit")
         return data
     except Exception as e:
-        logger.debug(f"Cache get failed: {e}")
+        _mark_unavailable(e)
         _incr_metric("error")
         _incr_metric("db_fallback")
         return None
@@ -151,10 +165,13 @@ def set_cache(cache_key: str, data: Any, expire_seconds: int = 3600) -> bool:
             serialized = json.dumps(data).encode("utf-8")
 
         compressed = gzip.compress(serialized)
-        redis_client.setex(cache_key, expire_seconds, compressed)
+        # Spread expirations so a busy shared key does not cause a cache-miss
+        # stampede against Postgres at one exact second.
+        ttl = max(1, expire_seconds + random.randint(0, max(1, expire_seconds // 10)))
+        redis_client.setex(cache_key, ttl, compressed)
         return True
     except Exception as e:
-        logger.debug(f"Cache set failed: {e}")
+        _mark_unavailable(e)
         _incr_metric("error")
         _incr_metric("db_fallback")
         return False
@@ -170,7 +187,8 @@ def get_user_version(user_id: UUID) -> int:
             redis_client.set(f"nextup:version:user:{user_id}", 1)
             return 1
         return int(version) if isinstance(version, int) else int(version.decode())
-    except:
+    except Exception as e:
+        _mark_unavailable(e)
         return 0
 
 def bump_user_version(user_id: UUID) -> int:
@@ -180,7 +198,8 @@ def bump_user_version(user_id: UUID) -> int:
     try:
         new_version = redis_client.incr(f"nextup:version:user:{user_id}")
         return new_version if isinstance(new_version, int) else int(new_version)
-    except:
+    except Exception as e:
+        _mark_unavailable(e)
         return 1
 
 def get_companies_list_version() -> int:
@@ -193,7 +212,8 @@ def get_companies_list_version() -> int:
             redis_client.set("nextup:version:companies:list", 1)
             return 1
         return int(version) if isinstance(version, int) else int(version.decode())
-    except:
+    except Exception as e:
+        _mark_unavailable(e)
         return 0
 
 def bump_companies_list_version() -> int:
@@ -203,7 +223,8 @@ def bump_companies_list_version() -> int:
     try:
         new_version = redis_client.incr("nextup:version:companies:list")
         return new_version if isinstance(new_version, int) else int(new_version)
-    except:
+    except Exception as e:
+        _mark_unavailable(e)
         return 1
 
 def get_company_version(company_id: UUID) -> int:
@@ -216,7 +237,8 @@ def get_company_version(company_id: UUID) -> int:
             redis_client.set(f"nextup:version:company:{company_id}", 1)
             return 1
         return int(version) if isinstance(version, int) else int(version.decode())
-    except:
+    except Exception as e:
+        _mark_unavailable(e)
         return 0
 
 def bump_company_version(company_id: UUID) -> int:
@@ -226,7 +248,8 @@ def bump_company_version(company_id: UUID) -> int:
     try:
         new_version = redis_client.incr(f"nextup:version:company:{company_id}")
         return new_version if isinstance(new_version, int) else int(new_version)
-    except:
+    except Exception as e:
+        _mark_unavailable(e)
         return 1
 
 def get_announcements_version() -> int:
@@ -239,7 +262,8 @@ def get_announcements_version() -> int:
             redis_client.set("nextup:version:announcements", 1)
             return 1
         return int(version) if isinstance(version, int) else int(version.decode())
-    except:
+    except Exception as e:
+        _mark_unavailable(e)
         return 0
 
 def bump_announcements_version() -> int:
@@ -249,5 +273,16 @@ def bump_announcements_version() -> int:
     try:
         new_version = redis_client.incr("nextup:version:announcements")
         return new_version if isinstance(new_version, int) else int(new_version)
-    except:
+    except Exception as e:
+        _mark_unavailable(e)
         return 1
+
+
+def cache_health() -> dict:
+    """Small, safe health snapshot for deployment verification."""
+    connected = _ensure_client() and not isinstance(redis_client, NoOpRedis)
+    return {
+        "redis_configured": bool(settings.REDIS_URL),
+        "redis_connected": connected,
+        "metrics": dict(metrics),
+    }

@@ -6,6 +6,10 @@ import traceback
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models.models import User
+from app.core.redis import (
+    get_cache, set_cache, get_user_version,
+    get_companies_list_version, get_announcements_version,
+)
 
 # Import the existing handler functions to avoid duplicating logic
 from app.api.companies import list_companies
@@ -25,6 +29,17 @@ def get_dashboard_data(
     """
     Unified endpoint to fetch all necessary data for the Dashboard in a single request.
     """
+    user_version = get_user_version(current_user.id)
+    companies_version = get_companies_list_version()
+    announcements_version = get_announcements_version()
+    cache_key = (
+        f"nextup:cache:user:{current_user.id}:dashboard:uv{user_version}:"
+        f"cv{companies_version}:av{announcements_version}"
+    )
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
+
     errors = {}
 
     # 1. Companies
@@ -67,7 +82,7 @@ def get_dashboard_data(
         "unread_notifications": sum(b.get("unread_count", 0) for b in notifications_data if isinstance(b, dict)) if isinstance(notifications_data, list) else 0,
     }
 
-    return {
+    response = {
         "companies": companies_data,
         "applications": applications_data,
         "notifications": notifications_data,
@@ -76,3 +91,8 @@ def get_dashboard_data(
         "stats": stats,
         "_errors": errors,  # Will be empty dict {} if all succeeded
     }
+    # Never cache a partial dashboard response. A transient dependency error
+    # should recover on the next request instead of looking like empty data.
+    if not errors:
+        set_cache(cache_key, response, expire_seconds=30)
+    return response
