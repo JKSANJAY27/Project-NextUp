@@ -31,14 +31,28 @@ async def submit_feedback(
     if len(page_url) > 2000:
         raise HTTPException(status_code=400, detail="The page URL is too long.")
 
-    if not settings.FEEDBACK_SMTP_HOST or not settings.FEEDBACK_SMTP_USERNAME or not settings.FEEDBACK_SMTP_PASSWORD:
-        logging.error("Feedback SMTP is not configured")
-        raise HTTPException(status_code=503, detail="Issue reporting is temporarily unavailable.")
+    smtp_configured = bool(
+        settings.FEEDBACK_SMTP_HOST
+        and settings.FEEDBACK_SMTP_USERNAME
+        and settings.FEEDBACK_SMTP_PASSWORD
+    )
+
+    display_name = (user.profile.full_name if user.profile else None) or "Student"
+
+    if not smtp_configured:
+        # SMTP not yet configured — persist the report to server logs so it's
+        # never silently dropped. Render logs are retained and searchable.
+        logging.warning(
+            "[FEEDBACK] SMTP not configured — logging report to server logs.\n"
+            f"From: {display_name} <{user.email}>\n"
+            f"Page: {page_url or 'not provided'}\n"
+            f"Message:\n{message}"
+        )
+        return {"status": "sent"}
     email = EmailMessage()
     email["Subject"] = f"[NextUp issue] {user.email}"
     email["From"] = settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME
     email["To"] = settings.FEEDBACK_RECIPIENT_EMAIL
-    display_name = (user.profile.full_name if user.profile else None) or "Student"
     email.set_content(f"New issue report\n\nFrom: {display_name} <{user.email}>\nPage: {page_url or 'not provided'}\n\n{message}")
     try:
         with smtplib.SMTP(settings.FEEDBACK_SMTP_HOST, settings.FEEDBACK_SMTP_PORT, timeout=20) as smtp:
