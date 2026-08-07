@@ -62,7 +62,7 @@ export default function NotificationPermissionBanner() {
     <div
       className={`
         w-full flex items-center justify-between gap-4 px-6 py-2.5
-        bg-accent/10 border-b-2 border-accent/30 backdrop-blur-sm
+        bg-white border-b border-border
         text-foreground
         animate-in slide-in-from-top-1 duration-300
       `}
@@ -71,7 +71,7 @@ export default function NotificationPermissionBanner() {
     >
       {/* Left: Icon + message */}
       <div className="flex items-center gap-3 min-w-0">
-        <div className="flex-shrink-0 flex items-center justify-center h-7 w-7 bg-accent/20 border border-accent/40 rounded-none">
+        <div className="flex-shrink-0 flex items-center justify-center h-7 w-7 bg-accent/10 border border-border rounded-none">
           <Bell size={13} className="text-accent" />
         </div>
         <p className="text-[11px] font-semibold tracking-wide truncate">

@@ -74,7 +74,7 @@ export default function CompensationDisplay({
         {expanded && (
           <div
             onClick={(e) => e.stopPropagation()}
-            className="absolute left-0 top-full mt-2 z-50 min-w-[280px] max-w-[340px] bg-background border-2 border-accent p-3.5 shadow-2xl space-y-2 text-left animate-in fade-in slide-in-from-top-2 duration-150"
+            className="absolute left-0 top-full mt-2 z-50 min-w-[280px] max-w-[340px] bg-background border border-accent p-3.5 shadow-md space-y-2 text-left animate-in fade-in slide-in-from-top-2 duration-150"
           >
             <div className="flex items-center justify-between border-b border-border pb-1.5">
               <span className="text-[9px] font-black uppercase tracking-widest text-accent flex items-center gap-1">

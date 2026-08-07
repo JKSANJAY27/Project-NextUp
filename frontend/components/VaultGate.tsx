@@ -112,9 +112,9 @@ export default function VaultGate({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen flex-col justify-center items-center bg-background text-foreground p-8">
-      <div className="max-w-md w-full border-2 border-border bg-background p-8 md:p-12 space-y-8">
+      <div className="max-w-md w-full border border-border bg-background p-8 md:p-12 space-y-8">
         <div className="space-y-4 text-center">
-          <div className="inline-flex h-12 w-12 items-center justify-center bg-accent text-black border-2 border-black">
+          <div className="inline-flex h-12 w-12 items-center justify-center bg-accent text-black border border-black">
             <ShieldCheck size={24} />
           </div>
           <h1 className="text-3xl font-extrabold tracking-tighter uppercase leading-none">
@@ -131,7 +131,7 @@ export default function VaultGate({ children }: { children: React.ReactNode }) {
         </div>
 
         {error && (
-          <div className="border-2 border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-500 uppercase tracking-wider text-center">
+          <div className="border border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-500 uppercase tracking-wider text-center">
             {error}
           </div>
         )}
@@ -149,9 +149,9 @@ export default function VaultGate({ children }: { children: React.ReactNode }) {
                 autoFocus
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder={isFirstTime ? "Create vault password" : "Enter your password"}
                 autoComplete={isFirstTime ? "new-password" : "current-password"}
-                className="w-full h-14 border-2 border-border bg-transparent text-xl font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-4 transition-colors pr-12"
+                className="w-full h-14 border border-border bg-transparent text-xl font-bold tracking-tight placeholder:text-sm placeholder:font-normal placeholder:tracking-normal placeholder:text-muted-foreground/60 focus:border-accent focus:outline-none px-4 transition-colors pr-12"
               />
               <button
                 type="button"
@@ -180,9 +180,9 @@ export default function VaultGate({ children }: { children: React.ReactNode }) {
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder="Confirm vault password"
                 autoComplete="new-password"
-                className="w-full h-14 border-2 border-border bg-transparent text-xl font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-4 transition-colors"
+                className="w-full h-14 border border-border bg-transparent text-xl font-bold tracking-tight placeholder:text-sm placeholder:font-normal placeholder:tracking-normal placeholder:text-muted-foreground/60 focus:border-accent focus:outline-none px-4 transition-colors"
               />
             </div>
           )}
@@ -190,7 +190,7 @@ export default function VaultGate({ children }: { children: React.ReactNode }) {
           <button
             type="submit"
             disabled={loading}
-            className="flex w-full items-center justify-center gap-3 h-14 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-3 h-14 border border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-50"
           >
             <Unlock size={16} />
             <span>

@@ -70,13 +70,13 @@ export default function Sidebar() {
   return (
     <>
       {/* Mobile Header */}
-      <div className="flex h-16 w-full items-center justify-between border-b-2 border-border bg-background px-4 md:hidden">
+      <div className="flex h-16 w-full items-center justify-between border-b border-border bg-background px-4 md:hidden">
         <Link href="/dashboard" className="flex items-center">
           <Logo size="sm" />
         </Link>
         <button 
           onClick={() => setMobileOpen(!mobileOpen)} 
-          className="border-2 border-border p-1 bg-muted hover:bg-accent hover:text-black transition-colors"
+          className="border border-border p-1 bg-muted hover:bg-accent hover:text-black transition-colors"
         >
           {mobileOpen ? <X size={20} /> : <Menu size={20} />}
         </button>
@@ -84,34 +84,22 @@ export default function Sidebar() {
 
       {/* Sidebar Container */}
       <aside className={`
-        fixed inset-y-0 left-0 z-50 flex w-64 flex-col overflow-y-auto border-r-2 border-border bg-background transition-transform md:translate-x-0
+        fixed inset-y-0 left-0 z-50 flex w-64 flex-col overflow-y-auto border-r border-border bg-background transition-transform md:translate-x-0
         ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
       `}>
         {/* Brand header */}
-        <div className="flex h-20 shrink-0 items-center justify-between border-b-2 border-border px-6">
+        <div className="flex h-20 shrink-0 items-center justify-between border-b border-border px-6">
           <Link href="/dashboard" className="flex items-center">
             <Logo size="lg" />
           </Link>
           <button
             onClick={() => setMobileOpen(false)} 
-            className="border-2 border-border p-1 bg-muted hover:bg-accent hover:text-black transition-colors md:hidden"
+            className="border border-border p-1 bg-muted hover:bg-accent hover:text-black transition-colors md:hidden"
           >
             <X size={16} />
           </button>
         </div>
 
-        {/* Security badge */}
-        <div className="flex shrink-0 flex-col gap-2 border-b-2 border-border bg-muted/30 p-4">
-          <Tooltip content="Your registration number, CGPA, and marks are encrypted in your browser. The server only stores scrambled data — we cannot read it." position="right">
-            <div className="flex items-center gap-2 text-xs font-bold tracking-wider text-accent uppercase cursor-help">
-              <ShieldCheck size={16} className="text-accent" />
-              <span>🔒 Private &amp; Secure</span>
-            </div>
-          </Tooltip>
-          <p className="text-[10px] text-muted-foreground tracking-tight leading-snug">
-            Your data is encrypted in your browser before it leaves your device.
-          </p>
-        </div>
 
         {/* Nav links */}
         <nav className="flex-1 space-y-1 py-4">
@@ -156,9 +144,9 @@ export default function Sidebar() {
                 href={item.href}
                 onClick={() => setMobileOpen(false)}
                 className={`
-                  flex items-center gap-4 px-6 py-3 text-sm font-bold tracking-tighter transition-all uppercase
+                  flex items-center gap-4 px-6 py-3 text-sm font-semibold tracking-tighter transition-all uppercase relative
                   ${isActive 
-                    ? "bg-accent text-black border-y-2 border-black" 
+                    ? "bg-accent/[0.08] text-foreground border-l-[3px] border-l-accent pl-[21px]" 
                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   }
                 `}
@@ -171,12 +159,12 @@ export default function Sidebar() {
         </nav>
 
         {/* Footer actions */}
-        <div className="shrink-0 border-t-2 border-border p-4 space-y-2">
+        <div className="shrink-0 border-t border-border p-4 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-muted-foreground tracking-wider uppercase">THEME</span>
             <button 
               onClick={toggleTheme} 
-              className="flex items-center justify-center border-2 border-border bg-muted hover:bg-accent hover:text-black p-2 transition-all active:scale-95"
+              className="flex items-center justify-center border border-border bg-muted hover:bg-accent hover:text-black p-2 transition-all active:scale-95"
               title="Toggle theme"
             >
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
@@ -185,7 +173,7 @@ export default function Sidebar() {
 
           {user && (
             <div className="flex items-center gap-3 border-t border-border pt-2">
-              <div className="flex h-10 w-10 items-center justify-center bg-muted border-2 border-border text-sm font-bold uppercase">
+              <div className="flex h-10 w-10 items-center justify-center bg-muted border border-border text-sm font-bold uppercase">
                 {user.full_name ? user.full_name[0] : user.email[0]}
               </div>
               <div className="flex-1 min-w-0">
@@ -203,7 +191,7 @@ export default function Sidebar() {
 
           <button
             onClick={handleLogout}
-            className="flex w-full items-center justify-center gap-3 border-2 border-border py-2.5 text-xs font-bold tracking-wider hover:bg-red-600 hover:text-white hover:border-red-600 transition-all uppercase"
+            className="flex w-full items-center justify-center gap-3 border border-border py-2.5 text-xs font-bold tracking-wider hover:bg-red-600 hover:text-white hover:border-red-600 transition-all uppercase"
           >
             <LogOut size={14} />
             <span>LOGOUT</span>

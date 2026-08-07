@@ -127,7 +127,7 @@ export default function TrackingDrawer({
               Next Upcoming Event
             </h3>
             {nextEvent ? (
-              <div className="border-2 border-accent/50 bg-accent/5 p-4 space-y-2">
+              <div className="border border-accent/50 bg-accent/5 p-4 space-y-2">
                 <h4 className="font-bold uppercase text-accent tracking-tight">{nextEvent.event_type}</h4>
                 {nextEvent.timestamp && (
                   <div className="flex items-center gap-2 text-xs font-mono font-bold">
@@ -189,7 +189,7 @@ export default function TrackingDrawer({
               <FileText size={16} />
               <span className="text-[9px] font-bold uppercase tracking-wider">Resume</span>
             </button>
-            <button onClick={() => onMoveStage("Archive")} className="col-span-2 flex items-center justify-center gap-2 border-2 border-border p-2 bg-background hover:bg-red-950 hover:text-red-400 hover:border-red-500 transition-colors">
+            <button onClick={() => onMoveStage("Archive")} className="col-span-2 flex items-center justify-center gap-2 border border-border p-2 bg-background hover:bg-red-950 hover:text-red-400 hover:border-red-500 transition-colors">
               <Archive size={16} />
               <span className="text-xs font-bold uppercase tracking-wider">Archive Workspace</span>
             </button>

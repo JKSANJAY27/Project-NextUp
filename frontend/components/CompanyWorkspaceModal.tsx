@@ -361,7 +361,7 @@ export default function CompanyWorkspaceModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200 text-foreground">
-      <div className="relative w-full max-w-5xl border-2 border-border bg-background flex flex-col md:flex-row h-[85vh] animate-in slide-in-from-bottom-4 duration-300 rounded-none overflow-hidden">
+      <div className="relative w-full max-w-5xl border border-border bg-background flex flex-col md:flex-row h-[85vh] animate-in slide-in-from-bottom-4 duration-300 rounded-none overflow-hidden">
         
         {/* Left Nav Pane */}
         <div className="w-full md:w-56 border-r border-border bg-muted/15 flex flex-row md:flex-col shrink-0">
@@ -418,7 +418,7 @@ export default function CompanyWorkspaceModal({
             {modalTab === "overview" && (
               <div className="space-y-8">
                 {selectedCompany.requires_review && (
-                  <div className="border-2 border-dashed border-amber-500 bg-amber-500/10 p-4 flex items-start gap-3">
+                  <div className="border border-dashed border-amber-500 bg-amber-500/10 p-4 flex items-start gap-3">
                     <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
                     <div>
                       <p className="text-xs font-bold uppercase tracking-wider text-amber-500">
@@ -489,7 +489,7 @@ export default function CompanyWorkspaceModal({
                 </div>
 
                 {/* Specifications Grid */}
-                <div className="border-2 border-border p-5 bg-muted/5 space-y-4">
+                <div className="border border-border p-5 bg-muted/5 space-y-4">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <h4 className="text-xs font-black tracking-widest text-accent uppercase">
                       📋 Placement Specifications
@@ -666,7 +666,7 @@ export default function CompanyWorkspaceModal({
 
                 {/* MANUAL DRIVE PROGRESS UPDATE FORM */}
                 {selectedCompany.is_manual && (
-                  <div className="border-2 border-accent/40 bg-accent/5 p-6 space-y-4">
+                  <div className="border border-accent/40 bg-accent/5 p-6 space-y-4">
                     <div className="flex items-center justify-between border-b border-accent/30 pb-3">
                       <h4 className="text-xs font-black tracking-widest text-accent uppercase flex items-center gap-2">
                         <span>➕</span> LOG PROGRESS UPDATE
@@ -890,7 +890,7 @@ export default function CompanyWorkspaceModal({
                               <textarea
                                 value={tempNoteText}
                                 onChange={(e) => setTempNoteText(e.target.value)}
-                                className="w-full border-2 border-border bg-background p-2 text-xs font-bold focus:border-accent focus:outline-none"
+                                className="w-full border border-border bg-background p-2 text-xs font-bold focus:border-accent focus:outline-none"
                                 rows={3}
                                 placeholder="Type preparation notes, dates, or questions here..."
                               />
@@ -1108,7 +1108,7 @@ export default function CompanyWorkspaceModal({
                   </div>
                   
                   {pdfUrl ? (
-                    <div className="border-2 border-border bg-muted/5 p-1">
+                    <div className="border border-border bg-muted/5 p-1">
                       <iframe
                         src={pdfUrl}
                         className="w-full h-[60vh] border-0"

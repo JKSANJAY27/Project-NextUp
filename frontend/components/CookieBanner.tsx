@@ -78,7 +78,7 @@ export default function CookieBanner() {
           </button>
           <button
             onClick={handleAccept}
-            className="px-5 h-9 bg-foreground text-background text-xs font-extrabold tracking-widest uppercase border-2 border-border hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95"
+            className="px-5 h-9 bg-foreground text-background text-xs font-extrabold tracking-widest uppercase border border-border hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95"
           >
             Got it
           </button>

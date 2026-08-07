@@ -39,7 +39,7 @@ export default function PasswordChangeWarningModal({
       />
 
       {/* Modal */}
-      <div className="relative z-10 w-full max-w-md bg-background border-2 border-yellow-500 shadow-2xl">
+      <div className="relative z-10 w-full max-w-md bg-background border border-yellow-500 shadow-lg">
         {/* Header */}
         <div className="flex items-center justify-between border-b-2 border-yellow-500 bg-yellow-500/10 px-6 py-4">
           <div className="flex items-center gap-3">
@@ -92,13 +92,13 @@ export default function PasswordChangeWarningModal({
         <div className="border-t-2 border-border px-6 py-4 flex gap-3">
           <button
             onClick={onCancel}
-            className="flex-1 h-10 border-2 border-border text-xs font-bold uppercase tracking-widest hover:bg-muted transition-all"
+            className="flex-1 h-10 border border-border text-xs font-bold uppercase tracking-widest hover:bg-muted transition-all"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="flex-1 h-10 bg-yellow-500 text-black text-xs font-extrabold uppercase tracking-widest border-2 border-yellow-500 hover:bg-yellow-400 transition-all active:scale-95"
+            className="flex-1 h-10 bg-yellow-500 text-black text-xs font-extrabold uppercase tracking-widest border border-yellow-500 hover:bg-yellow-400 transition-all active:scale-95"
           >
             I understand, continue
           </button>

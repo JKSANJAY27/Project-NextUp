@@ -3,15 +3,15 @@
 @tailwind utilities;
 
 :root {
-  --background: #FAFAFA;
+  --background: #F6F7F9;
   --foreground: #09090B;
-  --card: #FAFAFA;
+  --card: #FFFFFF;
   --card-foreground: #09090B;
-  --muted: #F4F4F5;
+  --muted: #F2F2F4;
   --muted-foreground: #71717A;
   --accent: #DFE104;
   --accent-foreground: #000000;
-  --border: #E4E4E7;
+  --border: #E8E8E8;
 }
 
 .dark {
@@ -24,6 +24,21 @@
   --accent: #DFE104;
   --accent-foreground: #000000;
   --border: #3F3F46;
+}
+
+/* Light mode high-contrast yellow text override (solves bright yellow text on white background) */
+html:not(.dark) .text-accent {
+  color: #786F00;
+}
+html:not(.dark) .text-yellow-500,
+html:not(.dark) .text-yellow-400 {
+  color: #857A00;
+}
+html:not(.dark) .bg-black .text-accent,
+html:not(.dark) .bg-zinc-900 .text-accent,
+html:not(.dark) .bg-zinc-950 .text-accent,
+html:not(.dark) .bg-foreground .text-accent {
+  color: #DFE104;
 }
 
 * {
@@ -154,8 +169,8 @@ html {
   border: 1px solid var(--border);
   border-top: 2px solid var(--accent);
   border-radius: 8px;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
+  backdrop-filter: blur(8px);
   pointer-events: none;
   opacity: 0;
   visibility: hidden;

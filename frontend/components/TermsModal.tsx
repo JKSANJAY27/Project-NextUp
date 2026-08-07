@@ -34,7 +34,7 @@ export default function TermsModal({ open, agreed, onToggle, onClose }: TermsMod
       />
 
       {/* Modal panel */}
-      <div className="relative z-10 w-full max-w-lg bg-background border-2 border-border shadow-2xl">
+      <div className="relative z-10 w-full max-w-lg bg-background border border-border shadow-lg">
         {/* Header */}
         <div className="flex items-center justify-between border-b-2 border-border px-6 py-4">
           <div className="flex items-center gap-3">
@@ -116,14 +116,14 @@ export default function TermsModal({ open, agreed, onToggle, onClose }: TermsMod
           <div className="flex gap-3">
             <button
               onClick={onClose}
-              className="flex-1 h-10 border-2 border-border text-xs font-bold uppercase tracking-widest hover:bg-muted transition-all"
+              className="flex-1 h-10 border border-border text-xs font-bold uppercase tracking-widest hover:bg-muted transition-all"
             >
               Cancel
             </button>
             <button
               onClick={onClose}
               disabled={!agreed}
-              className="flex-1 h-10 bg-foreground text-background text-xs font-extrabold uppercase tracking-widest border-2 border-border hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+              className="flex-1 h-10 bg-foreground text-background text-xs font-extrabold uppercase tracking-widest border border-border hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
             >
               Continue
             </button>

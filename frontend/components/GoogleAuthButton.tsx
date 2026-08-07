@@ -48,7 +48,7 @@ export default function GoogleAuthButton({ label, onBeforeStart, onError }: Goog
         type="button"
         onClick={handleClick}
         disabled={loading}
-        className="flex w-full items-center justify-center gap-3 h-10 md:h-11 border-2 border-border bg-transparent text-foreground font-extrabold text-xs md:text-sm tracking-widest uppercase hover:border-accent hover:text-accent hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
+        className="flex w-full items-center justify-center gap-3 h-10 md:h-11 border border-border bg-transparent text-foreground font-extrabold text-xs md:text-sm tracking-widest uppercase hover:border-accent hover:text-accent hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
       >
         <GoogleIcon />
         <span>{loading ? "Redirecting to Google..." : label}</span>

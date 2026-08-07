@@ -35,7 +35,7 @@ export function SkeletonText({ lines = 3 }: { lines?: number }) {
 export function SkeletonStat() {
   return (
     <div
-      className="border-2 border-border p-6 space-y-3"
+      className="border border-border p-6 space-y-3"
       role="status"
       aria-label="Loading statistic..."
     >
@@ -50,7 +50,7 @@ export function SkeletonStat() {
 export function SkeletonCard() {
   return (
     <div
-      className="border-2 border-border p-6 space-y-4"
+      className="border border-border p-6 space-y-4"
       role="status"
       aria-label="Loading company..."
     >
@@ -92,7 +92,7 @@ export function SkeletonTableRow({ cols = 5 }: { cols?: number }) {
 // ─── Skeleton table ──────────────────────────────────────────────────────────
 export function SkeletonTable({ rows = 5, cols = 5 }: { rows?: number; cols?: number }) {
   return (
-    <div className="border-2 border-border" role="status" aria-label="Loading table...">
+    <div className="border border-border" role="status" aria-label="Loading table...">
       {/* header */}
       <div className="flex items-center gap-4 border-b-2 border-border bg-muted/30 px-4 py-3">
         {Array.from({ length: cols }).map((_, i) => (

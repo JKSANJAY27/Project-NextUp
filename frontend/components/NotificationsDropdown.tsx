@@ -160,7 +160,7 @@ export default function NotificationsDropdown() {
       {/* Trigger Button */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="relative flex items-center justify-center border-2 border-border bg-card p-2 text-foreground hover:bg-accent hover:text-black transition-all active:scale-95 duration-200"
+        className="relative flex items-center justify-center border border-border bg-card p-2 text-foreground hover:bg-accent hover:text-black transition-all active:scale-95 duration-200"
         aria-label="Notifications"
       >
         <Bell size={20} />
@@ -173,7 +173,7 @@ export default function NotificationsDropdown() {
 
       {/* Dropdown Card */}
       {isOpen && (
-        <div className="absolute right-0 mt-3 w-80 sm:w-96 border-2 border-border bg-card shadow-2xl z-30 rounded-none animate-in fade-in slide-in-from-top-2 duration-200 max-h-[80vh] flex flex-col">
+        <div className="absolute right-0 mt-3 w-80 sm:w-96 border border-border bg-card shadow-lg z-30 rounded-none animate-in fade-in slide-in-from-top-2 duration-200 max-h-[80vh] flex flex-col">
           {/* Tabs Header */}
           <div className="flex border-b border-border shrink-0 bg-muted/50">
             <button

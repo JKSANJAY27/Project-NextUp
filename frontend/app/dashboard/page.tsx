@@ -1187,13 +1187,13 @@ function DashboardPageContent() {
         
         {/* Onboarding & Warning Banners */}
         {(!user?.neo_id_enc) && (
-          <div className="border-2 border-accent bg-accent/10 p-6 flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="border border-border bg-white p-6 flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="h-10 w-10 bg-accent text-black flex items-center justify-center border-2 border-black animate-pulse">
+              <div className="h-10 w-10 bg-accent/10 text-foreground flex items-center justify-center border border-border animate-pulse">
                 <AlertCircle size={20} />
               </div>
               <div>
-                <p className="text-sm font-black uppercase tracking-wider text-accent">
+                <p className="text-sm font-black uppercase tracking-wider text-foreground">
                   ⚡ ONBOARDING: ACTION REQUIRED
                 </p>
                 <p className="text-xs text-muted-foreground uppercase tracking-tight leading-snug">
@@ -1211,13 +1211,13 @@ function DashboardPageContent() {
         )}
 
         {syncing && (
-          <div className="border-2 border-accent bg-accent/10 p-6 flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="border border-border bg-white p-6 flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="h-10 w-10 bg-accent text-black flex items-center justify-center border-2 border-black animate-pulse">
+              <div className="h-10 w-10 bg-accent/10 text-foreground flex items-center justify-center border border-border animate-pulse">
                 <span className="h-2 w-2 rounded-full bg-black animate-ping" />
               </div>
               <div>
-                <p className="text-sm font-black uppercase tracking-wider text-accent">
+                <p className="text-sm font-black uppercase tracking-wider text-foreground">
                   ⚡ SYNCING WITH UNIVERSITY MAILBOX
                 </p>
                 <p className="text-xs text-muted-foreground uppercase tracking-tight leading-snug">
@@ -1229,9 +1229,9 @@ function DashboardPageContent() {
         )}
 
         {!encryptionKey && (
-          <div className="border-2 border-amber-500 bg-amber-500/10 p-6 flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="border border-amber-500 bg-amber-500/10 p-6 flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="h-10 w-10 bg-amber-500 text-black flex items-center justify-center border-2 border-black">
+              <div className="h-10 w-10 bg-amber-500 text-black flex items-center justify-center border border-black">
                 <Lock size={20} />
               </div>
               <div>
@@ -1245,7 +1245,7 @@ function DashboardPageContent() {
             </div>
             <Link 
               href="/profile" 
-              className="border-2 border-amber-500 bg-amber-500 text-black text-xs font-bold tracking-widest px-6 py-3 hover:bg-transparent hover:text-amber-500 transition-colors uppercase block"
+              className="border border-amber-500 bg-amber-500 text-black text-xs font-bold tracking-widest px-6 py-3 hover:bg-transparent hover:text-amber-500 transition-colors uppercase block"
             >
               UNLOCK VAULT
             </Link>
@@ -1260,7 +1260,7 @@ function DashboardPageContent() {
         {/* ==================== 1. ACTION CENTER TAB ==================== */}
         {activeTab === "action-center" && !loading && (
           <div className="space-y-12">
-            <div className="flex justify-between items-end border-b-2 border-border pb-6">
+            <div className="flex justify-between items-end border-b border-border pb-6">
               <div className="space-y-1">
                 <h1 className="text-[clamp(2rem,6vw,4rem)] font-extrabold tracking-tighter uppercase leading-none">
                   ACTION CENTER
@@ -1272,10 +1272,9 @@ function DashboardPageContent() {
             </div>
 
             {/* Smart Daily Digest Banner */}
-            <div className="relative overflow-hidden border-2 border-border bg-gradient-to-r from-card to-card/50 p-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl">
-              <div className="absolute -right-24 -top-24 w-96 h-96 bg-accent/10 rounded-full blur-3xl pointer-events-none" />
-              <div className="space-y-4 relative z-10 max-w-3xl">
-                <div className="inline-block px-3 py-1 bg-accent/20 border border-accent text-accent text-[10px] font-black tracking-widest uppercase">
+            <div className="border border-border bg-white p-8 flex flex-col md:flex-row items-center justify-between gap-6">
+              <div className="space-y-4 max-w-3xl">
+                <div className="inline-block px-3 py-1 bg-accent/10 border border-border text-foreground text-[10px] font-black tracking-widest uppercase">
                   ⚡ SMART DAILY DIGEST
                 </div>
                 <h3 className="text-xl md:text-2xl font-bold tracking-tight text-foreground leading-snug">
@@ -1325,7 +1324,7 @@ function DashboardPageContent() {
             {/* Today + Tomorrow Schedule Timelines — side by side */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Today's Schedule */}
-              <div className="border-2 border-border p-6 bg-muted/10 space-y-4">
+              <div className="border border-border p-6 bg-white space-y-4">
                 <div className="border-b border-border pb-3 flex justify-between items-center">
                   <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
                     📅 TODAY&apos;S SCHEDULE
@@ -1364,7 +1363,7 @@ function DashboardPageContent() {
               </div>
 
               {/* Tomorrow's Schedule */}
-              <div className="border-2 border-border p-6 bg-muted/10 space-y-4">
+              <div className="border border-border p-6 bg-white space-y-4">
                 <div className="border-b border-border pb-3 flex justify-between items-center">
                   <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
                     🗓 TOMORROW&apos;S SCHEDULE
@@ -1405,19 +1404,19 @@ function DashboardPageContent() {
 
             {/* ─── SUGGESTED TRACKING — Historical Evidence Found ─── */}
             {suggestedTrackingCompanies.length > 0 && (
-              <div className="border-2 border-purple-500/70 bg-purple-950/10 p-6 space-y-6">
+              <div className="border border-purple-500/50 bg-white p-6 space-y-6">
                 <div className="flex items-center gap-3 border-b border-purple-500/40 pb-4">
                   <div className="h-8 w-8 bg-purple-500 text-white flex items-center justify-center shrink-0 animate-pulse">
                     <Sparkles size={16} />
                   </div>
                   <div>
-                    <h4 className="text-sm font-black tracking-widest uppercase text-purple-300">
+                    <h4 className="text-sm font-black tracking-widest uppercase text-purple-700 dark:text-purple-300">
                       SUGGESTED TRACKING
                       <span className="ml-2 bg-purple-500 text-white text-[10px] font-black px-1.5 py-0.5">
                         {suggestedTrackingCompanies.length}
                       </span>
                     </h4>
-                    <p className="text-[10px] text-purple-400 uppercase tracking-wide mt-0.5">
+                    <p className="text-[10px] text-purple-700/80 dark:text-purple-400 uppercase tracking-wide mt-0.5">
                       Historical email evidence found. Confirm if you participated in these drives.
                     </p>
                   </div>
@@ -1443,7 +1442,7 @@ function DashboardPageContent() {
 
             {/* ─── DECISION REQUIRED — Priority Section ─── */}
             {activeDecisionPendingCompanies.length > 0 && (
-              <div className="border-2 border-amber-500/70 bg-amber-500/5 p-6 space-y-6 relative">
+              <div className="border border-amber-500/50 bg-white p-6 space-y-6 relative">
                 {/* Auto-Filter Processing Overlay */}
                 {autoFiltering && (
                   <div className="absolute inset-0 bg-background/90 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-6 space-y-4 border-2 border-accent">
@@ -1464,13 +1463,13 @@ function DashboardPageContent() {
                       <AlertTriangle size={16} />
                     </div>
                     <div>
-                      <h4 className="text-sm font-black tracking-widest uppercase text-amber-400">
+                      <h4 className="text-sm font-black tracking-widest uppercase text-amber-800 dark:text-amber-400">
                         DECISION REQUIRED
                         <span className="ml-2 bg-amber-500 text-black text-[10px] font-black px-1.5 py-0.5">
                           {activeDecisionPendingCompanies.length}
                         </span>
                       </h4>
-                      <p className="text-[10px] text-amber-500/70 uppercase tracking-wide mt-0.5">
+                      <p className="text-[10px] text-amber-800/80 dark:text-amber-500/70 uppercase tracking-wide mt-0.5">
                         These registration windows have closed. Review manually or auto-filter based on shortlists.
                       </p>
                     </div>
@@ -1578,7 +1577,7 @@ function DashboardPageContent() {
                     return (
                       <div
                         key={comp.id}
-                        className={`border-2 bg-background p-4 space-y-3 transition-all ${
+                        className={`border bg-white p-4 space-y-3 transition-all ${
                           isSelected ? 'border-amber-500 bg-amber-500/5' : 'border-amber-500/30 hover:border-amber-500/60'
                         }`}
                       >
@@ -1601,13 +1600,13 @@ function DashboardPageContent() {
                               )}
                             </div>
                           </div>
-                          <span className="text-[8px] font-black bg-amber-950/60 border border-amber-500/50 text-amber-400 px-1.5 py-0.5 uppercase shrink-0">
+                          <span className="text-[8px] font-black bg-amber-500/10 border border-amber-500/50 text-amber-600 px-1.5 py-0.5 uppercase shrink-0">
                             PENDING
                           </span>
                         </div>
 
                         {/* Relative expiry time */}
-                        <div className="text-[10px] text-amber-400/80 font-bold uppercase flex items-center gap-1.5">
+                        <div className="text-[10px] text-amber-800 dark:text-amber-400/80 font-bold uppercase flex items-center gap-1.5">
                           <Clock size={10} />
                           {getRelativeExpiry(comp.registration_deadline)}
                         </div>

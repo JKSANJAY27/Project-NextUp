@@ -29,12 +29,12 @@ export default function TrackingSection({
   }, [count]);
 
   return (
-    <div className="mb-6 border-2 border-border bg-card overflow-hidden">
+    <div className="mb-6 border border-border bg-card overflow-hidden">
       {/* Header */}
       <button
         onClick={() => setExpanded(!expanded)}
         className={`w-full flex items-center justify-between p-4 hover:bg-muted transition-colors ${
-          expanded ? "border-b-2 border-border" : ""
+          expanded ? "border-b border-border" : ""
         }`}
       >
         <div className="flex items-center gap-3">
@@ -50,9 +50,9 @@ export default function TrackingSection({
 
       {/* Content */}
       {expanded && (
-        <div className="p-4 bg-muted/10">
+        <div className="p-4 bg-background">
           {count === 0 ? (
-            <div className="text-center py-8 text-xs font-bold text-muted-foreground uppercase tracking-widest border-2 border-dashed border-border">
+            <div className="text-center py-8 text-xs font-bold text-muted-foreground uppercase tracking-widest border border-dashed border-border">
               No companies in this stage
             </div>
           ) : (

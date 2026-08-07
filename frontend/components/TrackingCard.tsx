@@ -101,7 +101,7 @@ export default function TrackingCard({
   return (
     <div
       onClick={onClick}
-      className={`border-2 border-l-4 p-4 cursor-pointer hover:-translate-y-1 transition-all duration-200 flex flex-col gap-3 group relative ${colorClass} ${moving ? "opacity-50 pointer-events-none" : ""}`}
+      className={`border border-l-4 p-4 cursor-pointer hover:-translate-y-1 transition-all duration-200 flex flex-col gap-3 group relative ${colorClass} ${moving ? "opacity-50 pointer-events-none" : ""}`}
     >
       {/* Header Row */}
       <div className="flex justify-between items-start gap-2">
@@ -131,7 +131,7 @@ export default function TrackingCard({
 
             {/* Phase dropdown */}
             {dropdownOpen && (
-              <div className="absolute top-full right-0 mt-1 z-50 bg-background border-2 border-border shadow-xl rounded overflow-hidden min-w-[170px]">
+              <div className="absolute top-full right-0 mt-1 z-50 bg-background border border-border shadow-md rounded overflow-hidden min-w-[170px]">
                 <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground px-3 py-2 border-b border-border">
                   Move to phase
                 </p>

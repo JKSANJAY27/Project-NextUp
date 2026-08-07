@@ -623,9 +623,9 @@ export default function ProfilePage() {
   if (!unlocked) {
     return (
       <div className="flex flex-1 flex-col justify-center items-center bg-background p-8 min-h-screen">
-        <div className="max-w-md w-full border-2 border-border bg-background p-8 md:p-12 space-y-8">
+        <div className="max-w-md w-full border border-border bg-background p-8 md:p-12 space-y-8">
           <div className="space-y-4 text-center">
-            <div className="inline-flex h-12 w-12 items-center justify-center bg-accent text-black border-2 border-black">
+            <div className="inline-flex h-12 w-12 items-center justify-center bg-accent text-black border border-black">
               <ShieldCheck size={24} />
             </div>
             <h1 className="text-3xl font-extrabold tracking-tighter uppercase leading-none">
@@ -637,7 +637,7 @@ export default function ProfilePage() {
           </div>
 
           {unlockError && (
-            <div className="border-2 border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-600 uppercase tracking-wider text-center">
+            <div className="border border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-600 uppercase tracking-wider text-center">
               {unlockError}
             </div>
           )}
@@ -652,15 +652,15 @@ export default function ProfilePage() {
                 required
                 value={unlockPassword}
                 onChange={(e) => setUnlockPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full h-14 border-2 border-border bg-transparent text-xl font-bold tracking-tight placeholder-zinc-700 focus:border-accent focus:outline-none px-4 transition-colors"
+                placeholder="Enter your password"
+                className="w-full h-14 border border-border bg-transparent text-xl font-bold tracking-tight placeholder:text-sm placeholder:font-normal placeholder:tracking-normal placeholder:text-muted-foreground/60 focus:border-accent focus:outline-none px-4 transition-colors"
               />
             </div>
 
             <button
               type="submit"
               disabled={unlockLoading}
-              className="flex w-full items-center justify-center gap-3 h-14 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-50"
+              className="flex w-full items-center justify-center gap-3 h-14 border border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-50"
             >
               <Unlock size={16} />
               <span>{unlockLoading ? "UNLOCKING..." : "UNLOCK VAULT"}</span>
@@ -676,7 +676,7 @@ export default function ProfilePage() {
       <div className="flex-1 bg-background p-8 md:p-12 space-y-12 max-w-5xl mx-auto w-full">
         
         {/* Page header */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between border-b-2 border-border pb-8 gap-6">
+        <div className="flex flex-col md:flex-row md:items-end justify-between border-b border-border pb-8 gap-6">
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-xs font-bold tracking-widest text-accent uppercase">
               <ShieldCheck size={16} className="text-accent" />
@@ -687,7 +687,7 @@ export default function ProfilePage() {
             </h1>
             <button 
               onClick={() => router.push('/dashboard?tab=applications')}
-              className="mt-4 flex items-center justify-center gap-2 h-10 px-6 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 w-max"
+              className="mt-4 flex items-center justify-center gap-2 h-10 px-6 border border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 w-max"
             >
               <Briefcase size={16} />
               <span>MY APPLICATIONS</span>
@@ -702,7 +702,7 @@ export default function ProfilePage() {
                 {completeness}% {completeness === 100 ? "✓ READY" : "✦ INCOMPLETE"}
               </span>
             </div>
-            <div className="h-4 border-2 border-border bg-muted p-0.5">
+            <div className="h-4 border border-border bg-muted p-0.5">
               <div 
                 className="h-full bg-accent transition-all duration-500" 
                 style={{ width: `${completeness}%` }}
@@ -713,7 +713,7 @@ export default function ProfilePage() {
 
         {/* Global Block Notice if not complete */}
         {completeness < 100 && (
-          <div className="border-2 border-amber-600 bg-amber-600/10 p-6 space-y-2">
+          <div className="border border-amber-600 bg-amber-600/10 p-6 space-y-2">
             <div className="flex items-center gap-3 text-amber-500">
               <Lock size={20} className="animate-bounce" />
               <h4 className="text-sm font-black uppercase tracking-widest">
@@ -727,7 +727,7 @@ export default function ProfilePage() {
         )}
 
         {/* Resume PDF Upload Zone */}
-        <div className="border-2 border-dashed border-border p-6 bg-card space-y-6">
+        <div className="border border-dashed border-border p-6 bg-card space-y-6">
           <h3 className="text-sm font-extrabold uppercase tracking-widest text-accent flex items-center gap-2">
             <Upload size={16} />
             <span>1. Quick Profile Setup / Update Resume</span>
@@ -737,7 +737,7 @@ export default function ProfilePage() {
           </p>
 
           <form onSubmit={handleUploadResume} className="flex flex-col md:flex-row gap-4 items-stretch md:items-center">
-            <label className="flex-1 flex items-center justify-between border-2 border-border h-14 px-4 bg-background cursor-pointer hover:border-accent transition-colors">
+            <label className="flex-1 flex items-center justify-between border border-border h-14 px-4 bg-background cursor-pointer hover:border-accent transition-colors">
               <div className="flex items-center gap-3">
                 <FileText size={18} className="text-muted-foreground" />
                 <span className="text-xs font-bold uppercase truncate max-w-xs md:max-w-lg">
@@ -758,7 +758,7 @@ export default function ProfilePage() {
             <button
               type="submit"
               disabled={!file || parsing}
-              className="h-14 px-8 border-2 border-border bg-foreground text-background font-extrabold text-xs tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-50"
+              className="h-14 px-8 border border-border bg-foreground text-background font-extrabold text-xs tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent transition-all active:scale-95 disabled:opacity-50"
             >
               {parsing ? "PARSING RESUME..." : "PARSE & AUTO-FILL"}
             </button>
@@ -825,7 +825,7 @@ export default function ProfilePage() {
 
             {/* Inline PDF Viewer */}
             {showPdfViewer && savedPdfFile && (
-              <div className="border-2 border-border p-1 bg-black/20 h-[600px] w-full mt-2">
+              <div className="border border-border p-1 bg-black/20 h-[600px] w-full mt-2">
                 <iframe
                   src={`data:application/pdf;base64,${savedPdfFile}#toolbar=0`}
                   className="w-full h-full border-0 bg-background"
@@ -837,14 +837,14 @@ export default function ProfilePage() {
         </div>
 
         {success && (
-          <div className="border-2 border-green-600 bg-green-600/10 p-4 text-xs font-bold text-green-600 uppercase tracking-wider flex items-center gap-2">
+          <div className="border border-green-600 bg-green-600/10 p-4 text-xs font-bold text-green-600 uppercase tracking-wider flex items-center gap-2">
             <CheckCircle2 size={16} />
             <span>{success}</span>
           </div>
         )}
 
         {error && (
-          <div className="border-2 border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-600 uppercase tracking-wider flex items-center gap-2">
+          <div className="border border-red-600 bg-red-600/10 p-4 text-xs font-bold text-red-600 uppercase tracking-wider flex items-center gap-2">
             <AlertCircle size={16} />
             <span>{error}</span>
           </div>
@@ -852,7 +852,7 @@ export default function ProfilePage() {
 
         {/* Collapsible Resume Details Editor (Extracted from PDF) */}
         {showResumeEditor && (
-          <div className="border-2 border-border p-6 bg-card space-y-8">
+          <div className="border border-border p-6 bg-card space-y-8">
             <div className="border-b border-border pb-4 flex justify-between items-center">
               <h3 className="text-sm font-black tracking-widest text-accent uppercase flex items-center gap-2">
                 <FileText size={18} />
@@ -1246,7 +1246,7 @@ export default function ProfilePage() {
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   placeholder="E.G. SANJAY J K"
-                  className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
+                  className="w-full h-14 border border-border bg-transparent text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
                 />
               </div>
               
@@ -1260,7 +1260,7 @@ export default function ProfilePage() {
                   value={branch}
                   onChange={(e) => setBranch(e.target.value)}
                   placeholder="E.G. CSE, ECE, MCA"
-                  className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
+                  className="w-full h-14 border border-border bg-transparent text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
                 />
               </div>
 
@@ -1271,7 +1271,7 @@ export default function ProfilePage() {
                 <select
                   value={degreeType}
                   onChange={(e) => setDegreeType(e.target.value)}
-                  className="w-full h-14 border-2 border-border bg-background text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
+                  className="w-full h-14 border border-border bg-background text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
                 >
                   <option value="BTECH">B.Tech (Bachelor of Technology)</option>
                   <option value="MTECH">M.Tech (Master of Technology)</option>
@@ -1287,7 +1287,7 @@ export default function ProfilePage() {
                 <select
                   value={specialization}
                   onChange={(e) => setSpecialization(e.target.value)}
-                  className="w-full h-14 border-2 border-border bg-background text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
+                  className="w-full h-14 border border-border bg-background text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
                 >
                   <option value="CSE_CORE">Computer Science & Engineering (Core)</option>
                   <option value="CSE_INFO_SEC">CSE - Information Security</option>
@@ -1309,7 +1309,7 @@ export default function ProfilePage() {
                   value={batchYear}
                   onChange={(e) => setBatchYear(Number(e.target.value))}
                   placeholder="2027"
-                  className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
+                  className="w-full h-14 border border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
                 />
               </div>
             </div>
@@ -1335,7 +1335,7 @@ export default function ProfilePage() {
                   value={neoId}
                   onChange={(e) => setNeoId(e.target.value)}
                   placeholder="MANUAL ENTRY (ALTERNATING LETTER/DIGIT)"
-                  className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
+                  className="w-full h-14 border border-border bg-transparent text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
                 />
               </div>
 
@@ -1352,7 +1352,7 @@ export default function ProfilePage() {
                   value={cgpa}
                   onChange={(e) => setCgpa(e.target.value)}
                   placeholder="E.G. 9.15"
-                  className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
+                  className="w-full h-14 border border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
                 />
               </div>
 
@@ -1370,7 +1370,7 @@ export default function ProfilePage() {
                     value={ugCgpa}
                     onChange={(e) => setUgCgpa(e.target.value)}
                     placeholder="E.G. 8.50"
-                    className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
+                    className="w-full h-14 border border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
                   />
                 </div>
               )}
@@ -1388,7 +1388,7 @@ export default function ProfilePage() {
                   value={tenthMarks}
                   onChange={(e) => setTenthMarks(e.target.value)}
                   placeholder="E.G. 95.0"
-                  className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
+                  className="w-full h-14 border border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
                 />
               </div>
 
@@ -1405,17 +1405,17 @@ export default function ProfilePage() {
                   value={twelfthMarks}
                   onChange={(e) => setTwelfthMarks(e.target.value)}
                   placeholder="E.G. 92.4"
-                  className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
+                  className="w-full h-14 border border-border bg-transparent text-sm font-bold focus:border-accent focus:outline-none px-4 transition-colors"
                 />
               </div>
 
-              <div className="md:col-span-2 flex items-center gap-4 h-14 border-2 border-border px-4 bg-muted/20">
+              <div className="md:col-span-2 flex items-center gap-4 h-14 border border-border px-4 bg-muted/20">
                 <input
                   type="checkbox"
                   id="arrears"
                   checked={hasArrears}
                   onChange={(e) => setHasArrears(e.target.checked)}
-                  className="h-5 w-5 rounded-none border-2 border-border text-accent focus:ring-0 bg-transparent cursor-pointer"
+                  className="h-5 w-5 rounded-none border border-border text-accent focus:ring-0 bg-transparent cursor-pointer"
                 />
                 <label htmlFor="arrears" className="text-xs font-bold uppercase tracking-wider cursor-pointer">
                   I currently have standing arrears (backlogs)
@@ -1439,7 +1439,7 @@ export default function ProfilePage() {
                 value={skillsStr}
                 onChange={(e) => setSkillsStr(e.target.value)}
                 placeholder="PYTHON, DSA, SQL, DOCKER, TYPESCRIPT"
-                className="w-full h-14 border-2 border-border bg-transparent text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
+                className="w-full h-14 border border-border bg-transparent text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
               />
             </div>
           </div>
@@ -1448,7 +1448,7 @@ export default function ProfilePage() {
           <button
             type="submit"
             disabled={saving}
-            className="flex items-center justify-center gap-3 w-full md:w-72 h-16 border-2 border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
+            className="flex items-center justify-center gap-3 w-full md:w-72 h-16 border border-border bg-foreground text-background font-extrabold tracking-widest uppercase hover:bg-accent hover:text-black hover:border-accent hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
           >
             <Save size={16} />
             <span>{saving ? "ENCRYPTING & SAVING..." : "SAVE PROFILE & RESUME"}</span>

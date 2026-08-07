@@ -274,13 +274,13 @@ export default function TrackingPage() {
   return (
     <>
       <div className="flex-1 bg-background p-8 md:p-12 space-y-12 max-w-[1600px] mx-auto w-full">
-        <div className="flex items-start gap-3 border border-amber-500/60 bg-amber-500/10 px-4 py-3 text-amber-200">
-          <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-400" />
+        <div className="flex items-start gap-3 border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-amber-900 dark:text-amber-200">
+          <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
           <p className="text-xs leading-relaxed"><span className="font-extrabold uppercase tracking-wider">AI-assisted tracking.</span> Stages are inferred from CDC emails and can occasionally be wrong. Always verify important updates manually in the official mail and CDC portal.</p>
         </div>
         
         {/* Page Header */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between border-b-2 border-border pb-8 gap-6">
+        <div className="flex flex-col md:flex-row md:items-end justify-between border-b border-border pb-8 gap-6">
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-xs font-bold tracking-widest text-accent uppercase">
               <Activity size={16} className="text-accent" />
@@ -328,7 +328,7 @@ export default function TrackingPage() {
           // take 30-50s to wake from a cold start, and a fetch failure used
           // to render as an indistinguishable 'no companies' message —
           // making the tracker look broken/empty when it was just waiting.
-          <div className="text-center py-20 border-2 border-dashed border-destructive/40 text-muted-foreground font-bold uppercase tracking-wider text-xs space-y-3">
+          <div className="text-center py-20 border border-dashed border-destructive/40 text-muted-foreground font-bold uppercase tracking-wider text-xs space-y-3">
             <p>Could not reach the server. It may be waking up from idle — this can take up to a minute.</p>
             <button
               onClick={() => {
@@ -341,7 +341,7 @@ export default function TrackingPage() {
             </button>
           </div>
         ) : visibleCompanies.length === 0 ? (
-          <div className="text-center py-20 border-2 border-dashed border-border text-muted-foreground font-bold uppercase tracking-wider text-xs">
+          <div className="text-center py-20 border border-dashed border-border text-muted-foreground font-bold uppercase tracking-wider text-xs">
             No companies matching the current filter in active tracking.
           </div>
         ) : (

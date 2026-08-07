@@ -34,13 +34,13 @@ export default function SuggestedTrackingCard({
 
   return (
     <div
-      className={`border-2 border-l-4 border-l-purple-500 border-border bg-purple-950/10 p-4 flex flex-col gap-3 relative transition-all duration-200 ${
+      className={`border border-l-4 border-l-purple-500 border-border bg-white p-4 flex flex-col gap-3 relative transition-all duration-200 ${
         isProcessing ? "opacity-50 pointer-events-none" : ""
       }`}
     >
       {/* Top Banner */}
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 bg-purple-500/20 text-purple-400 border border-purple-500/30 rounded flex items-center gap-1">
+        <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 bg-purple-500/20 text-purple-600 dark:text-purple-400 border border-purple-500/30 rounded flex items-center gap-1">
           <Sparkles size={10} /> Suggested Tracking
         </span>
         <span className="text-[9px] font-bold text-muted-foreground uppercase">
@@ -60,9 +60,9 @@ export default function SuggestedTrackingCard({
 
       {/* Evidence Badge / Explanation */}
       <div className="bg-purple-500/10 border border-purple-500/20 p-2.5 rounded text-xs">
-        <p className="text-purple-300 font-medium text-[11px] leading-snug">
+        <p className="text-purple-700 dark:text-purple-300 font-medium text-[11px] leading-snug">
           We found historical email evidence that you participated in this drive up to{" "}
-          <strong className="text-purple-200 font-bold uppercase underline underline-offset-2">
+          <strong className="text-purple-800 dark:text-purple-200 font-bold uppercase underline underline-offset-2">
             {stageDisplay}
           </strong>.
         </p>
