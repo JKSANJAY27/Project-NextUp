@@ -2,21 +2,26 @@
 
 import React from "react";
 
+export type TooltipPosition =
+  | "top"
+  | "top-right"
+  | "top-left"
+  | "bottom"
+  | "bottom-right"
+  | "bottom-left"
+  | "right"
+  | "left";
+
 interface TooltipProps {
-  content: string;
+  content: React.ReactNode;
   children: React.ReactNode;
-  position?: "top" | "bottom" | "right";
+  position?: TooltipPosition;
   className?: string;
 }
 
 /**
- * Accessible tooltip component. Wraps any child element.
- * Shows tooltip text on hover and keyboard focus.
- *
- * Usage:
- *   <Tooltip content="This unlocks after profile setup">
- *     <button>...</button>
- *   </Tooltip>
+ * Accessible, modern tooltip component. Wraps any child element.
+ * Shows sleek, styled tooltip box on hover and keyboard focus.
  */
 export default function Tooltip({
   content,
@@ -24,12 +29,7 @@ export default function Tooltip({
   position = "top",
   className = "",
 }: TooltipProps) {
-  const positionClass =
-    position === "bottom"
-      ? "tooltip-bottom"
-      : position === "right"
-      ? "tooltip-right"
-      : "";
+  const positionClass = `tooltip-${position}`;
 
   return (
     <span className={`tooltip-wrapper ${className}`} tabIndex={-1}>
@@ -44,3 +44,4 @@ export default function Tooltip({
     </span>
   );
 }
+

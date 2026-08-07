@@ -550,9 +550,9 @@ export default function LandingPage() {
                 <div className="h-12 w-12 bg-accent text-black flex items-center justify-center border-2 border-black shrink-0">
                   {feature.icon}
                 </div>
-                <Tooltip content={feature.tooltip} position="top">
+                <Tooltip content={feature.tooltip} position="top-right">
                   <span
-                    className="text-xs font-bold border border-border rounded-full px-1.5 py-0.5 text-muted-foreground hover:text-accent hover:border-accent cursor-help transition-colors opacity-0 group-hover:opacity-100"
+                    className="w-5 h-5 inline-flex items-center justify-center rounded-full text-xs font-bold border border-border bg-muted/20 text-muted-foreground hover:text-accent hover:border-accent hover:bg-accent/10 transition-all duration-200 cursor-help opacity-70 group-hover:opacity-100"
                     aria-label={`More info about ${feature.title}`}
                   >
                     ?

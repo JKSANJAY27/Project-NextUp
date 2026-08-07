@@ -4,6 +4,7 @@ import { Archive, HelpCircle } from "lucide-react";
 import api from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import CompensationDisplay from "@/components/CompensationDisplay";
+import Tooltip from "@/components/Tooltip";
 
 export const STAGE_COLORS = {
   REGISTRATION: "border-yellow-500 bg-yellow-500/5",
@@ -115,21 +116,18 @@ export default function TrackingCard({
             className="relative"
             onClick={(e) => e.stopPropagation()}
           >
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setDropdownOpen((v) => !v);
-              }}
-              className="group/q relative p-1 text-muted-foreground hover:text-accent border border-transparent hover:border-accent/30 hover:bg-accent/10 transition-all rounded"
-              title="Is the drive placed in the wrong phase?"
-              aria-label="Change phase"
-            >
-              <HelpCircle size={12} />
-              {/* Tooltip */}
-              <span className="pointer-events-none absolute bottom-full right-0 mb-2 w-max max-w-[180px] rounded bg-background border border-border px-2 py-1 text-[10px] font-bold text-foreground tracking-wide opacity-0 group-hover/q:opacity-100 transition-opacity duration-150 z-50 shadow-lg whitespace-normal leading-snug">
-                Is the drive placed in the wrong phase?
-              </span>
-            </button>
+            <Tooltip content="Is the drive placed in the wrong phase?" position="top-right">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDropdownOpen((v) => !v);
+                }}
+                className="p-1 text-muted-foreground hover:text-accent border border-transparent hover:border-accent/30 hover:bg-accent/10 transition-all rounded"
+                aria-label="Change phase"
+              >
+                <HelpCircle size={12} />
+              </button>
+            </Tooltip>
 
             {/* Phase dropdown */}
             {dropdownOpen && (
