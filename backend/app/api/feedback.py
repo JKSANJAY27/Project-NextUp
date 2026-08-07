@@ -54,12 +54,24 @@ async def submit_feedback(
     email["From"] = settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME
     email["To"] = settings.FEEDBACK_RECIPIENT_EMAIL
     email.set_content(f"New issue report\n\nFrom: {display_name} <{user.email}>\nPage: {page_url or 'not provided'}\n\n{message}")
+    # Parse the comma-separated recipient list into individual addresses so
+    # smtplib delivers to each mailbox regardless of how the To header is set.
+    recipients = [addr.strip() for addr in settings.FEEDBACK_RECIPIENT_EMAIL.split(",") if addr.strip()]
     try:
         with smtplib.SMTP(settings.FEEDBACK_SMTP_HOST, settings.FEEDBACK_SMTP_PORT, timeout=20) as smtp:
-            smtp.starttls()
+            smtp.ehlo()          # identify ourselves to the server
+            smtp.starttls()      # upgrade to TLS
+            smtp.ehlo()          # re-identify over the encrypted channel (required by Gmail)
             smtp.login(settings.FEEDBACK_SMTP_USERNAME, settings.FEEDBACK_SMTP_PASSWORD)
-            smtp.send_message(email)
-    except Exception:
-        logging.exception("Failed to deliver feedback email")
+            smtp.sendmail(
+                from_addr=settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME,
+                to_addrs=recipients,
+                msg=email.as_string(),
+            )
+    except smtplib.SMTPAuthenticationError as exc:
+        logging.error("[FEEDBACK] SMTP authentication failed — check username/app-password: %s", exc)
+        raise HTTPException(status_code=503, detail="Could not deliver the report. Please try again.")
+    except Exception as exc:
+        logging.exception("[FEEDBACK] Failed to deliver feedback email: %s", exc)
         raise HTTPException(status_code=503, detail="Could not deliver the report. Please try again.")
     return {"status": "sent"}
