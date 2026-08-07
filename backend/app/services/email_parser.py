@@ -185,7 +185,10 @@ def is_generic_company_name(name: str) -> bool:
     if re.search(r'\b[a-z]\d[a-z]\d[a-z]\d[a-z]\d\b', cleaned) or re.search(r'[a-z]\d[a-z]\d[a-z]\d[a-z]\d', cleaned):
         return True
 
-    # Reject names that look like student names (2-3 titlecase words with no corporate indicators/tokens)
+    # Reject names that look like student names (2-3 titlecase words with no corporate indicators/tokens).
+    # CDC subjects are often deliberately all caps, so case is meaningful here:
+    # treating an all-caps brand such as "TOLARAM AFRICA" as a student name
+    # discards an otherwise reliable subject-line company.
     # e.g., "Khushi Agarwal", "Sanjay Kumar"
     CORPORATE_TOKENS = {
         "pvt", "ltd", "inc", "corp", "corporation", "group", "india", "global",
@@ -194,10 +197,12 @@ def is_generic_company_name(name: str) -> bool:
         "interactive", "bank", "capital", "energy", "pharma", "robotics", "networks",
         "security", "consulting", "ventures", "enterprises", "studio", "media",
         "mobility", "health", "healthcare", "financial", "motors", "automotive",
-        "holdings", "retail", "foods", "works", "analytics", "dynamics"
+        "holdings", "retail", "foods", "works", "analytics", "dynamics", "games", "africa"
     }
     words = cleaned.split()
-    if 2 <= len(words) <= 3 and not any(w in CORPORATE_TOKENS for w in words):
+    is_title_case_name = bool(re.fullmatch(r"(?:[A-Z][a-z]+)(?:\s+[A-Z][a-z]+){1,2}", name.strip()))
+    if (is_title_case_name and 2 <= len(words) <= 3
+            and not any(w in CORPORATE_TOKENS for w in words)):
         if all(w.isalpha() for w in words):
             VALID_TWO_WORD_BRANDS = {
                 "morgan stanley", "jpmorgan chase", "fischer jordan", "goldman sachs",
@@ -242,7 +247,7 @@ def is_generic_company_name(name: str) -> bool:
         "automobiles", "telecom", "energy", "power", "chemicals", "foods",
         "healthcare", "hospital", "hotels", "construction", "infrastructure",
         "aerospace", "defence", "securities", "asset", "management", "limited",
-        "pvt", "ltd", "inc", "llp", "ai", "ml", "iot", "robotics",
+        "pvt", "ltd", "inc", "llp", "ai", "ml", "iot", "robotics", "games", "africa",
     })
     _KNOWN_TWO_WORD_COMPANIES = frozenset({
         "jpmorgan chase", "morgan stanley", "fischer jordan", "goldman sachs",
@@ -2502,6 +2507,27 @@ def ground_company_in_source(
     if isinstance(company_field, dict):
         company_name = company_field.get("value")
 
+    # A subject is the sender's concise label for the drive and is less prone
+    # to model confusion with labels from a details table (for example, "CTC"
+    # or "Data Analytics").  Use it whenever it yields a concrete company.
+    # Keep the generic and student-phrase guards so headings such as
+    # "Registration open" can never create a phantom company.
+    subject_company = extract_company_from_subject(subject)
+    _STUDENT_PHRASES = re.compile(
+        r"\b(students?|batch|final\s+year|placement|registration|all\s+the\s+best)\b",
+        re.IGNORECASE,
+    )
+    if (subject_company and subject_company != "Unknown Company"
+            and not is_generic_company_name(subject_company)
+            and not _STUDENT_PHRASES.search(subject_company)):
+        if not company_name or company_name.strip().casefold() != subject_company.casefold():
+            logger.info(
+                "[email_parser] Subject company %r overrides parsed company %r",
+                subject_company, company_name,
+            )
+        ext["company"] = {"value": subject_company, "confidence": 0.99}
+        return parsed
+
     # Check if we have a valid, grounded company name
     if company_name:
         haystack = f"{subject}\n{email_body}\n{attachment_text}".lower()
@@ -2515,11 +2541,7 @@ def ground_company_in_source(
     # The fallback comes FROM the subject, so grounding against the haystack
     # is trivially true — the generic-name filter is the real gate here
     # (rejects phrases like "Final Year Students" or "Kind Attention").
-    fallback_name = extract_company_from_subject(subject)
-    _STUDENT_PHRASES = re.compile(
-        r"\b(students?|batch|final\s+year|placement|registration|all\s+the\s+best)\b",
-        re.IGNORECASE,
-    )
+    fallback_name = subject_company
     if (fallback_name and fallback_name != "Unknown Company"
             and not is_generic_company_name(fallback_name)
             and not _STUDENT_PHRASES.search(fallback_name)):

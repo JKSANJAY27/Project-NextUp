@@ -1,6 +1,7 @@
 from app.services.email_parser import (
     extract_explicit_compensation,
     extract_min_cgpa,
+    ground_company_in_source,
     ground_role_facts_in_source,
 )
 
@@ -86,3 +87,37 @@ def test_one_compensation_field_does_not_populate_the_other():
         "₹50,000 per month",
     )
     assert extract_explicit_compensation("Salary: 18 LPA") == ("18 LPA", None)
+
+
+def test_clear_subject_company_overrides_conflicting_body_label():
+    parsed = {
+        "extracted_data": {
+            "company": {"value": "Data Analytics", "confidence": 0.9},
+        }
+    }
+
+    grounded = ground_company_in_source(
+        parsed,
+        "TOLARAM AFRICA SUPER DREAM PLACEMENT REGISTRATION 2027 BATCH",
+        "Data Analytics\nCTC: USD 41,786",
+    )
+
+    assert grounded["extracted_data"]["company"] == {
+        "value": "TOLARAM AFRICA",
+        "confidence": 0.99,
+    }
+
+
+def test_subject_company_handles_internship_heading():
+    parsed = {"extracted_data": {"company": {"value": "CTC", "confidence": 0.9}}}
+
+    grounded = ground_company_in_source(
+        parsed,
+        "PLAY SIMPLE GAMES SUPER DREAM INTERNSHIP / PLACEMENT REGISTRATION 2027 BATCH",
+        "CTC: 14+1 (RB - 2+3+4)",
+    )
+
+    assert grounded["extracted_data"]["company"] == {
+        "value": "PLAY SIMPLE GAMES",
+        "confidence": 0.99,
+    }
