@@ -20,6 +20,17 @@ api.interceptors.request.use(
   (config) => {
     const state = useAppStore.getState();
 
+    // The shared client defaults to JSON. That header must be removed for
+    // FormData so the browser can generate `multipart/form-data` with its
+    // boundary; otherwise FastAPI sees no form fields and returns 422.
+    if (typeof FormData !== "undefined" && config.data instanceof FormData) {
+      if (typeof config.headers?.delete === "function") {
+        config.headers.delete("Content-Type");
+      } else if (config.headers) {
+        delete config.headers["Content-Type"];
+      }
+    }
+
     if (state.token) {
       config.headers.Authorization = `Bearer ${state.token}`;
     }
