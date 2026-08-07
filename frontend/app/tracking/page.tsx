@@ -12,7 +12,7 @@ import TrackingSection from "@/components/TrackingSection";
 import TrackingCard from "@/components/TrackingCard";
 import CompanyWorkspaceModal from "@/components/CompanyWorkspaceModal";
 import ConfirmArchiveModal from "@/components/ConfirmArchiveModal";
-import { Activity } from "lucide-react";
+import { Activity, AlertTriangle } from "lucide-react";
 type FilterMode = "ALL" | "ACTIVE_ROUNDS" | "UPCOMING_7_DAYS" | "INTERVIEWS" | "OFFERS";
 
 export default function TrackingPage() {
@@ -274,6 +274,10 @@ export default function TrackingPage() {
   return (
     <>
       <div className="flex-1 bg-background p-8 md:p-12 space-y-12 max-w-[1600px] mx-auto w-full">
+        <div className="flex items-start gap-3 border border-amber-500/60 bg-amber-500/10 px-4 py-3 text-amber-200">
+          <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-400" />
+          <p className="text-xs leading-relaxed"><span className="font-extrabold uppercase tracking-wider">AI-assisted tracking.</span> Stages are inferred from CDC emails and can occasionally be wrong. Always verify important updates manually in the official mail and CDC portal.</p>
+        </div>
         
         {/* Page Header */}
         <div className="flex flex-col md:flex-row md:items-end justify-between border-b-2 border-border pb-8 gap-6">

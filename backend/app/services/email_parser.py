@@ -773,8 +773,42 @@ def is_high_confidence(parsed: Dict[str, Any]) -> bool:
     return True
 
 
+def _authoritative_company_from_subject(subject: str) -> str:
+    """Return the company label that appears before a CDC drive descriptor.
+
+    Subject lines are authored by CDC and are more reliable than an LLM reading
+    a table body.  Keep this deliberately conservative: category labels such
+    as AI/ML/CS/IT are never allowed to become companies.
+    """
+    if not subject:
+        return "Unknown Company"
+    value = subject.replace("\u200b", "").replace("\xa0", " ").replace("_", " ")
+    value = value.replace("–", "-").replace("—", "-").replace("â€“", "-").replace("â€”", "-")
+    value = re.sub(r"^\s*(?:(?:re|fw|fwd|update|updated|reminder|urgent)\s*:\s*)+", "", value, flags=re.I).strip()
+    # A company is normally the first segment: "EY - Campus Hiring".
+    value = re.split(r"\s+[-|]\s+|:(?!\d)", value, maxsplit=1)[0].strip()
+    value = re.sub(r"\b(?:campus\s+hiring|campus\s+recruitment|placement|drive|recruitment|hiring|registration|shortlist|interview|assessment|online\s+test|pre[-\s]?placement|ppt|webinar|announcement)\b.*$", "", value, flags=re.I).strip()
+    value = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9&.)]+$", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    if not value or len(value) < 2 or is_generic_company_name(value):
+        return "Unknown Company"
+    # Department/category headings are not brands, even if they evade the
+    # generic-name dictionary.
+    if re.fullmatch(r"(?:ai|ml|cs|it)(?:\s*/\s*(?:ai|ml|cs|it))+", value, flags=re.I):
+        return "Unknown Company"
+    return value
+
+
 def extract_company_from_subject(subject: str) -> str:
     if not subject:
+        return "Unknown Company"
+
+    authoritative = _authoritative_company_from_subject(subject)
+    if authoritative != "Unknown Company":
+        return authoritative
+    # Do not let the legacy fallback turn a branch/category heading into a
+    # workspace when no brand is present in the subject.
+    if re.fullmatch(r"\s*(?:ai|ml|cs|it)(?:\s*/\s*(?:ai|ml|cs|it))+\s*", subject, flags=re.I):
         return "Unknown Company"
     
     # Remove zero-width spaces and clean outer whitespace

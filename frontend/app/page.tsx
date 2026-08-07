@@ -364,7 +364,7 @@ export default function LandingPage() {
       </header>
 
       {/* Marquee — benefit-focused, no jargon */}
-      <div className="border-b-2 border-border bg-accent py-4 overflow-hidden select-none" aria-hidden="true">
+      <div className="hidden" aria-hidden="true">
         <div className="flex w-max animate-marquee">
           {Array(4).fill(0).map((_, i) => (
             <div key={i} className="flex items-center gap-16 text-black font-extrabold text-2xl tracking-tighter uppercase shrink-0 pr-16">
@@ -386,7 +386,7 @@ export default function LandingPage() {
       {/* Hero Section — pixel art scene with left-aligned text overlay */}
       <section
         className="relative w-full overflow-hidden border-b-2 border-border"
-        style={{ height: "calc(100svh - 80px - 60px)", minHeight: "500px" }}
+        style={{ height: "calc(100svh - 80px)", minHeight: "500px" }}
         aria-labelledby="hero-heading"
       >
         {/* Animated pixel-art background scene */}
@@ -395,7 +395,7 @@ export default function LandingPage() {
         {/* Text overlay — left-aligned, z above scene */}
         <div
           className="relative z-10 flex flex-col justify-center px-8 md:px-14 lg:px-20 py-12"
-          style={{ height: "calc(100svh - 80px - 60px)", minHeight: "500px", maxWidth: "620px" }}
+          style={{ height: "calc(100svh - 80px)", minHeight: "500px", maxWidth: "620px" }}
         >
           {/* Badge */}
           <div className="inline-flex items-center gap-2 border-2 border-white/30 bg-black/40 px-4 py-2 text-xs font-extrabold tracking-widest text-accent uppercase mb-6 w-fit backdrop-blur-sm">
@@ -559,6 +559,12 @@ export default function LandingPage() {
           ))}
         </div>
       </section>
+
+      <div className="border-b-2 border-border bg-accent px-6 py-5 text-black" aria-label="Product benefits">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-x-8 gap-y-3 text-center text-xs font-extrabold tracking-wider uppercase md:text-sm">
+          <span>Private &amp; secure by design</span><span aria-hidden>✦</span><span>Never miss a shortlist</span><span aria-hidden>✦</span><span>Track every application</span>
+        </div>
+      </div>
 
       {/* How It Works */}
       <section

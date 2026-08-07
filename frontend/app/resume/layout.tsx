@@ -6,6 +6,7 @@ import NotificationsDropdown from "@/components/NotificationsDropdown";
 import NotificationPermissionBanner from "@/components/NotificationPermissionBanner";
 import VaultGate from "@/components/VaultGate";
 import { NotificationProvider } from "@/lib/notification-context";
+import HeaderPulse from "@/components/HeaderPulse";
 
 export default function ResumeLayout({
   children,
@@ -22,9 +23,7 @@ export default function ResumeLayout({
       <div className="flex-1 md:pl-64 flex flex-col min-h-screen w-full">
         <header className="flex h-16 w-full items-center justify-between border-b-2 border-border bg-card px-8 sticky top-0 z-40">
           <div className="flex items-center gap-4">
-            <h1 className="text-xs font-black tracking-widest text-muted-foreground uppercase font-mono">
-              SYSTEM // RESUME
-            </h1>
+            <HeaderPulse />
           </div>
           <div className="flex items-center gap-4">
             <NotificationsDropdown />

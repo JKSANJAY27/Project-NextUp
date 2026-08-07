@@ -24,6 +24,7 @@ import Tooltip from "@/components/Tooltip";
 
 import { supabase } from "@/lib/supabase";
 import Logo from "@/components/Logo";
+import FeedbackDialog from "@/components/FeedbackDialog";
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -91,7 +92,7 @@ export default function Sidebar() {
           <Link href="/dashboard" className="flex items-center">
             <Logo size="lg" />
           </Link>
-          <button 
+          <button
             onClick={() => setMobileOpen(false)} 
             className="border-2 border-border p-1 bg-muted hover:bg-accent hover:text-black transition-colors md:hidden"
           >
@@ -205,6 +206,7 @@ export default function Sidebar() {
             <LogOut size={14} />
             <span>LOGOUT</span>
           </button>
+          <FeedbackDialog />
         </div>
       </aside>
 
