@@ -3,9 +3,7 @@ import logging
 import mimetypes
 import smtplib
 from email.message import EmailMessage
-from typing import List, Optional
-
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
 
 from app.api.auth import get_current_user
 from app.core.config import settings
@@ -18,15 +16,32 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def submit_feedback(
-    message: str = Form(..., min_length=8, max_length=5000),
-    page_url: str = Form("", max_length=2000),
-    screenshots: Optional[List[UploadFile]] = File(None),
+    request: Request,
     user: User = Depends(get_current_user),
 ):
+    # Parse multipart explicitly instead of relying on FastAPI/Pydantic to
+    # coerce a single `screenshots` UploadFile into List[UploadFile]. The
+    # latter produced `Input should be a valid list` for a perfectly valid
+    # one-screenshot report.
+    try:
+        form = await request.form()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not read the issue report form.")
+
+    message = str(form.get("message") or "").strip()
+    page_url = str(form.get("page_url") or "").strip()
+    if not 8 <= len(message) <= 5000:
+        raise HTTPException(status_code=400, detail="Describe the issue using 8 to 5,000 characters.")
+    if len(page_url) > 2000:
+        raise HTTPException(status_code=400, detail="The page URL is too long.")
+
+    attachments = [
+        item for item in form.getlist("screenshots")
+        if isinstance(item, UploadFile)
+    ]
     if not settings.FEEDBACK_SMTP_HOST or not settings.FEEDBACK_SMTP_USERNAME or not settings.FEEDBACK_SMTP_PASSWORD:
         logging.error("Feedback SMTP is not configured")
         raise HTTPException(status_code=503, detail="Issue reporting is temporarily unavailable.")
-    attachments = screenshots or []
     if len(attachments) > MAX_FILES:
         raise HTTPException(status_code=400, detail=f"Attach at most {MAX_FILES} screenshots.")
 
