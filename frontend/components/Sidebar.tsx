@@ -84,7 +84,7 @@ export default function Sidebar() {
 
       {/* Sidebar Container */}
       <aside className={`
-        fixed inset-y-0 left-0 z-40 flex w-64 flex-col overflow-y-auto border-r-2 border-border bg-background transition-transform md:translate-x-0
+        fixed inset-y-0 left-0 z-50 flex w-64 flex-col overflow-y-auto border-r-2 border-border bg-background transition-transform md:translate-x-0
         ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
       `}>
         {/* Brand header */}
@@ -215,7 +215,7 @@ export default function Sidebar() {
       {mobileOpen && (
         <div 
           onClick={() => setMobileOpen(false)} 
-          className="fixed inset-0 z-30 bg-black/60 md:hidden"
+          className="fixed inset-0 z-40 bg-black/60 md:hidden"
         />
       )}
     </>

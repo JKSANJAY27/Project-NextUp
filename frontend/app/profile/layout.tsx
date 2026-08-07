@@ -21,7 +21,7 @@ export default function ProfileLayout({
         <Sidebar />
       </Suspense>
       <div className="flex-1 md:pl-64 flex flex-col min-h-screen w-full">
-        <header className="flex h-16 w-full items-center justify-between border-b-2 border-border bg-card px-8 sticky top-0 z-40">
+        <header className="flex h-16 w-full items-center justify-between border-b-2 border-border bg-card px-8 sticky top-0 z-20">
           <div className="flex items-center gap-4">
             <HeaderPulse />
           </div>
