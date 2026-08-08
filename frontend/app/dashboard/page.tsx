@@ -1187,7 +1187,7 @@ function DashboardPageContent() {
         
         {/* Onboarding & Warning Banners */}
         {(!user?.neo_id_enc) && (
-          <div className="border border-border bg-white p-6 flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="border border-border bg-card text-card-foreground p-6 flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-4">
               <div className="h-10 w-10 bg-accent/10 text-foreground flex items-center justify-center border border-border animate-pulse">
                 <AlertCircle size={20} />
@@ -1211,7 +1211,7 @@ function DashboardPageContent() {
         )}
 
         {syncing && (
-          <div className="border border-border bg-white p-6 flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="border border-border bg-card text-card-foreground p-6 flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-4">
               <div className="h-10 w-10 bg-accent/10 text-foreground flex items-center justify-center border border-border animate-pulse">
                 <span className="h-2 w-2 rounded-full bg-black animate-ping" />
@@ -1272,7 +1272,7 @@ function DashboardPageContent() {
             </div>
 
             {/* Smart Daily Digest Banner */}
-            <div className="border border-border bg-white p-8 flex flex-col md:flex-row items-center justify-between gap-6">
+            <div className="border border-border bg-card text-card-foreground p-8 flex flex-col md:flex-row items-center justify-between gap-6">
               <div className="space-y-4 max-w-3xl">
                 <div className="inline-block px-3 py-1 bg-accent/10 border border-border text-foreground text-[10px] font-black tracking-widest uppercase">
                   ⚡ SMART DAILY DIGEST
@@ -1324,7 +1324,7 @@ function DashboardPageContent() {
             {/* Today + Tomorrow Schedule Timelines — side by side */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Today's Schedule */}
-              <div className="border border-border p-6 bg-white space-y-4">
+              <div className="border border-border p-6 bg-card text-card-foreground space-y-4">
                 <div className="border-b border-border pb-3 flex justify-between items-center">
                   <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
                     📅 TODAY&apos;S SCHEDULE
@@ -1363,7 +1363,7 @@ function DashboardPageContent() {
               </div>
 
               {/* Tomorrow's Schedule */}
-              <div className="border border-border p-6 bg-white space-y-4">
+              <div className="border border-border p-6 bg-card text-card-foreground space-y-4">
                 <div className="border-b border-border pb-3 flex justify-between items-center">
                   <h4 className="text-xs font-black tracking-widest uppercase text-muted-foreground">
                     🗓 TOMORROW&apos;S SCHEDULE
@@ -1404,7 +1404,7 @@ function DashboardPageContent() {
 
             {/* ─── SUGGESTED TRACKING — Historical Evidence Found ─── */}
             {suggestedTrackingCompanies.length > 0 && (
-              <div className="border border-purple-500/50 bg-white p-6 space-y-6">
+              <div className="border border-purple-500/50 bg-card text-card-foreground p-6 space-y-6">
                 <div className="flex items-center gap-3 border-b border-purple-500/40 pb-4">
                   <div className="h-8 w-8 bg-purple-500 text-white flex items-center justify-center shrink-0 animate-pulse">
                     <Sparkles size={16} />
@@ -1442,7 +1442,7 @@ function DashboardPageContent() {
 
             {/* ─── DECISION REQUIRED — Priority Section ─── */}
             {activeDecisionPendingCompanies.length > 0 && (
-              <div className="border border-amber-500/50 bg-white p-6 space-y-6 relative">
+              <div className="border border-amber-500/50 bg-card text-card-foreground p-6 space-y-6 relative">
                 {/* Auto-Filter Processing Overlay */}
                 {autoFiltering && (
                   <div className="absolute inset-0 bg-background/90 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-6 space-y-4 border-2 border-accent">
@@ -1577,8 +1577,8 @@ function DashboardPageContent() {
                     return (
                       <div
                         key={comp.id}
-                        className={`border bg-white p-4 space-y-3 transition-all ${
-                          isSelected ? 'border-amber-500 bg-amber-500/5' : 'border-amber-500/30 hover:border-amber-500/60'
+                        className={`border p-4 space-y-3 transition-all ${
+                          isSelected ? 'border-amber-500 bg-amber-500/5' : 'border-amber-500/30 bg-card hover:border-amber-500/60'
                         }`}
                       >
                         {/* Card header: checkbox + company name */}

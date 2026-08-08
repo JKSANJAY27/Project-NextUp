@@ -3,6 +3,7 @@ import json
 import logging
 import smtplib
 from email.message import EmailMessage
+from urllib.error import HTTPError
 from urllib import request as urllib_request
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -63,38 +64,54 @@ async def submit_feedback(
 
     email = EmailMessage()
     email["Subject"] = f"[NextUp issue] {user.email}"
-    email["From"] = settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME
+    from_addr = settings.FEEDBACK_FROM_EMAIL or settings.FEEDBACK_SMTP_USERNAME
+    if from_addr:
+        email["From"] = from_addr
     email["To"] = settings.FEEDBACK_RECIPIENT_EMAIL
     email.set_content(report_text)
     recipients = [addr.strip() for addr in settings.FEEDBACK_RECIPIENT_EMAIL.split(",") if addr.strip()]
+
+    if not recipients:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Issue reporting is temporarily unavailable: no recipient email is configured.",
+        )
 
     delivered = False
 
     # Primary: Resend HTTP API.
     resend_api_key = getattr(settings, "RESEND_API_KEY", "") or ""
     if resend_api_key:
-        try:
-            payload = json.dumps({
-                "from": f"NextUp Issue Reports <{settings.FEEDBACK_FROM_EMAIL or 'onboarding@resend.dev'}>",
-                "to": recipients,
-                "subject": email["Subject"],
-                "text": report_text,
-            }).encode()
-            req = urllib_request.Request(
-                "https://api.resend.com/emails",
-                data=payload,
-                headers={
-                    "Authorization": f"Bearer {resend_api_key}",
-                    "Content-Type": "application/json",
-                },
-                method="POST",
-            )
-            with urllib_request.urlopen(req, timeout=15) as resp:
-                if resp.status in (200, 201):
-                    delivered = True
-                    logging.info("[FEEDBACK] Delivered via Resend to %s", recipients)
-        except Exception as exc:
-            logging.warning("[FEEDBACK] Resend delivery failed: %s", exc)
+        # Resend's onboarding@resend.dev sender can only deliver to the
+        # account owner's email. Send each recipient separately so one
+        # invalid/unverified address does not prevent the valid one.
+        resend_from = f"NextUp Issue Reports <{settings.FEEDBACK_FROM_EMAIL or 'onboarding@resend.dev'}>"
+        for recipient in recipients:
+            try:
+                payload = json.dumps({
+                    "from": resend_from,
+                    "to": [recipient],
+                    "subject": email["Subject"],
+                    "text": report_text,
+                }).encode()
+                req = urllib_request.Request(
+                    "https://api.resend.com/emails",
+                    data=payload,
+                    headers={
+                        "Authorization": f"Bearer {resend_api_key.strip()}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+                with urllib_request.urlopen(req, timeout=15) as resp:
+                    if resp.status in (200, 201):
+                        delivered = True
+                        logging.info("[FEEDBACK] Delivered via Resend to %s", recipient)
+            except HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")[:500]
+                logging.warning("[FEEDBACK] Resend delivery failed for %s (HTTP %s): %s", recipient, exc.code, body)
+            except Exception as exc:
+                logging.warning("[FEEDBACK] Resend delivery failed for %s: %s", recipient, exc)
 
     # Secondary: SMTP (works locally; usually blocked on Render).
     smtp_configured = bool(

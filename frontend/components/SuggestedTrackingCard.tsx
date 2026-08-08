@@ -34,7 +34,7 @@ export default function SuggestedTrackingCard({
 
   return (
     <div
-      className={`border border-l-4 border-l-purple-500 border-border bg-white p-4 flex flex-col gap-3 relative transition-all duration-200 ${
+      className={`border border-l-4 border-l-purple-500 border-border bg-card text-card-foreground p-4 flex flex-col gap-3 relative transition-all duration-200 ${
         isProcessing ? "opacity-50 pointer-events-none" : ""
       }`}
     >
