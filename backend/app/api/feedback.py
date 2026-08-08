@@ -100,6 +100,9 @@ async def submit_feedback(
                     headers={
                         "Authorization": f"Bearer {resend_api_key.strip()}",
                         "Content-Type": "application/json",
+                        # Resend rejects direct HTTP clients without a
+                        # User-Agent (403 / error code 1010).
+                        "User-Agent": "NextUp/1.0",
                     },
                     method="POST",
                 )
