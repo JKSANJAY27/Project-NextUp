@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { getAuthErrorMessage, isAllowedCollegeEmail } from "@/lib/auth-utils";
 import CrowdCanvas from "@/components/CrowdCanvas";
 import PasswordChangeWarningModal from "@/components/PasswordChangeWarningModal";
 import { AlertTriangle } from "lucide-react";
@@ -34,7 +35,7 @@ export default function ForgotPasswordPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
       console.error("Password reset request failed:", err);
-      setError(err.message || "Failed to send reset email. Please try again.");
+      setError(getAuthErrorMessage(err, "password-reset"));
     } finally {
       setLoading(false);
     }
@@ -44,6 +45,10 @@ export default function ForgotPasswordPage() {
     e.preventDefault();
     if (!email) {
       setError("Please enter your college email address.");
+      return;
+    }
+    if (!isAllowedCollegeEmail(email)) {
+      setError("Please use your @vitstudent.ac.in college email address.");
       return;
     }
     // Show warning first

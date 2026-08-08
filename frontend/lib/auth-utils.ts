@@ -12,6 +12,30 @@ export function isAllowedCollegeEmail(email: string | null | undefined): boolean
 }
 
 /**
+ * Supabase's hosted development mailer returns a generic error when its
+ * project-wide email quota is exhausted. Do not expose that implementation
+ * detail to students, and do not encourage retries: retries consume the same
+ * limited quota. The production fix is custom SMTP in Supabase Auth.
+ */
+export function getAuthErrorMessage(error: unknown, action: "signup" | "password-reset"): string {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("email rate limit") ||
+    normalized.includes("rate limit exceeded") ||
+    normalized.includes("too many requests") ||
+    normalized.includes("over_email_send_rate_limit")
+  ) {
+    return action === "signup"
+      ? "Email verification is temporarily busy. Please use Google sign-up, or try again later."
+      : "Password-reset emails are temporarily busy. Please wait before trying again.";
+  }
+
+  return message || "Something went wrong. Please try again.";
+}
+
+/**
  * Deterministic per-user salt for PBKDF2 vault key derivation:
  * SHA-256 of the lowercased email, hex-encoded.
  */

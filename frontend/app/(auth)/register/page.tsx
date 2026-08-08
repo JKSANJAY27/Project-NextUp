@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
 import { deriveKey, exportKeyToHex, encryptData } from "@/lib/crypto";
 import { supabase } from "@/lib/supabase";
+import { getAuthErrorMessage, isAllowedCollegeEmail } from "@/lib/auth-utils";
 import api from "@/lib/api";
 import { Eye, EyeOff, ExternalLink, ArrowLeft } from "lucide-react";
 import CrowdCanvas from "@/components/CrowdCanvas";
@@ -59,6 +60,11 @@ export default function RegisterPage() {
       return;
     }
 
+    if (!isAllowedCollegeEmail(email)) {
+      setError("Please use your @vitstudent.ac.in college email address.");
+      return;
+    }
+
     if (!agreedToTerms) {
       setShowTermsModal(true);
       return;
@@ -84,8 +90,13 @@ export default function RegisterPage() {
 
       // 2. Sign up via Supabase Auth
       const { data, error: signUpError } = await supabase.auth.signUp({
-        email,
+        email: email.trim().toLowerCase(),
         password,
+        options: {
+          // Keep confirmation links on the deployed app instead of whatever
+          // Site URL happens to be configured in a shared Supabase project.
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
       });
 
       if (signUpError) {
@@ -130,7 +141,7 @@ export default function RegisterPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
       console.error("Registration failed:", err);
-      setError(err.message || "Registration failed. Please try again.");
+      setError(getAuthErrorMessage(err, "signup"));
     } finally {
       setLoading(false);
     }
