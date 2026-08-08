@@ -836,6 +836,19 @@ export default function ProfilePage() {
           </div>
         </div>
 
+        <div className="border border-accent bg-accent/5 p-5 space-y-3">
+          <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-widest text-accent">
+            <AlertCircle size={16} />
+            <span>Important: review auto-filled details</span>
+          </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Resume parsing gives you a starting point, but it can miss or misread information. Before saving, verify your branch, programme, CGPA, 10th and 12th marks, arrears, and skills against your official records. These values are used to check drive eligibility, so incorrect details can produce an incorrect eligible or ineligible result.
+          </p>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Enter your Neo ID manually. It is usually not present in a resume and is used only to match you with CDC shortlist and application-stage updates. Your Neo ID is encrypted in your browser before it is saved, so it is not kept as readable profile data.
+          </p>
+        </div>
+
         {success && (
           <div className="border border-green-600 bg-green-600/10 p-4 text-xs font-bold text-green-600 uppercase tracking-wider flex items-center gap-2">
             <CheckCircle2 size={16} />
@@ -1337,6 +1350,9 @@ export default function ProfilePage() {
                   placeholder="MANUAL ENTRY (ALTERNATING LETTER/DIGIT)"
                   className="w-full h-14 border border-border bg-transparent text-sm font-bold uppercase focus:border-accent focus:outline-none px-4 transition-colors"
                 />
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  Enter this manually even after resume auto-fill. It helps match your profile with CDC shortlist and stage updates, and is encrypted in your browser before storage.
+                </p>
               </div>
 
               <div className="space-y-2">
