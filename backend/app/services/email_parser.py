@@ -44,7 +44,7 @@ def get_nlp():
 # placement category headings, or congratulatory messages.
 # ---------------------------------------------------------------------------
 GENERIC_COMPANY_NAMES = frozenset({
-    "unknown company", "unknown", "",
+    "unknown company", "unknown", "", "embedded systems", "embedded",
     # Placement category/drive headings
     "super dream", "dream", "regular", "mass recruiter", "internship",
     "super dream internship", "dream internship", "dream placement",
