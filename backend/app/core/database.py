@@ -26,16 +26,21 @@ engine_kwargs = {
 }
 if not settings.DATABASE_URL.startswith("sqlite"):
     engine_kwargs.update({
-        # Render free/starter has ~512MB RAM. Keep pool small:
-        # pool_size=5 + max_overflow=10 = 15 max connections.
-        # Each PostgreSQL client connection uses ~5–10 MB RAM.
-        "pool_size": 5,
-        "max_overflow": 10,
+        # Render free/starter has ~512MB RAM.
+        # pool_size=8 + max_overflow=15 = 23 max connections.
+        # The parallel dashboard fetch opens 5 concurrent DB sessions;
+        # the old pool_size=5 caused requests to queue behind pool_timeout
+        # which was the primary source of 10+ second page load times when
+        # Redis was not available and all requests hit Postgres directly.
+        "pool_size": 8,
+        "max_overflow": 15,
         # Recycle connections every 5 minutes to prevent stale SSL errors
         # after Render sleeps/restarts the DB proxy.
         "pool_recycle": 300,
-        # Give up after 10 seconds waiting for a connection (fail fast)
-        "pool_timeout": 10,
+        # Fail fast: 5 s is generous for a warm pool but avoids the old
+        # 10 s hang that made dashboards appear broken when the pool was
+        # saturated by concurrent requests.
+        "pool_timeout": 5,
         # CRITICAL: Disable hstore OID probe. Supabase's PgBouncer terminates
         # the connection during this probe, causing "SSL connection has been
         # closed unexpectedly" on every startup and every new pool connection.
@@ -170,5 +175,3 @@ def sync_notifications_listener(session, flush_context, instances):
         import logging
         logger = logging.getLogger("nextup.db_event")
         logger.warning(f"Error in sync_notifications_listener: {e}")
-
-

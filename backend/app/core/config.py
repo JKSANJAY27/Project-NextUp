@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # in a cloud container silently disabled caching and added failed connects.
     REDIS_URL: str = ""
     REDIS_MAX_CONNECTIONS: int = 50
-    REDIS_SOCKET_TIMEOUT_SECONDS: float = 0.75
+    REDIS_SOCKET_TIMEOUT_SECONDS: float = 0.5
     
     # Google Credentials
     GOOGLE_CLIENT_ID: str = ""

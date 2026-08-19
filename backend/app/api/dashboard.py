@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, Header
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal
 from app.api.auth import get_current_user
 from app.models.models import User
 from app.core.redis import (
@@ -28,6 +29,7 @@ def get_dashboard_data(
 ):
     """
     Unified endpoint to fetch all necessary data for the Dashboard in a single request.
+    Sub-APIs are called in parallel to minimise total latency.
     """
     user_version = get_user_version(current_user.id)
     companies_version = get_companies_list_version()
@@ -42,40 +44,65 @@ def get_dashboard_data(
 
     errors = {}
 
-    # 1. Companies
-    try:
-        companies_data = list_companies(x_client_key=x_client_key, db=db, current_user=current_user)
-    except Exception as e:
-        companies_data = []
-        errors["companies"] = traceback.format_exc()
+    # ── Parallel fetch ────────────────────────────────────────────────────
+    # Each sub-API opens its own DB session so they can run concurrently
+    # without sharing state. The parent session (db) is only used for
+    # list_companies which needs it for the eligibility check loop.
+    def _fetch_companies():
+        return list_companies(x_client_key=x_client_key, db=db, current_user=current_user)
 
-    # 2. Applications
-    try:
-        applications_data = list_applications(db=db, current_user=current_user)
-    except Exception as e:
-        applications_data = []
-        errors["applications"] = traceback.format_exc()
+    def _fetch_applications():
+        _db = SessionLocal()
+        try:
+            return list_applications(db=_db, current_user=current_user)
+        finally:
+            _db.close()
 
-    # 3. Notifications
-    try:
-        notifications_data = get_notifications(db=db, current_user=current_user)
-    except Exception as e:
-        notifications_data = []
-        errors["notifications"] = traceback.format_exc()
+    def _fetch_notifications():
+        _db = SessionLocal()
+        try:
+            return get_notifications(db=_db, current_user=current_user)
+        finally:
+            _db.close()
 
-    # 4. Calendar Events
-    try:
-        calendar_data = list_calendar_events(db=db, current_user=current_user)
-    except Exception as e:
-        calendar_data = []
-        errors["calendar"] = traceback.format_exc()
+    def _fetch_calendar():
+        _db = SessionLocal()
+        try:
+            return list_calendar_events(db=_db, current_user=current_user)
+        finally:
+            _db.close()
 
-    # 5. Announcements
-    try:
-        announcements_data = get_announcements(db=db, current_user=current_user)
-    except Exception as e:
-        announcements_data = []
-        errors["announcements"] = traceback.format_exc()
+    def _fetch_announcements():
+        _db = SessionLocal()
+        try:
+            return get_announcements(db=_db, current_user=current_user)
+        finally:
+            _db.close()
+
+    tasks = {
+        "companies": _fetch_companies,
+        "applications": _fetch_applications,
+        "notifications": _fetch_notifications,
+        "calendar": _fetch_calendar,
+        "announcements": _fetch_announcements,
+    }
+    results: Dict[str, Any] = {}
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        future_to_key = {pool.submit(fn): key for key, fn in tasks.items()}
+        for future in as_completed(future_to_key):
+            key = future_to_key[future]
+            try:
+                results[key] = future.result()
+            except Exception:
+                results[key] = []
+                errors[key] = traceback.format_exc()
+
+    companies_data = results.get("companies", [])
+    applications_data = results.get("applications", [])
+    notifications_data = results.get("notifications", [])
+    calendar_data = results.get("calendar", [])
+    announcements_data = results.get("announcements", [])
 
     stats = {
         "total_tracked": len([a for a in applications_data if isinstance(a, dict) and a.get("record_type") == "application" and a.get("user_decision") == "tracking"]),
@@ -94,5 +121,7 @@ def get_dashboard_data(
     # Never cache a partial dashboard response. A transient dependency error
     # should recover on the next request instead of looking like empty data.
     if not errors:
-        set_cache(cache_key, response, expire_seconds=30)
+        # 120 s TTL — dashboard data doesn't change every 30 s and the cache
+        # is version-keyed so it invalidates immediately on any write anyway.
+        set_cache(cache_key, response, expire_seconds=120)
     return response

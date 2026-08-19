@@ -56,8 +56,22 @@ def _connect():
 
     try:
         import redis
+        url = settings.REDIS_URL
+        extra_kwargs = {}
+        # Upstash (and other managed Redis services) use rediss:// (TLS).
+        # Without ssl_cert_reqs=None the TLS handshake fails on self-signed
+        # certs that cloud providers use internally, leaving the connection
+        # hanging until the socket timeout fires.
+        #
+        # Auto-upgrade redis:// -> rediss:// for known Upstash hosts so that
+        # a Render env var set with the wrong scheme (single-s) still works.
+        if "upstash.io" in url and url.startswith("redis://"):
+            url = "rediss://" + url[len("redis://"):]
+            logger.info("Auto-upgraded redis:// to rediss:// for Upstash host.")
+        if url.startswith("rediss://"):
+            extra_kwargs["ssl_cert_reqs"] = None
         client = redis.Redis.from_url(
-            settings.REDIS_URL,
+            url,
             socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SECONDS,
             socket_connect_timeout=settings.REDIS_SOCKET_TIMEOUT_SECONDS,
             socket_keepalive=True,
@@ -65,6 +79,7 @@ def _connect():
             max_connections=settings.REDIS_MAX_CONNECTIONS,
             decode_responses=False,
             retry_on_timeout=False,
+            **extra_kwargs,
         )
         client.ping()
         logger.info("Successfully connected to Redis cache.")

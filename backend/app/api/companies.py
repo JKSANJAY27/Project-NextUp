@@ -40,13 +40,28 @@ def _is_placeholder_company_name(name: str) -> bool:
     )
 
 
+import time as _time
+_REPAIR_LOCK = _time.monotonic() - 400  # Allow first call immediately
+_REPAIR_INTERVAL = 300.0  # Repair at most once every 5 minutes
+
+
 def _repair_placeholder_company_names(db: Session) -> int:
     """Repair historic malformed drives from their preserved email subjects.
 
     Parsing changes only cover new emails.  Existing workspaces retain their
     CompanyEvent source trail, so repair only known placeholder names and only
     when a concrete brand can be recovered from that authoritative subject.
+
+    Throttled to run at most every 5 minutes — running on every company list
+    request added a redundant full-table-scan DB round-trip even when there
+    were no placeholder names to fix.
     """
+    global _REPAIR_LOCK
+    now = _time.monotonic()
+    if now - _REPAIR_LOCK < _REPAIR_INTERVAL:
+        return 0
+    _REPAIR_LOCK = now
+
     repaired = 0
     candidates = db.query(Company).filter(Company.is_manual == False).all()
     for company in candidates:
@@ -520,7 +535,7 @@ def list_companies(
         
         paginated_companies = companies[skip : skip + limit]
         cached_list = [CompanyOut.from_orm(company).dict() for company in paginated_companies]
-        set_cache(cache_key, cached_list, expire_seconds=600) # 10 min TTL
+        set_cache(cache_key, cached_list, expire_seconds=1800)  # 30 min TTL
 
     # Fetch user's own manual companies (never cached in global list)
     from sqlalchemy.orm import selectinload, defer
