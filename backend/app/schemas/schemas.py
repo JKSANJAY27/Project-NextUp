@@ -47,7 +47,7 @@ class UserOut(BaseModel):
 class LatestEventSchema(BaseModel):
     id: UUID
     event_type: str
-    subject: str
+    subject: Optional[str] = ""
     timestamp: Optional[datetime] = None
     parsed_metadata: Optional[Dict[str, Any]] = None
 
