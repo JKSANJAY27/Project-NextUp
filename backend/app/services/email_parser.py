@@ -81,6 +81,9 @@ GENERIC_COMPANY_NAMES = frozenset({
     # Marks and grade headers mistaken for company names
     "x", "xii", "x/xii", "x and xii", "x & xii", "10th", "12th", "10th & 12th",
     "10th and 12th", "class 10", "class 12", "class x", "class xii",
+    # Salary/stipend/details table headers mistaken for company names
+    "ctc", "cost to company", "stipend", "details:", "details", "job location",
+    "designation", "salary", "package",
 })
 
 def is_generic_company_name(name: str) -> bool:
@@ -253,17 +256,18 @@ def is_generic_company_name(name: str) -> bool:
         "tech", "technologies", "technology", "systems", "solutions", "labs",
         "digital", "software", "services", "cloud", "data", "analytics",
         "consulting", "consultancy", "financial", "capital", "ventures",
-        "group", "global", "corp", "enterprises", "innovations", "networks",
+        "group", "global", "corp", "enterprises", "innovations", "networks", "network", "capability",
         "media", "banking", "insurance", "payments", "fintech", "logistics",
         "manufacturing", "pharma", "research", "electric", "motors", "auto",
         "automobiles", "telecom", "energy", "power", "chemicals", "foods",
         "healthcare", "hospital", "hotels", "construction", "infrastructure",
         "aerospace", "defence", "securities", "asset", "management", "limited",
         "pvt", "ltd", "inc", "llp", "ai", "ml", "iot", "robotics", "games", "africa",
+        "advisors", "partners", "associates",
     })
     _KNOWN_TWO_WORD_COMPANIES = frozenset({
         "jpmorgan chase", "morgan stanley", "fischer jordan", "goldman sachs",
-        "ernst young", "bain company", "robert bosch", "alvarez marsal",
+        "ernst young", "bain company", "bain capability", "bain capability network", "robert bosch", "alvarez marsal",
         "oliver wyman", "schneider electric", "standard chartered", "baker hughes",
         "societe generale", "deutsche bank", "barclays bank", "credit suisse",
         "wells fargo", "bny mellon", "walmart global", "target corporation", "shell india"
@@ -2548,7 +2552,12 @@ def parse_placement_email(
         context_text += f"\n\nAttachment Content:\n{attachment_text}"
 
     logger.info("[email_parser] Starting AI parse via gateway...")
-    parsed = parse_with_ai_gateway(context_text)
+    try:
+        parsed = parse_with_ai_gateway(context_text)
+    except AIUnavailableError as ae:
+        logger.warning(f"[email_parser] AI gateway unavailable ({ae}); falling back to regex parser.")
+        return build_regex_fallback_response(email_body, subject=subject, email_timestamp=email_timestamp)
+
 
     if not parsed or not isinstance(parsed, dict) or not parsed.get("extracted_data"):
         # Gateway returned something but the JSON structure is unusable.

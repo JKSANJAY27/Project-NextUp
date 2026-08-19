@@ -195,7 +195,20 @@ def check_eligibility(profile, company) -> Tuple[str, Optional[str], Dict[str, A
                 matched.append(
                     f"Degree matched (from eligibility text): {profile.degree_type}"
                 )
-        # else: no data at all — skip the branch check (don't block anyone)
+
+        if eligibility_raw_text:
+            raw_up = eligibility_raw_text.upper()
+            # Catch explicit branch restrictions in raw text when structured array is empty
+            if ("ECE RELATED" in raw_up or "ECE BRANCHES" in raw_up or "M.TECH ( ECE )" in raw_up or "M.TECH (ECE)" in raw_up or "M.TECH ECE" in raw_up):
+                if user_branch not in ("ECE", "ELECTRONICS", "EIE"):
+                    branch_checked = True
+                    if not any("Required" in f for f in failed):
+                        failed.append(f"Required branch: ECE related branches only. Your branch: {profile.branch or 'None'}")
+            elif ("MECH RELATED" in raw_up or "MECHANICAL RELATED" in raw_up or "MECH BRANCHES" in raw_up):
+                if user_branch not in ("MECH", "MECHANICAL", "MECHANICAL ENGINEERING"):
+                    branch_checked = True
+                    if not any("Required" in f for f in failed):
+                        failed.append(f"Required branch: Mechanical related branches only. Your branch: {profile.branch or 'None'}")
 
     # ── 2. SPECIALIZATION CHECK ───────────────────────────────────────────────
     # Only run this if the degree check PASSED (or was skipped) and we have data.
