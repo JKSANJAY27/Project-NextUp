@@ -60,7 +60,8 @@ def clean_company_name_key(name: str) -> str:
         name_stripped,
         flags=re.I
     ).strip().lower()
-    return re.sub(r'\s+', ' ', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned if len(cleaned) >= 2 else name_stripped.strip().lower()
 
 def company_role_names(company) -> list:
     """All role names for a drive: the structured roles list when present,

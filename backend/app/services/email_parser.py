@@ -83,7 +83,20 @@ GENERIC_COMPANY_NAMES = frozenset({
     "10th and 12th", "class 10", "class 12", "class x", "class xii",
     # Salary/stipend/details table headers mistaken for company names
     "ctc", "cost to company", "stipend", "details:", "details", "job location",
-    "designation", "salary", "package",
+    "designation", "salary", "package", "lpa", "inr", "per month", "per annum",
+    "major", "minor", "fte", "ppo", "tier", "tier 1", "tier 2", "tier 3",
+    "eligibility", "standing arrears", "arrears", "degrees", "degree", "branches", "branch"
+})
+
+CORPORATE_TOKENS = frozenset({
+    "pvt", "ltd", "inc", "corp", "corporation", "group", "india", "global",
+    "technologies", "technology", "solutions", "systems", "software", "services",
+    "labs", "lab", "limited", "private", "llp", "company", "co", "ai", "io", "hq",
+    "interactive", "bank", "capital", "energy", "pharma", "robotics", "networks",
+    "security", "consulting", "ventures", "enterprises", "studio", "media",
+    "mobility", "health", "healthcare", "financial", "motors", "automotive",
+    "holdings", "retail", "foods", "works", "analytics", "dynamics", "games", "africa",
+    "engineering", "digital", "consultancy", "fintech", "payments", "logistics", "manufacturing"
 })
 
 def is_generic_company_name(name: str) -> bool:
@@ -95,9 +108,7 @@ def is_generic_company_name(name: str) -> bool:
     # e.g. "Congratulations!!" → "congratulations" must be caught
     cleaned = re.sub(r'[*#_\-–—!?\s\t\n\r]+', ' ', name).strip().lower()
 
-    # Department mailing-list labels are not companies.  Keep this structural
-    # check separate from the exact-name list so punctuation variants such as
-    # "AI / ML / CS / IT" and "CS-IT" cannot slip through as new brands.
+    # Department mailing-list labels are not companies.
     department_tokens = [
         token for token in re.split(r'[\s/,&\-]+', cleaned.upper()) if token
     ]
@@ -107,10 +118,16 @@ def is_generic_company_name(name: str) -> bool:
     ):
         return True
 
-    # Heuristics to reject long sentences/subject-lines
-    if len(cleaned) > 40:
+    if len(cleaned) > 50:
         return True
-    if len(cleaned.split()) > 5:
+    
+    words = cleaned.split()
+    has_corp_token = any(w in CORPORATE_TOKENS for w in words)
+
+    # If it has more than 8 words, reject; if > 5 words and NO corporate indicator, reject
+    if len(words) > 8:
+        return True
+    if len(words) > 5 and not has_corp_token:
         return True
 
     if cleaned in GENERIC_COMPANY_NAMES:
@@ -122,8 +139,6 @@ def is_generic_company_name(name: str) -> bool:
         return True
 
     # Reject common non-company phrases in subjects.
-    # Use prefix/contains patterns (not just \b...\b) so that punctuation
-    # variants like "congratulations!!" are also caught.
     generic_patterns = [
         r'congratulat',         # catches congratulations, congratulations!!, congrats
         r'\bcongrats\b',
@@ -157,11 +172,6 @@ def is_generic_company_name(name: str) -> bool:
         r'\bapply\b',
         r'\bplacements\b',
         r'\binternship\s+registration\b',
-        # Neo ID / registration table artefacts
-        r'\bneo\s*id\b',        # catches "neo id reg", "neo id registration", etc.
-        r'\breg\s*no\b',        # catches "reg no", "regno"
-        r'\broll\s*no\b',       # catches "roll no"
-        r'\bstudent\s*id\b',    # catches "student id"
         r'\bmechanical\b',
         r'\bcivil\b',
         r'\belectrical\b',
@@ -174,6 +184,14 @@ def is_generic_company_name(name: str) -> bool:
         r'\bppt\s*&\s*online\b',
         r'\bppt\s+and\s+online\b',
         r'\bppt\s+online\b',
+        r'^\d+\s*lpa$',
+        r'^\d+\s*inr$',
+        r'^\d+\s*k$',
+        r'\blpa\b',
+        r'^\s*major\s*$',
+        r'^\s*minor\s*$',
+        r'^\s*fte\s*$',
+        r'^\s*ppo\s*$',
     ]
     for pattern in generic_patterns:
         if re.search(pattern, cleaned):
@@ -197,37 +215,8 @@ def is_generic_company_name(name: str) -> bool:
         return True
 
     # Reject Neo ID tokens (alternating letter-digit 8 chars, e.g. F3M5W9J9 or B5K6G7Q6)
-    if re.search(r'\b[a-z]\d[a-z]\d[a-z]\d[a-z]\d\b', cleaned) or re.search(r'[a-z]\d[a-z]\d[a-z]\d[a-z]\d', cleaned):
+    if re.search(r'\b[a-z]\d[a-z]\d[a-z]\d[a-z]\d\b', cleaned) or re.search(r'^[a-z]\d[a-z]\d[a-z]\d[a-z]\d$', cleaned):
         return True
-
-    # Reject names that look like student names (2-3 titlecase words with no corporate indicators/tokens).
-    # CDC subjects are often deliberately all caps, so case is meaningful here:
-    # treating an all-caps brand such as "TOLARAM AFRICA" as a student name
-    # discards an otherwise reliable subject-line company.
-    # e.g., "Khushi Agarwal", "Sanjay Kumar"
-    CORPORATE_TOKENS = {
-        "pvt", "ltd", "inc", "corp", "corporation", "group", "india", "global",
-        "technologies", "technology", "solutions", "systems", "software", "services",
-        "labs", "lab", "limited", "private", "llp", "company", "co", "ai", "io", "hq",
-        "interactive", "bank", "capital", "energy", "pharma", "robotics", "networks",
-        "security", "consulting", "ventures", "enterprises", "studio", "media",
-        "mobility", "health", "healthcare", "financial", "motors", "automotive",
-        "holdings", "retail", "foods", "works", "analytics", "dynamics", "games", "africa"
-    }
-    words = cleaned.split()
-    is_title_case_name = bool(re.fullmatch(r"(?:[A-Z][a-z]+)(?:\s+[A-Z][a-z]+){1,2}", name.strip()))
-    if (is_title_case_name and 2 <= len(words) <= 3
-            and not any(w in CORPORATE_TOKENS for w in words)):
-        if all(w.isalpha() for w in words):
-            VALID_TWO_WORD_BRANDS = {
-                "morgan stanley", "jpmorgan chase", "fischer jordan", "goldman sachs",
-                "ernst young", "bain company", "robert bosch", "alvarez marsal",
-                "oliver wyman", "schneider electric", "standard chartered", "baker hughes",
-                "societe generale", "deutsche bank", "barclays bank", "credit suisse",
-                "wells fargo", "bny mellon"
-            }
-            if cleaned not in VALID_TWO_WORD_BRANDS:
-                return True
 
     # Reject if the name is entirely numeric or a year
     if re.match(r'^\d+$', cleaned):
@@ -235,52 +224,22 @@ def is_generic_company_name(name: str) -> bool:
     # Reject if it starts with placement drive category language
     if re.match(r'^(?:super\s+dream|dream|regular|mass\s+recruiter|internship)', cleaned):
         return True
-    # Reject single-character names
-    if len(cleaned) < 2:
-        return True
-
-    # ── NEW GUARDS ──────────────────────────────────────────────────────────
-    # Guard 1: Reject Neo ID tokens used as company names.
-    # Pattern: alternating letter-digit 8-char tokens like "F3M5W9J9" or
-    # two such tokens "F3M5W9J9 B5K6G7Q6" (Neo ID pair in a shortlist body).
-    # The LLM occasionally grabs these from the email body as the company name.
-    _neo_id_re = r'^[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d(?:\s+[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d[A-Za-z]\d)*$'
-    if re.match(_neo_id_re, name.strip()):
-        return True
-
-    # Guard 2: Reject apparent person names (first + last name).
-    # Heuristic: exactly 2–3 words, all purely alphabetic, no corporate-domain
-    # keyword in any word.  Catches "Khushi Agarwal"-style extractions where
-    # the LLM grabbed a student's name from a shortlist congratulation line.
-    _CORP_KEYWORDS = frozenset({
-        "tech", "technologies", "technology", "systems", "solutions", "labs",
-        "digital", "software", "services", "cloud", "data", "analytics",
-        "consulting", "consultancy", "financial", "capital", "ventures",
-        "group", "global", "corp", "enterprises", "innovations", "networks", "network", "capability",
-        "media", "banking", "insurance", "payments", "fintech", "logistics",
-        "manufacturing", "pharma", "research", "electric", "motors", "auto",
-        "automobiles", "telecom", "energy", "power", "chemicals", "foods",
-        "healthcare", "hospital", "hotels", "construction", "infrastructure",
-        "aerospace", "defence", "securities", "asset", "management", "limited",
-        "pvt", "ltd", "inc", "llp", "ai", "ml", "iot", "robotics", "games", "africa",
-        "advisors", "partners", "associates",
+    # Reject common person names (first + last names from shortlists)
+    COMMON_FIRST_NAMES = frozenset({
+        "khushi", "rahul", "sanjay", "amit", "priya", "rohit", "neha", "anjali",
+        "pooja", "deepak", "vikas", "aditya", "manish", "nikhil", "abhishek",
+        "ankit", "varun", "shreya", "sneha", "divya", "kavya", "ayush", "kartik",
+        "sourabh", "saurabh", "rishabh", "mohit", "harsh", "vansh", "tanmay", "kunal",
+        "rohan", "siddharth", "sidhant", "yash", "aman", "ayushman", "pranav", "prateek"
     })
-    _KNOWN_TWO_WORD_COMPANIES = frozenset({
-        "jpmorgan chase", "morgan stanley", "fischer jordan", "goldman sachs",
-        "ernst young", "bain company", "bain capability", "bain capability network", "robert bosch", "alvarez marsal",
-        "oliver wyman", "schneider electric", "standard chartered", "baker hughes",
-        "societe generale", "deutsche bank", "barclays bank", "credit suisse",
-        "wells fargo", "bny mellon", "walmart global", "target corporation", "shell india"
+    COMMON_LAST_NAMES = frozenset({
+        "agarwal", "sharma", "kumar", "singh", "gupta", "patel", "verma", "mehta",
+        "jain", "reddy", "rao", "nair", "mishra", "joshi", "choudhury", "das", "khan",
+        "yadav", "shah", "pandey", "tripathi", "tiwari", "mandal", "sen", "dey", "saha"
     })
-    _words = cleaned.split()
-    if (
-        2 <= len(_words) <= 3
-        and all(re.match(r'^[a-z]{3,15}$', w) for w in _words)
-        and not any(w in _CORP_KEYWORDS for w in _words)
-        and cleaned not in _KNOWN_TWO_WORD_COMPANIES
-    ):
-        return True
-    # ── END NEW GUARDS ───────────────────────────────────────────────────────
+    if 2 <= len(words) <= 3 and not has_corp_token:
+        if any(w in COMMON_FIRST_NAMES for w in words) and any(w in COMMON_LAST_NAMES for w in words):
+            return True
 
     return False
 
@@ -790,112 +749,122 @@ def is_high_confidence(parsed: Dict[str, Any]) -> bool:
 
 
 def _authoritative_company_from_subject(subject: str) -> str:
-    """Return the company label that appears before a CDC drive descriptor.
-
-    Subject lines are authored by CDC and are more reliable than an LLM reading
-    a table body.  Keep this deliberately conservative: category labels such
-    as AI/ML/CS/IT are never allowed to become companies.
-    """
+    """Return the company label that appears in the CDC email subject line."""
     if not subject:
         return "Unknown Company"
     value = subject.replace("\u200b", "").replace("\xa0", " ").replace("_", " ")
     value = value.replace("–", "-").replace("—", "-").replace("â€“", "-").replace("â€”", "-")
-    value = re.sub(r"^\s*(?:(?:re|fw|fwd|update|updated|reminder|urgent)\s*:\s*)+", "", value, flags=re.I).strip()
-    # Some CDC emails prefix the actual subject with recipient departments,
-    # e.g. "AI/ML/CS/IT - EY Global Delivery Services - Campus Hiring".
-    # Remove only a complete department-label prefix, never a company name.
+    
+    # Strip nested prefixes: Update:, Re:, Fwd:, Reminder:, Kind Attention:, Congratulations:, etc.
+    prev = None
+    while value != prev:
+        prev = value
+        value = re.sub(
+            r"^\s*(?:(?:re|fw|fwd|update|updated|reminder|gentle\s+reminder|urgent|urgnt|join\s+immediately|report\s+immediately|action\s+required|important|kind\s+attn|kind\s+attention|congratulations|congrats|notice|webinar)\s*[:\s!]+)+",
+            "",
+            value,
+            flags=re.I,
+        ).strip()
+
+    # Remove recipient department prefixes (e.g. "AI/ML/CS/IT - Company - ...")
     value = re.sub(
         r"^\s*(?:(?:AI|ML|CS|IT)(?:\s*/\s*(?:AI|ML|CS|IT)){1,})\s*(?:[-|:]\s*)+",
         "",
         value,
         flags=re.I,
     ).strip()
-    # A company is normally the first segment: "EY - Campus Hiring".
-    value = re.split(r"\s+[-|]\s+|:(?!\d)", value, maxsplit=1)[0].strip()
-    value = re.sub(r"\b(?:campus\s+hiring|campus\s+recruitment|placement|drive|recruitment|hiring|registration|shortlist|interview|assessment|online\s+test|pre[-\s]?placement|ppt|webinar|announcement)\b.*$", "", value, flags=re.I).strip()
-    value = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9&.)]+$", "", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    if not value or len(value) < 2 or is_generic_company_name(value):
-        return "Unknown Company"
-    # Department/category headings are not brands, even if they evade the
-    # generic-name dictionary.
-    if re.fullmatch(r"(?:ai|ml|cs|it)(?:\s*/\s*(?:ai|ml|cs|it))+", value, flags=re.I):
-        return "Unknown Company"
-    return value
 
-
-def extract_company_from_subject(subject: str) -> str:
-    if not subject:
-        return "Unknown Company"
-
-    authoritative = _authoritative_company_from_subject(subject)
-    if authoritative != "Unknown Company":
-        return authoritative
-    # Do not let the legacy fallback turn a branch/category heading into a
-    # workspace when no brand is present in the subject.
-    if re.fullmatch(r"\s*(?:ai|ml|cs|it)(?:\s*/\s*(?:ai|ml|cs|it))+\s*", subject, flags=re.I):
-        return "Unknown Company"
-    
-    # Remove zero-width spaces and clean outer whitespace
-    s = subject.replace('\u200b', '').replace('\xa0', ' ').replace('_', ' ').strip()
-    # Strip any leading asterisks, hashes, hyphens, and other special characters early on
-    s = re.sub(r'^[*#_\s\-–—]+', '', s).strip()
-    
-    # Prefix patterns to completely discard at the start of subject
-    # Loop to strip nested prefixes
-    prev_s = None
-    while s != prev_s:
-        prev_s = s
-        s = re.sub(
-            r'^(?:congratulations|congrats|kind\s+attn|kind\s+attention|summer\s+sem|updated|update|re|fwd|urgnt|urgent|notice|report\s+immediately|reminder|gentle\s+reminder|webinar)\b[:\s!]*',
-            '',
-            s,
-            flags=re.I
-        ).strip()
-        s = re.sub(r'^[:\s!]+', '', s)
-        
-    # Split by colon, dash, or pipe, but ignore if it's within a date/time (e.g. 10:00 AM) or a decimal (e.g. 3.0)
-    # Let's split by major separators: ':', '|', '-'
-    # But only split on ':' if it is not followed by digits (like 10:00)
-    parts = []
-    colon_parts = re.split(r':(?!\d)', s)
+    # Remove colon prefix if not followed by digits (e.g., "Schedule : Company")
+    colon_parts = re.split(r':(?!\d)', value)
     if len(colon_parts) > 1:
-        # Check if the first part is a generic instructions prefix, like "Updated timings & Instructions"
-        p0_lower = colon_parts[0].lower()
-        generic_words = ["timings", "instructions", "update", "registration form", "schedule", "scheduled", "venue", "details", "webinar"]
-        is_generic = any(w in p0_lower for w in generic_words)
-        if is_generic:
-            s = ":".join(colon_parts[1:]).strip()
-        else:
-            s = colon_parts[0].strip()
-            
-    # Now split on other separators: '|', '-' (but only if surrounded by spaces)
-    s = s.split('|')[0].strip()
-    s = re.split(r'\s+[-–—]\s+', s)[0].strip()
-    
-    # If there is a '(' at the start of any suffix, split there
-    s = s.split('(')[0].strip()
+        p0_lower = colon_parts[0].lower().strip()
+        generic_words = ["timings", "instructions", "update", "registration form", "schedule", "scheduled", "venue", "details", "webinar", "kind attn", "kind attention"]
+        if any(w in p0_lower for w in generic_words):
+            value = ":".join(colon_parts[1:]).strip()
 
-    # Clean up standard suffix keywords (e.g. "online test", "selection list", "hiring", etc.)
-    suffix_pattern = r'\b(?:next\s+round|tech\s+talk|super\s+dream|dream|regular|mass|recruitment|recruiter|drive|drives|internship|placement|hiring|registration|selection|shortlist|online\s+test|online\s+coding\s+test|coding\s+test|assignment\s+round|assignment|round|oa|interview|offers?|applied|announcement|results?|list|batch|pre-placement|connect|is\s+scheduled|scheduled|ppt|presentation|talk|webinar|test)\b.*$'
-    clean = re.sub(suffix_pattern, '', s, flags=re.I).strip()
+    # Split on main separators: " - ", " | "
+    parts = re.split(r"\s+[-|]\s+", value)
+    if len(parts) > 1:
+        cand = parts[0].strip()
+        cand_clean = re.sub(
+            r"\b(?:super\s+dream|dream|regular|mass|recruiter|internship|placement|hiring|recruitment|drive|registration|shortlist|interview|assessment|online\s+test|oa|ppt|applied\s+students|applied|selects|selection\s+list)\b.*$",
+            "",
+            cand,
+            flags=re.I,
+        ).strip()
+        cand_clean = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9&.)]+$", "", cand_clean).strip()
+        if len(cand_clean) >= 2 and not is_generic_company_name(cand_clean):
+            value = cand_clean
+        else:
+            value = cand
+
+    # Strip placement/drive category words from end of value
+    drive_suffixes = (
+        r"\b(?:super\s+dream\s+internship\s*/\s*placement|"
+        r"super\s+dream\s+internship\s+registration|"
+        r"super\s+dream\s+offer\s+placement\s*/\s*internship\s+registration|"
+        r"super\s+dream\s+internship|"
+        r"super\s+dream\s+placement|"
+        r"super\s+dream\s+offer|"
+        r"super\s+dream|"
+        r"dream\s+internship\s+registration|"
+        r"dream\s+internship|"
+        r"dream\s+placement|"
+        r"dream\s+offer|"
+        r"dream|"
+        r"regular\s+internship|"
+        r"regular\s+placement|"
+        r"regular|"
+        r"mass\s+recruiter|"
+        r"internship\s*/\s*placement|"
+        r"internship\s+registration|"
+        r"placement\s+registration|"
+        r"campus\s+hiring|"
+        r"campus\s+recruitment|"
+        r"recruitment\s+drive|"
+        r"placement|"
+        r"internship|"
+        r"hiring|"
+        r"recruitment|"
+        r"drive|"
+        r"registration|"
+        r"selection\s+list|"
+        r"selects|"
+        r"shortlist|"
+        r"applied\s+students|"
+        r"applied|"
+        r"interview|"
+        r"assessment|"
+        r"online\s+test|"
+        r"pre[-\s]?placement\s+talk|"
+        r"pre[-\s]?placement|"
+        r"ppt|"
+        r"webinar|"
+        r"announcement)\b.*$"
+    )
+    value = re.sub(drive_suffixes, "", value, flags=re.I).strip()
     
-    # Strip campus names and other VIT specific words
-    campus_pattern = r'\b(?:vit\s+vellore|vit\s+vellore\s+campus|vit|vellore|chennai\s+campus|chennai|campus|engineering\s+college|college|university)\b'
-    clean = re.sub(campus_pattern, '', clean, flags=re.I).strip()
-    
-    # Clean up trailing date or year patterns (e.g., 2027 batch)
-    clean = re.sub(r'\b(?:202\d|fy2\d)\b.*$', '', clean, flags=re.I).strip()
-    
-    # Strip any leftover punctuation / markdown / symbols / operators (but keep &)
-    clean = re.sub(r'[*_#/\-–—]', ' ', clean).strip()
-    clean = re.sub(r'\s+', ' ', clean).strip()
-    
-    # Clean up trailing ampersands or spaces
-    clean = re.sub(r'\s+[&]\s*$', '', clean).strip()
-    
-    # Exact target company overrides
-    clean_lower = clean.lower()
+    # Strip campus names (VIT Vellore, etc.)
+    campus_pattern = r'\b(?:vit\s+vellore\s+campus|vit\s+vellore|vit|vellore|chennai\s+campus|chennai|campus|engineering\s+college|college|university)\b'
+    value = re.sub(campus_pattern, "", value, flags=re.I).strip()
+
+    # Strip batch years (e.g. 2027 batch)
+    value = re.sub(r'\b(?:202\d|fy2\d)\b.*$', '', value, flags=re.I).strip()
+
+    # Clean edges
+    value = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9&.)]+$", "", value).strip()
+    value = re.sub(r"\s+", " ", value).strip()
+
+    # Canonical company overrides
+    clean_lower = value.lower()
+    if clean_lower in ("valco melton engineering", "valco melton engineering india pvt ltd", "valco melton"):
+        return "Valco Melton"
+    if clean_lower == "apple":
+        return "Apple"
+    if clean_lower in ("colgate palmolive", "colgate-palmolive"):
+        return "Colgate Palmolive"
+    if clean_lower in ("tredence analytics", "tredence"):
+        return "Tredence Analytics"
     if "project44" in clean_lower:
         return "Project44"
     if "valuelabs" in clean_lower or "value labs" in clean_lower:
@@ -904,15 +873,18 @@ def extract_company_from_subject(subject: str) -> str:
         return "GROWW"
     if "infosys" in clean_lower:
         return "Infosys"
-        
-    if len(clean) >= 2:
-        return clean
-    
-    # Final fallbacks
-    s_clean = re.sub(r'[*_#]', '', s).strip()
-    if len(s_clean) >= 2:
-        return s_clean
+
+    if len(value) >= 2 and not is_generic_company_name(value):
+        return value
+
     return "Unknown Company"
+
+
+def extract_company_from_subject(subject: str) -> str:
+    if not subject:
+        return "Unknown Company"
+
+    return _authoritative_company_from_subject(subject)
 
 def clean_val(val: str) -> Optional[str]:
     if not val:
@@ -1818,11 +1790,11 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     """
     data = {}
 
-    # 1. Company Name — use a strict extraction hierarchy:
+    # 1. Company Name — hierarchy:
     #    1a. Structured body label (Name of the Company: ...)
-    #    1b. spaCy NER on body text (filtered to non-generic ORG entities)
-    #    1c. Subject line extraction (last resort, very cleaned)
-    #    1d. Unknown Company (never guess)
+    #    1b. Subject line extraction (subject is authored by CDC with company name)
+    #    1c. spaCy NER on body text (last resort for unlabelled body text)
+    #    1d. Unknown Company
     comp_match = re.search(
         r"(?:^|[\n\r])\s*[\-\–\—\*\u00d8\d\.\s]*\s*(?:Name of the Company|Company Name|Name of the Organisation|Organisation|\bCompany\b(?!\s*(?:website|profile|url|link|domain|page|site|info|description|overview|logo|details)))\s*[\*_]*\s*[:\-\–\—\s]*[\n\r\s\*_]*\*?([A-Za-z0-9\s&.,\'\(\)\-]+?)(?=\s*[\n\r]|\s*\*|$)",
         email_body,
@@ -1837,28 +1809,28 @@ def extract_placements_regex(email_body: str, subject: str = "") -> Dict[str, An
     if company_from_label:
         data["company"] = company_from_label
     else:
-        # 1b. spaCy NER — only if available, filter out academic/CDC-related org names
-        ner_company = None
-        nlp_obj = get_nlp()
-        if nlp_obj:
-            doc = nlp_obj(email_body[:2000])  # Only scan first 2000 chars for speed
-            for ent in doc.ents:
-                if ent.label_ == "ORG":
-                    ner_name = ent.text.strip()
-                    if not any(k in ner_name.lower() for k in [
-                        "vit", "vellore", "institute", "university", "college",
-                        "cdc", "neopat", "government", "helpdesk", "placement cell"
-                    ]) and not is_generic_company_name(ner_name) and len(ner_name) >= 3:
-                        ner_company = ner_name
-                        break
-
-        if ner_company:
-            data["company"] = ner_company
+        # 1b. Subject line extraction (clean CDC-authored subject)
+        sub_company = extract_company_from_subject(subject)
+        if sub_company and sub_company != "Unknown Company" and not is_generic_company_name(sub_company):
+            data["company"] = sub_company
         else:
-            # 1c. Subject line extraction (last resort for structured regex)
-            sub_company = extract_company_from_subject(subject)
-            if sub_company and sub_company != "Unknown Company" and not is_generic_company_name(sub_company):
-                data["company"] = sub_company
+            # 1c. spaCy NER on body text (fallback only when subject has no company)
+            ner_company = None
+            nlp_obj = get_nlp()
+            if nlp_obj:
+                doc = nlp_obj(email_body[:2000])  # Only scan first 2000 chars for speed
+                for ent in doc.ents:
+                    if ent.label_ == "ORG":
+                        ner_name = ent.text.strip()
+                        if not any(k in ner_name.lower() for k in [
+                            "vit", "vellore", "institute", "university", "college",
+                            "cdc", "neopat", "government", "helpdesk", "placement cell"
+                        ]) and not is_generic_company_name(ner_name) and len(ner_name) >= 3:
+                            ner_company = ner_name
+                            break
+
+            if ner_company:
+                data["company"] = ner_company
             else:
                 # 1d. Give up — return Unknown Company. Never guess.
                 data["company"] = "Unknown Company"
