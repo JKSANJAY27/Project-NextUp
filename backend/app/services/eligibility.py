@@ -123,12 +123,23 @@ def check_eligibility(profile, company) -> Tuple[str, Optional[str], Dict[str, A
     # ── 1. DEGREE / BRANCH CHECK ──────────────────────────────────────────────
     # Tier 1: structured degree_types from eligibility_rules
     degree_types_raw: List[str] = rules.get("degree_types") or []
+    excluded_branches_raw: List[str] = rules.get("excluded_branches") or []
     # Tier 2: eligible_branches ARRAY on the Company model
     eligible_branches: List[str] = getattr(company, "eligible_branches", None) or []
     # Tier 3: raw text fallback
     eligibility_raw_text: Optional[str] = getattr(company, "eligibility_raw_text", None)
 
+    _CS_IT_FAMILY = {"CSE", "IT", "AIML", "AIDS", "SWE", "CS",
+                     "COMPUTER SCIENCE", "INFORMATION TECHNOLOGY"}
+
     branch_checked = False
+
+    # Check explicit excluded branches first
+    if excluded_branches_raw:
+        excluded_upper = [eb.strip().upper() for eb in excluded_branches_raw]
+        if user_branch in excluded_upper or (user_branch in _CS_IT_FAMILY and any(eb in _CS_IT_FAMILY for eb in excluded_upper)):
+            branch_checked = True
+            failed.append(f"Branch excluded: CS/IT related branches are not eligible for this drive. Your branch: {profile.branch or 'None'}")
 
     # Entries in eligible_branches that are pure degree codes carry no branch
     # information ("BTECH", "MTECH" tokens the parser sweeps up) — only real
@@ -140,75 +151,81 @@ def check_eligibility(profile, company) -> Tuple[str, Optional[str], Dict[str, A
         if e.strip().upper() not in _PURE_DEGREE_CODES
     ]
 
-    if degree_types_raw:
-        # Tier 1: structured — authoritative
-        branch_checked = True
-        normalized = [d.strip().upper() for d in degree_types_raw]
-        if user_deg not in normalized:
-            # Build human-readable label set
-            readable = ", ".join(degree_types_raw)
-            failed.append(
-                f"Required degree: {readable}. "
-                f"Your degree: {profile.degree_type or 'None'}"
-            )
-        else:
-            matched.append(f"Degree type matched: {profile.degree_type}")
-            # A matching degree is NOT enough when the mail names specific
-            # branches: 'B.Tech (MECH / EEE) related branches only' parsed as
-            # degree_types=[BTECH] + branches=[EEE, MECHANICAL ENGINEERING],
-            # and skipping the branch tier marked every B.Tech student
-            # (including CSE) eligible for a MECH/EEE-only drive.
-            if real_branch_entries:
-                if not _branch_matches(user_branch, user_deg, real_branch_entries):
-                    readable_b = ", ".join(real_branch_entries)
-                    failed.append(
-                        f"Required branches: {readable_b}. "
-                        f"Your branch: {profile.branch or 'None'}"
-                    )
-                else:
-                    matched.append(f"Branch matched: {profile.branch}")
-
-    elif eligible_branches:
-        # Tier 2: check each entry in the eligible_branches ARRAY
-        branch_checked = True
-        if not _branch_matches(user_branch, user_deg, eligible_branches):
-            readable = ", ".join(eligible_branches)
-            failed.append(
-                f"Required branch: {readable}. "
-                f"Your degree/branch: {profile.degree_type} {profile.branch}"
-            )
-        else:
-            matched.append(f"Branch matched: {profile.degree_type} {profile.branch}")
-
-    else:
-        # Tier 3: parse raw text for degree keywords
-        raw_degrees = _extract_degree_types_from_text(eligibility_raw_text)
-        if raw_degrees:
+    if not any("excluded" in f for f in failed):
+        if degree_types_raw:
+            # Tier 1: structured — authoritative
             branch_checked = True
-            if user_deg not in raw_degrees:
-                readable = ", ".join(raw_degrees)
+            normalized = [d.strip().upper() for d in degree_types_raw]
+            if user_deg not in normalized:
+                # Build human-readable label set
+                readable = ", ".join(degree_types_raw)
                 failed.append(
-                    f"Required degree (from eligibility text): {readable}. "
+                    f"Required degree: {readable}. "
                     f"Your degree: {profile.degree_type or 'None'}"
                 )
             else:
-                matched.append(
-                    f"Degree matched (from eligibility text): {profile.degree_type}"
-                )
+                matched.append(f"Degree type matched: {profile.degree_type}")
+                # A matching degree is NOT enough when the mail names specific
+                # branches: 'B.Tech (MECH / EEE) related branches only' parsed as
+                # degree_types=[BTECH] + branches=[EEE, MECHANICAL ENGINEERING],
+                # and skipping the branch tier marked every B.Tech student
+                # (including CSE) eligible for a MECH/EEE-only drive.
+                if real_branch_entries:
+                    if not _branch_matches(user_branch, user_deg, real_branch_entries):
+                        readable_b = ", ".join(real_branch_entries)
+                        failed.append(
+                            f"Required branches: {readable_b}. "
+                            f"Your branch: {profile.branch or 'None'}"
+                        )
+                    else:
+                        matched.append(f"Branch matched: {profile.branch}")
 
-        if eligibility_raw_text:
-            raw_up = eligibility_raw_text.upper()
-            # Catch explicit branch restrictions in raw text when structured array is empty
-            if ("ECE RELATED" in raw_up or "ECE BRANCHES" in raw_up or "M.TECH ( ECE )" in raw_up or "M.TECH (ECE)" in raw_up or "M.TECH ECE" in raw_up):
-                if user_branch not in ("ECE", "ELECTRONICS", "EIE"):
-                    branch_checked = True
-                    if not any("Required" in f for f in failed):
-                        failed.append(f"Required branch: ECE related branches only. Your branch: {profile.branch or 'None'}")
-            elif ("MECH RELATED" in raw_up or "MECHANICAL RELATED" in raw_up or "MECH BRANCHES" in raw_up):
-                if user_branch not in ("MECH", "MECHANICAL", "MECHANICAL ENGINEERING"):
-                    branch_checked = True
-                    if not any("Required" in f for f in failed):
-                        failed.append(f"Required branch: Mechanical related branches only. Your branch: {profile.branch or 'None'}")
+        elif eligible_branches:
+            # Tier 2: check each entry in the eligible_branches ARRAY
+            branch_checked = True
+            if not _branch_matches(user_branch, user_deg, eligible_branches):
+                readable = ", ".join(eligible_branches)
+                failed.append(
+                    f"Required branch: {readable}. "
+                    f"Your degree/branch: {profile.degree_type} {profile.branch}"
+                )
+            else:
+                matched.append(f"Branch matched: {profile.degree_type} {profile.branch}")
+
+        else:
+            # Tier 3: parse raw text for degree keywords
+            raw_degrees = _extract_degree_types_from_text(eligibility_raw_text)
+            if raw_degrees:
+                branch_checked = True
+                if user_deg not in raw_degrees:
+                    readable = ", ".join(raw_degrees)
+                    failed.append(
+                        f"Required degree (from eligibility text): {readable}. "
+                        f"Your degree: {profile.degree_type or 'None'}"
+                    )
+                else:
+                    matched.append(
+                        f"Degree matched (from eligibility text): {profile.degree_type}"
+                    )
+
+    if eligibility_raw_text and not any("Required branch" in f or "Branch excluded" in f for f in failed):
+        raw_up = eligibility_raw_text.upper()
+        # Catch explicit negative branch restrictions (e.g. Except CS/IT, Non-CS, etc.)
+        if ("EXCEPT CS" in raw_up or "EXCEPT IT" in raw_up or "EXCEPT CS/IT" in raw_up or 
+            "EXCEPT IT AND CS" in raw_up or "EXCEPT CS AND IT" in raw_up or 
+            "CS / IT RELATED BRANCHES ARE NOT ELIGIBLE" in raw_up or "CS/IT RELATED BRANCHES ARE NOT ELIGIBLE" in raw_up or
+            "NON-CS" in raw_up or "NON CS" in raw_up):
+            if user_branch in _CS_IT_FAMILY or (profile.specialization and "CSE" in profile.specialization.upper()):
+                branch_checked = True
+                failed.append(f"Required branch: All B.Tech except CS/IT. Your branch: {profile.branch or 'None'}")
+        elif ("ECE RELATED" in raw_up or "ECE BRANCHES" in raw_up or "M.TECH ( ECE )" in raw_up or "M.TECH (ECE)" in raw_up or "M.TECH ECE" in raw_up):
+            if user_branch not in ("ECE", "ELECTRONICS", "EIE"):
+                branch_checked = True
+                failed.append(f"Required branch: ECE related branches only. Your branch: {profile.branch or 'None'}")
+        elif ("MECH RELATED" in raw_up or "MECHANICAL RELATED" in raw_up or "MECH BRANCHES" in raw_up):
+            if user_branch not in ("MECH", "MECHANICAL", "MECHANICAL ENGINEERING"):
+                branch_checked = True
+                failed.append(f"Required branch: Mechanical related branches only. Your branch: {profile.branch or 'None'}")
 
     # ── 2. SPECIALIZATION CHECK ───────────────────────────────────────────────
     # Only run this if the degree check PASSED (or was skipped) and we have data.

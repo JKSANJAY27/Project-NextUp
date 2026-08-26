@@ -77,7 +77,10 @@ GENERIC_COMPANY_NAMES = frozenset({
     # Generic drive/event/government headers mistaken for company names
     "govt", "govt of india", "government", "govt org", "govt job",
     "ppt & online", "ppt and online", "ppt online", "ppt", "online test",
-    "selection process", "placement process",
+    "selection process", "placement process", "shadow bans", "shadow ban",
+    "shadow bans message / mails", "shadow bans message",
+    "masterclass", "masterclass session", "hpcl masterclass",
+    "invitation: hpcl masterclass session",
     # Marks and grade headers mistaken for company names
     "x", "xii", "x/xii", "x and xii", "x & xii", "10th", "12th", "10th & 12th",
     "10th and 12th", "class 10", "class 12", "class x", "class xii",
@@ -192,6 +195,8 @@ def is_generic_company_name(name: str) -> bool:
         r'^\s*minor\s*$',
         r'^\s*fte\s*$',
         r'^\s*ppo\s*$',
+        r'\bshadow\s*bans?\b',
+        r'\bmasterclass\b',
     ]
     for pattern in generic_patterns:
         if re.search(pattern, cleaned):
