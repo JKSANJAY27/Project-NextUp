@@ -496,7 +496,7 @@ def add_manual_company_update(
 @router.get("", response_model=List[CompanyWithEligibilityOut])
 def list_companies(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 500,
     x_client_key: Optional[str] = Header(None, alias="X-Client-Key"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)

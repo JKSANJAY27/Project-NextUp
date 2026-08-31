@@ -49,12 +49,12 @@ def get_dashboard_data(
     # without sharing state. The parent session (db) is only used for
     # list_companies which needs it for the eligibility check loop.
     def _fetch_companies():
-        return list_companies(x_client_key=x_client_key, db=db, current_user=current_user)
+        return list_companies(skip=0, limit=500, x_client_key=x_client_key, db=db, current_user=current_user)
 
     def _fetch_applications():
         _db = SessionLocal()
         try:
-            return list_applications(db=_db, current_user=current_user)
+            return list_applications(skip=0, limit=500, db=_db, current_user=current_user)
         finally:
             _db.close()
 

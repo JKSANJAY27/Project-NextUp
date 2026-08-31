@@ -112,7 +112,7 @@ def create_application(
 @router.get("", response_model=List[Any])
 def list_applications(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 500,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
