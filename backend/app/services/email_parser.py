@@ -2390,7 +2390,9 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
     if re.search(r'\b(?:shortlist|short-listed|selection\s+list|selected\s+list|shortlisted)\b', sub_lower):
         event_type = "SHORTLIST_RELEASED"
         email_category = "DRIVE_UPDATE"
-    elif re.search(r'\b(?:congratulations|congrats|offer|placed|selected)\b', sub_lower):
+    elif re.search(r'\b(?:congratulations|congrats|placed|selected)\b', sub_lower) or (
+        re.search(r'\boffer\b', sub_lower) and not re.search(r'\b(?:registration|register|apply|hiring|recruitment|drive|internship)\b', sub_lower)
+    ):
         event_type = "OFFER_RELEASED"
         email_category = "DRIVE_UPDATE"
     elif re.search(r'\b(?:oa\s+result|test\s+result|assessment\s+result)\b', sub_lower):
@@ -2434,7 +2436,8 @@ def build_regex_fallback_response(email_body: str, subject: str = "", force_anno
         elif "interview" in body_clean:
             event_type = "INTERVIEW_SCHEDULED"
             email_category = "DRIVE_UPDATE"
-        elif "offer" in body_clean or "congratulations" in body_clean or "selection list" in body_clean or "selected candidates" in body_clean:
+        elif (("offer" in body_clean and "registration" not in body_clean)
+              or "congratulations" in body_clean or "selection list" in body_clean or "selected candidates" in body_clean):
             event_type = "OFFER_RELEASED"
             email_category = "DRIVE_UPDATE"
         elif "regret" in body_clean or "not selected" in body_clean or "rejection" in body_clean:

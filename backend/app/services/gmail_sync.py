@@ -1943,7 +1943,16 @@ def _process_queued_jobs_locked(db: Session, job_id: Optional[str] = None) -> bo
         # -----------------------------------------------------------------------
         if email_category == "NEW_DRIVE":
             _subj_lower = (subject or "").lower()
-            if any(k in _subj_lower for k in DRIVE_UPDATE_SUBJECT_KEYWORDS):
+            is_explicit_reg = any(r in _subj_lower for r in ["registration", "super dream", "hiring", "recruitment", "internship registration", "offer registration"])
+            has_test_or_interview_kw = any(k in _subj_lower for k in [
+                "timeline extension", "shortlist", "selection list", "next round",
+                "selection process is scheduled", "applied students", "results",
+                "offer letter", "rejection", "regret", "is scheduled", "scheduled on",
+                "online test", "online assessment", "aptitude test", "coding test",
+                "written test", "interview scheduled", "gd round", "group discussion"
+            ])
+            has_update_kw = any(k in _subj_lower for k in DRIVE_UPDATE_SUBJECT_KEYWORDS)
+            if has_update_kw and (not is_explicit_reg or has_test_or_interview_kw):
                 logger.warning(
                     f"Job {job.id}: NEW_DRIVE email downgraded to DRIVE_UPDATE — "
                     f"subject contains update keyword(s). Subject: {subject!r}"
@@ -3207,7 +3216,9 @@ def process_notification_jobs(db: Session):
                 # Baseline guard: skip events that predate this user's notification baseline.
                 # Prevents historical notification flood for newly-onboarded students.
                 if profile.notification_baseline_at is not None and event.timestamp:
-                    if event.timestamp < profile.notification_baseline_at:
+                    ev_ts = event.timestamp.replace(tzinfo=None) if getattr(event.timestamp, "tzinfo", None) else event.timestamp
+                    base_ts = profile.notification_baseline_at.replace(tzinfo=None) if getattr(profile.notification_baseline_at, "tzinfo", None) else profile.notification_baseline_at
+                    if ev_ts < base_ts:
                         continue
 
                 # Check eligibility
